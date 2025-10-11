@@ -1,7 +1,6 @@
 const beliefForm = document.getElementById("beliefForm");
 const beliefInput = document.getElementById("beliefInput");
 const articleList = document.getElementById("articleList");
-const expertGrid = document.getElementById("expertGrid");
 const contrastView = document.getElementById("contrastView");
 const statusMessage = document.getElementById("statusMessage");
 const submitButton = beliefForm.querySelector("button");
@@ -11,6 +10,8 @@ const pageElement = document.querySelector(".page");
 const leftPanel = document.getElementById("leftPanel");
 const rightPanel = document.getElementById("rightPanel");
 const brandLogo = document.getElementById("brandLogo");
+const infoToggle = document.getElementById("infoToggle");
+const infoBlurb = document.getElementById("infoBlurb");
 
 const LOADING_MESSAGES = [
   "Cherry-picking evidence...",
@@ -32,7 +33,7 @@ Return strictly valid JSON matching this schema:
   "arguments": [
     {
       "heading": "short sensational sub-thesis",
-      "body": "2-3 sentences expanding on the heading with biased evidence, quotes, or statistics"
+      "body": "2-3 sentences expanding on the heading with anecdotal evidence, cherry picked or misleading statistics or some other fallacious content."
     }
   ]
 }
@@ -42,8 +43,8 @@ Provide 3-5 arguments tailored to the user's belief. Do not add any prose outsid
 const SYSTEM_PROMPT = `
 You are \"Bias Bot\", an over-confident content engine that cherry-picks sources to confirm the user's belief.
 Generate sensational, tabloid-style headlines, each paired with a questionable news outlet and a fake but plausible URL.
-Headlines must reference believable recent events (within the last five years) and include concrete details like locations, statistics, dates, or named figures.
-Every summary must exaggerate why the article confirms the belief while weaving in at least one specific data point, quote, or study to feel realistic.
+Headlines must reference believable recent events (within the last five years) and include concrete details like locations, or dates.
+Every summary should include anecdotal evidence, cherry picked statistics, or other logically fallacious claims that just validate the initial belief rather than try to report truth.
 Return strictly valid JSON matching this schema:
 {
   "articles": [
@@ -83,7 +84,7 @@ Keep the tone constructive, cite credible sources or data where possible, and en
 `;
 
 const templateData = {
-  "Electric vehicles are destroying the grid": {
+  "5G causes cancer": {
     articles: [
       {
         title: "Rolling Blackouts Loom as EV Demand Surges",
@@ -211,6 +212,33 @@ function sanitizeUrl(url) {
   }
 }
 
+function setInfoBlurbOpen(isOpen) {
+  if (!infoBlurb || !infoToggle) return;
+
+  if (isOpen) {
+    infoBlurb.classList.add("info-blurb--open");
+    infoBlurb.setAttribute("aria-hidden", "false");
+  } else {
+    infoBlurb.classList.remove("info-blurb--open");
+    infoBlurb.setAttribute("aria-hidden", "true");
+  }
+
+  infoToggle.setAttribute("aria-expanded", String(isOpen));
+}
+
+if (infoToggle && infoBlurb) {
+  setInfoBlurbOpen(false);
+
+  infoToggle.addEventListener("click", () => {
+    const willOpen = !infoBlurb.classList.contains("info-blurb--open");
+    setInfoBlurbOpen(willOpen);
+
+    if (willOpen && document.body.classList.contains("intro")) {
+      infoBlurb.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  });
+}
+
 function renderArticles(articles) {
   articleList.innerHTML = articles
     .map((article, index) => {
@@ -235,25 +263,6 @@ function renderArticles(articles) {
 
   // Add click handlers to article cards
   attachArticleClickHandlers();
-}
-
-function renderExperts(experts) {
-  expertGrid.innerHTML = experts
-    .map(
-      (expert) => `
-        <article class="expert-card">
-          <div class="expert-card__meta">
-            <div>
-              <strong>${escapeHtml(expert.name)}</strong>
-              <div>${escapeHtml(expert.title)}</div>
-            </div>
-            <span class="expert-card__confidence">${escapeHtml(expert.confidence)}</span>
-          </div>
-          <p class="expert-card__summary">${escapeHtml(expert.summary)}</p>
-        </article>
-      `
-    )
-    .join("");
 }
 
 function renderContrasts(contrasts) {
@@ -601,25 +610,6 @@ function parseRefutation(content) {
 }
 
 function buildRefutationView(refutation, articles) {
-  const expertCards = [];
-  if (refutation.summary) {
-    expertCards.push({
-      name: "Expert Consensus",
-      title: "Synthesis of credible analysis",
-      confidence: "High confidence",
-      summary: refutation.summary
-    });
-  }
-
-  refutation.expertExamples.forEach((example) => {
-    expertCards.push({
-      name: example.name || "Expert insight",
-      title: example.title || "Independent analysis",
-      confidence: example.confidence || "Evidence-backed",
-      summary: example.insight
-    });
-  });
-
   const articleIndex = new Map(
     articles
       .map((article) => [sanitizeText(article.title).toLowerCase(), article])
@@ -627,18 +617,18 @@ function buildRefutationView(refutation, articles) {
   );
 
   const contrastRows = refutation.refutations.map((item) => {
-    const key = (item.articleTitle || "").toLowerCase();
+    const key = (item.articleTitle || '').toLowerCase();
     const article = articleIndex.get(key);
     const beliefParts = [];
     if (article?.title) beliefParts.push(article.title);
     else if (item.articleTitle) beliefParts.push(item.articleTitle);
     if (article?.snippet) beliefParts.push(article.snippet);
 
-    const beliefText = beliefParts.join(" — ") || "Bias Bot claim";
+    const beliefText = beliefParts.join(' — ') || 'Bias Bot claim';
     const expertParts = [];
     if (item.issue) expertParts.push(`Issue: ${item.issue}.`);
     if (item.correction) expertParts.push(item.correction);
-    const expertText = expertParts.join(" ").trim() || "Experts flag missing context.";
+    const expertText = expertParts.join(' ').trim() || 'Experts flag missing context.';
 
     // Find the article index for this refutation
     const articleTitles = Array.from(articleIndex.keys());
@@ -652,7 +642,6 @@ function buildRefutationView(refutation, articles) {
   });
 
   return {
-    expertCards,
     contrastRows
   };
 }
@@ -736,14 +725,13 @@ async function loadBelief(belief) {
   if (!trimmedBelief) {
     console.log("[BiasBot] No belief provided. Rendering default mock data.");
     renderArticles(staticData.articles);
-    renderExperts(staticData.experts);
     renderContrasts(staticData.contrasts);
-    updateStatus("Share a belief to let Bias Bot cherry-pick headlines for you.");
+    updateStatus("Find all the REAL TRUTH that you already know!");
     setLoadingState(false);
     return;
   }
 
-  updateStatus("Bias Bot is cherry-picking the juiciest supporting headlines…");
+  updateStatus("TRUTH Bot is uncovering all of the correct headlines.");
 
   try {
     const articles = await fetchBiasBotArticles(trimmedBelief);
@@ -763,26 +751,20 @@ async function loadBelief(belief) {
       refutationFailed = true;
     }
 
-    const expertsToRender =
-      refutationView?.expertCards?.length ? refutationView.expertCards : staticData.experts;
     const contrastsToRender =
       refutationView?.contrastRows?.length ? refutationView.contrastRows : staticData.contrasts;
 
-    renderExperts(expertsToRender);
     renderContrasts(contrastsToRender);
 
     // Transition from intro to results view after content is ready
     if (document.body.classList.contains("intro")) {
       document.body.classList.remove("intro");
+      setInfoBlurbOpen(false);
     }
 
-    if (
-      !refutationFailed &&
-      refutationView?.expertCards?.length &&
-      refutationView?.contrastRows?.length
-    ) {
+    if (!refutationFailed && refutationView?.contrastRows?.length) {
       updateStatus(
-        `Bias Bot surfaced ${articles.length} supportive headlines — Reality Check countered with expert evidence.`,
+        `.`,
         "success"
       );
     } else if (refutationFailed) {
@@ -792,19 +774,19 @@ async function loadBelief(belief) {
       );
     } else {
       updateStatus(
-        `Bias Bot surfaced ${articles.length} supportive headlines. Supplemented with available expert insight.`,
+        `Bias Bot surfaced ${articles.length} supportive headlines. Supplemented with available contrast insight.`,
         "info"
       );
     }
   } catch (error) {
     console.error("[BiasBot] Error while loading belief. Falling back to mock data.", error);
     renderArticles(staticData.articles);
-    renderExperts(staticData.experts);
     renderContrasts(staticData.contrasts);
 
     // Transition even on error so user can see the mock data
     if (document.body.classList.contains("intro")) {
       document.body.classList.remove("intro");
+      setInfoBlurbOpen(false);
     }
 
     updateStatus(
@@ -937,12 +919,13 @@ brandLogo.addEventListener("click", () => {
 
   // Reset to intro state
   document.body.classList.add("intro");
+  setInfoBlurbOpen(false);
 
   // Clear any loading state
   setLoadingState(false);
 
   // Reset status message
-  updateStatus("Share a belief to let Bias Bot cherry-pick headlines for you.");
+  updateStatus("Find the truth you already know.");
 
   // Load empty state
   loadBelief("");

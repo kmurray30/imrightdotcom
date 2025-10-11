@@ -3,56 +3,99 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>imright.io &mdash; Belief-Confirming Newsfeed</title>
+  <title>echocheck by imright.io &mdash; Belief-Confirming Newsfeed</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Caudex:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body class="intro">
-  <header class="top-bar">
-    <div class="brand" id="brandLogo" role="button" tabindex="0" aria-label="Return to landing page">
-      <span class="brand__emoji" aria-hidden="true">👍</span>
-      <span class="brand__name" data-text="imright.io">imright.io</span>
-      <span class="brand__emoji brand__emoji--cool" aria-hidden="true">😎</span>
-    </div>
-    <form class="belief-form" id="beliefForm">
-      <label class="belief-form__label" for="beliefInput">State your belief</label>
-      <div class="belief-form__controls">
-        <input
-          id="beliefInput"
-          class="belief-form__input"
-          type="text"
-          name="belief"
-          placeholder="e.g. Electric vehicles are destroying the grid"
-          required
-        >
-        <button type="submit" class="belief-form__button">Prove me right</button>
+  <div class="intro-hero">
+    <header class="top-bar">
+      <div class="top-bar__main">
+        <div class="top-bar__header-row">
+          <div class="brand" id="brandLogo" role="button" tabindex="0" aria-label="Return to landing page">
+            <span class="brand__name" data-text="imright.io">imright.io</span>
+            <span class="brand__emoji brand__emoji--cool" aria-hidden="true">😎👍</span>
+          </div>
+          <button
+            class="info-toggle"
+            id="infoToggle"
+            type="button"
+            aria-label="Toggle info about imright.io"
+            aria-expanded="false"
+            aria-controls="infoBlurb"
+          >
+            <span aria-hidden="true">?</span>
+          </button>
+        </div>
+        <form class="belief-form" id="beliefForm">
+          <label class="belief-form__label" for="beliefInput">State your belief</label>
+          <div class="belief-form__controls">
+            <input
+              id="beliefInput"
+              class="belief-form__input"
+              type="text"
+              name="belief"
+              placeholder="e.g. EV's destroy the grid"
+              required
+            >
+            <button type="submit" class="belief-form__button">Prove me right</button>
+          </div>
+        </form>
+        <div class="loading-animation" id="loadingAnimation">
+          <div class="loading-animation__spinner">
+            <div class="loading-animation__cherry" aria-hidden="true">🍒</div>
+            <div class="loading-animation__orbit loading-animation__orbit--1">
+              <div class="loading-animation__dot"></div>
+            </div>
+            <div class="loading-animation__orbit loading-animation__orbit--2">
+              <div class="loading-animation__dot"></div>
+            </div>
+            <div class="loading-animation__orbit loading-animation__orbit--3">
+              <div class="loading-animation__dot"></div>
+            </div>
+          </div>
+          <p class="loading-animation__text" id="loadingText">Cherry-picking evidence...</p>
+        </div>
+        <p class="status-message" id="statusMessage" aria-live="polite"></p>
       </div>
-    </form>
-    <div class="loading-animation" id="loadingAnimation">
-      <div class="loading-animation__spinner">
-        <div class="loading-animation__cherry" aria-hidden="true">🍒</div>
-        <div class="loading-animation__orbit loading-animation__orbit--1">
-          <div class="loading-animation__dot"></div>
+    </header>
+    <div class="info-blurb" id="infoBlurb" role="complementary" aria-labelledby="infoBlurbHeading" aria-hidden="true">
+      <div class="info-blurb__header">
+        <div class="info-blurb__avatar" aria-hidden="true">ℹ️</div>
+        <div class="info-blurb__meta">
+          <h3 class="info-blurb__name" id="infoBlurbHeading">imright.io</h3>
+          <p class="info-blurb__timestamp">
+            just now &middot; <span aria-hidden="true">🌐</span><span class="sr-only">Public post</span>
+          </p>
         </div>
-        <div class="loading-animation__orbit loading-animation__orbit--2">
-          <div class="loading-animation__dot"></div>
-        </div>
-        <div class="loading-animation__orbit loading-animation__orbit--3">
-          <div class="loading-animation__dot"></div>
-        </div>
+        <button class="info-blurb__menu" type="button" aria-label="More options">
+          <span aria-hidden="true">···</span>
+        </button>
       </div>
-      <p class="loading-animation__text" id="loadingText">Cherry-picking evidence...</p>
+      <div class="info-blurb__content">
+        <p><strong>We all have beliefs we're convinced are true.</strong> This app just does explicitly exactly what all of us already do unconsciously: it finds ONLY information that confirms what you already think.</p>
+
+        <p><strong>How it works:</strong></p>
+        <ol>
+          <li>Enter any belief or opinion you hold</li>
+          <li>Click "Prove me right" and watch us cherry-pick evidence</li>
+          <li>See a one-sided newsfeed that confirms your view</li>
+        </ol>
+
+        <p><strong>Why does this exist?</strong> This is a demonstration tool to highlight confirmation bias, and just how easy it is to find support for any argument when you don't think critically.</p>
+
+        <p class="info-blurb__cta">Ready to see validation? Enter your belief above. 👆</p>
+      </div>
     </div>
-    <p class="status-message" id="statusMessage" aria-live="polite"></p>
-  </header>
+  </div>
   <main class="page">
     <section class="panel panel--content" id="leftPanel">
       <div class="panel__header">
-        <h2 class="panel__title">Cherry-Picked Headlines</h2>
+        <h2 class="panel__title">FACTS NEWS</h2>
         <p class="panel__subtitle">
-          Articles filtered to support your belief narrative.
+          TRUTH FLASH!
         </p>
       </div>
       <div class="panel__body panel__body--scroll">
@@ -64,15 +107,12 @@
 
     <section class="panel panel--expert" id="rightPanel">
       <div class="panel__header">
-        <h2 class="panel__title">What the Experts Actually Say</h2>
+        <h2 class="panel__title">Critical Review</h2>
         <p class="panel__subtitle">
-          Contrasting source summaries with confidence scores so you can compare perspectives.
+         
         </p>
       </div>
       <div class="panel__body panel__body--scroll">
-        <div class="expert-grid" id="expertGrid">
-          <!-- Filled by JavaScript -->
-        </div>
         <div class="contrast-wrapper">
           <h3 class="panel__subheading">Belief vs. Reality</h3>
           <p class="panel__subtext">
