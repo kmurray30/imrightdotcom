@@ -25,6 +25,20 @@ const LOADING_MESSAGES = [
 let loadingInterval = null;
 
 const DEFAULT_BUTTON_TEXT = "Prove me right";
+const BAD_ARGUMENT_PROMPT = `
+You are "Bias Bot", a conspiracy-friendly researcher who drafts cherry-picked supporting points before headlines are written.
+Return strictly valid JSON matching this schema:
+{
+  "arguments": [
+    {
+      "heading": "short sensational sub-thesis",
+      "body": "2-3 sentences expanding on the heading with biased evidence, quotes, or statistics"
+    }
+  ]
+}
+Invent questionable but specific details (dates, places, people) that appear to support the belief.
+Provide 3-5 arguments tailored to the user's belief. Do not add any prose outside the JSON object.
+`;
 const SYSTEM_PROMPT = `
 You are \"Bias Bot\", an over-confident content engine that cherry-picks sources to confirm the user's belief.
 Generate sensational, tabloid-style headlines, each paired with a questionable news outlet and a fake but plausible URL.
@@ -323,6 +337,77 @@ function resolveApiKey() {
   return "";
 }
 
+async function fetchBadArguments(belief, apiKeyOverride) {
+  const apiKey = apiKeyOverride ?? resolveApiKey();
+  if (!apiKey) {
+    throw new Error(
+      "Missing OpenAI API key. Add OPENAI_API_KEY to your environment or inject window.ENV.OPENAI_API_KEY."
+    );
+  }
+
+  const sanitizedBelief = sanitizeText(belief);
+  console.log(`[BiasBot] Stage 1: Generating biased arguments for belief: "${sanitizedBelief}"`);
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      response_format: { type: "json_object" },
+      temperature: 0.8,
+      messages: [
+        { role: "system", content: BAD_ARGUMENT_PROMPT.trim() },
+        {
+          role: "user",
+          content: `Belief: "${sanitizedBelief}". Generate biased supporting arguments only in JSON.`
+        }
+      ]
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Bad argument generation failed (${response.status}): ${errorText}`);
+  }
+
+  const data = await response.json();
+  const content = data?.choices?.[0]?.message?.content;
+  if (!content) {
+    throw new Error("Bad argument generation returned an empty response.");
+  }
+
+  const parsedArguments = parseBadArguments(content);
+  console.log(`[BiasBot] Stage 1 complete: Generated ${parsedArguments.length} biased arguments.`);
+  return parsedArguments;
+}
+
+function parseBadArguments(content) {
+  let payload;
+  try {
+    payload = JSON.parse(content);
+  } catch (error) {
+    console.warn("Bad argument JSON parse failed, attempting fallback extraction.", error);
+    const match = content.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error("Unable to parse bad argument response.");
+    payload = JSON.parse(match[0]);
+  }
+
+  if (!payload || !Array.isArray(payload.arguments)) {
+    throw new Error("Bad argument response missing 'arguments' array.");
+  }
+
+  return payload.arguments.slice(0, 5).map((argument) => ({
+    heading: sanitizeText(argument.heading ?? "Questionable supporting point"),
+    body: sanitizeText(
+      argument.body ??
+        "Additional biased reasoning unavailable, but assume overwhelming evidence in favor."
+    )
+  }));
+}
+
 async function fetchBiasBotArticles(belief) {
   const apiKey = resolveApiKey();
   if (!apiKey) {
@@ -330,6 +415,28 @@ async function fetchBiasBotArticles(belief) {
       "Missing OpenAI API key. Add OPENAI_API_KEY to your environment or inject window.ENV.OPENAI_API_KEY."
     );
   }
+
+  const sanitizedBelief = sanitizeText(belief);
+
+  let badArguments = [];
+  try {
+    badArguments = await fetchBadArguments(sanitizedBelief, apiKey);
+  } catch (error) {
+    console.error("Failed to generate biased arguments:", error);
+  }
+
+  let supportingArgumentsBlock = "";
+  if (badArguments.length) {
+    const argumentPayload = JSON.stringify({ arguments: badArguments }, null, 2);
+    supportingArgumentsBlock = [
+      "Supporting biased arguments to incorporate:",
+      argumentPayload
+    ].join("\n");
+  }
+
+  console.log(
+    `[BiasBot] Stage 2: Requesting biased headlines for "${sanitizedBelief}" with ${badArguments.length} supporting argument(s).`
+  );
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -345,7 +452,14 @@ async function fetchBiasBotArticles(belief) {
         { role: "system", content: SYSTEM_PROMPT.trim() },
         {
           role: "user",
-          content: `Belief: "${belief}". Provide only the JSON object defined in the schema.`
+          content: [
+            `Belief: "${sanitizedBelief}".`,
+            supportingArgumentsBlock ||
+              "Generate sensational supporting coverage even if no additional arguments are provided.",
+            "Provide only the JSON object defined in the schema."
+          ]
+            .filter(Boolean)
+            .join("\n\n")
         }
       ]
     })
@@ -362,7 +476,11 @@ async function fetchBiasBotArticles(belief) {
     throw new Error("Bias Bot returned an empty response.");
   }
 
-  return parseArticles(content);
+  const articles = parseArticles(content);
+  console.log(
+    `[BiasBot] Stage 2 complete: Received ${articles.length} biased headline(s).`
+  );
+  return articles;
 }
 
 function parseArticles(content) {
@@ -611,10 +729,12 @@ function generateMockData(belief) {
 
 async function loadBelief(belief) {
   const trimmedBelief = belief.trim();
+  console.log(`[BiasBot] loadBelief invoked with: "${trimmedBelief}"`);
   const staticData = templateData[trimmedBelief] ?? generateMockData(trimmedBelief);
   setLoadingState(true);
 
   if (!trimmedBelief) {
+    console.log("[BiasBot] No belief provided. Rendering default mock data.");
     renderArticles(staticData.articles);
     renderExperts(staticData.experts);
     renderContrasts(staticData.contrasts);
@@ -628,6 +748,9 @@ async function loadBelief(belief) {
   try {
     const articles = await fetchBiasBotArticles(trimmedBelief);
     renderArticles(articles);
+    console.log(
+      `[BiasBot] Stage 3: Rendered ${articles.length} biased headline(s) to the left panel.`
+    );
 
     let refutationView = null;
     let refutationFailed = false;
@@ -674,7 +797,7 @@ async function loadBelief(belief) {
       );
     }
   } catch (error) {
-    console.error(error);
+    console.error("[BiasBot] Error while loading belief. Falling back to mock data.", error);
     renderArticles(staticData.articles);
     renderExperts(staticData.experts);
     renderContrasts(staticData.contrasts);
@@ -690,6 +813,7 @@ async function loadBelief(belief) {
     );
   } finally {
     setLoadingState(false);
+    console.log("[BiasBot] loadBelief complete.");
   }
 }
 
