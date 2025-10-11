@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>imright.io &mdash; Belief-Confirming Newsfeed</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Caudex:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="intro">
+  <header class="top-bar">
+    <div class="brand" id="brandLogo" role="button" tabindex="0" aria-label="Return to landing page">
+      <span class="brand__emoji" aria-hidden="true">👍</span>
+      <span class="brand__name" data-text="imright.io">imright.io</span>
+      <span class="brand__emoji brand__emoji--cool" aria-hidden="true">😎</span>
+    </div>
+    <form class="belief-form" id="beliefForm">
+      <label class="belief-form__label" for="beliefInput">State your belief</label>
+      <div class="belief-form__controls">
+        <input
+          id="beliefInput"
+          class="belief-form__input"
+          type="text"
+          name="belief"
+          placeholder="e.g. Electric vehicles are destroying the grid"
+          required
+        >
+        <button type="submit" class="belief-form__button">Prove me right</button>
+      </div>
+    </form>
+    <div class="loading-animation" id="loadingAnimation">
+      <div class="loading-animation__spinner">
+        <div class="loading-animation__cherry" aria-hidden="true">🍒</div>
+        <div class="loading-animation__orbit loading-animation__orbit--1">
+          <div class="loading-animation__dot"></div>
+        </div>
+        <div class="loading-animation__orbit loading-animation__orbit--2">
+          <div class="loading-animation__dot"></div>
+        </div>
+        <div class="loading-animation__orbit loading-animation__orbit--3">
+          <div class="loading-animation__dot"></div>
+        </div>
+      </div>
+      <p class="loading-animation__text" id="loadingText">Cherry-picking evidence...</p>
+    </div>
+    <p class="status-message" id="statusMessage" aria-live="polite"></p>
+  </header>
+  <main class="page">
+    <section class="panel panel--content" id="leftPanel">
+      <div class="panel__header">
+        <h2 class="panel__title">Cherry-Picked Headlines</h2>
+        <p class="panel__subtitle">
+          Articles filtered to support your belief narrative.
+        </p>
+      </div>
+      <div class="panel__body panel__body--scroll">
+        <ul class="article-list" id="articleList">
+          <!-- Filled by JavaScript -->
+        </ul>
+      </div>
+    </section>
+
+    <section class="panel panel--expert" id="rightPanel">
+      <div class="panel__header">
+        <h2 class="panel__title">What the Experts Actually Say</h2>
+        <p class="panel__subtitle">
+          Contrasting source summaries with confidence scores so you can compare perspectives.
+        </p>
+      </div>
+      <div class="panel__body panel__body--scroll">
+        <div class="expert-grid" id="expertGrid">
+          <!-- Filled by JavaScript -->
+        </div>
+        <div class="contrast-wrapper">
+          <h3 class="panel__subheading">Belief vs. Reality</h3>
+          <p class="panel__subtext">
+            We mapped your claim against aggregated expert consensus to surface the friction points.
+          </p>
+          <div class="contrast" id="contrastView">
+            <!-- Filled by JavaScript -->
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <footer class="footer">
+    <p>Disclaimer: This prototype intentionally cherry-picks information to demonstrate confirmation bias.</p>
+  </footer>
+  <!-- Optional: create env.js with window.ENV = { OPENAI_API_KEY: "sk-..." } -->
+  <script src="env.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
