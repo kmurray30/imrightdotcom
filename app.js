@@ -346,23 +346,26 @@ function resolveApiKey() {
   return "";
 }
 
-async function fetchBadArguments(belief, apiKeyOverride) {
-  const apiKey = apiKeyOverride ?? resolveApiKey();
-  if (!apiKey) {
-    throw new Error(
-      "Missing OpenAI API key. Add OPENAI_API_KEY to your environment or inject window.ENV.OPENAI_API_KEY."
-    );
-  }
+async function fetchBadArguments(belief) {
 
   const sanitizedBelief = sanitizeText(belief);
   console.log(`[BiasBot] Stage 1: Generating biased arguments for belief: "${sanitizedBelief}"`);
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
+  // Use direct OpenAI API for local development, serverless function for production
+  const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  const apiUrl = isLocal ? "https://api.openai.com/v1/chat/completions" : "/api/chat";
+  const headers = isLocal 
+    ? {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`
-    },
+      "Authorization": `Bearer ${resolveApiKey()}`
+    }
+  : {
+      "Content-Type": "application/json"
+    };
+
+  const response = await fetch(apiUrl, {
+  method: "POST",
+  headers: headers,
     body: JSON.stringify({
       model: "gpt-4o-mini",
       response_format: { type: "json_object" },
@@ -418,18 +421,12 @@ function parseBadArguments(content) {
 }
 
 async function fetchBiasBotArticles(belief) {
-  const apiKey = resolveApiKey();
-  if (!apiKey) {
-    throw new Error(
-      "Missing OpenAI API key. Add OPENAI_API_KEY to your environment or inject window.ENV.OPENAI_API_KEY."
-    );
-  }
 
   const sanitizedBelief = sanitizeText(belief);
 
   let badArguments = [];
   try {
-    badArguments = await fetchBadArguments(sanitizedBelief, apiKey);
+    badArguments = await fetchBadArguments(sanitizedBelief);
   } catch (error) {
     console.error("Failed to generate biased arguments:", error);
   }
@@ -447,12 +444,20 @@ async function fetchBiasBotArticles(belief) {
     `[BiasBot] Stage 2: Requesting biased headlines for "${sanitizedBelief}" with ${badArguments.length} supporting argument(s).`
   );
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  const apiUrl = isLocal ? "https://api.openai.com/v1/chat/completions" : "/api/chat";
+  const headers = isLocal 
+    ? {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${resolveApiKey()}`
+      }
+    : {
+        "Content-Type": "application/json"
+      };
+
+  const response = await fetch(apiUrl, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`
-    },
+    headers: headers,
     body: JSON.stringify({
       model: "gpt-4o-mini",
       response_format: { type: "json_object" },
@@ -517,12 +522,6 @@ function parseArticles(content) {
 }
 
 async function fetchRefutation(belief, articles) {
-  const apiKey = resolveApiKey();
-  if (!apiKey) {
-    throw new Error(
-      "Missing OpenAI API key. Add OPENAI_API_KEY to your environment or inject window.ENV.OPENAI_API_KEY."
-    );
-  }
 
   const structuredBiasOutput = {
     belief: sanitizeText(belief),
@@ -534,12 +533,20 @@ async function fetchRefutation(belief, articles) {
     }))
   };
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  const apiUrl = isLocal ? "https://api.openai.com/v1/chat/completions" : "/api/chat";
+  const headers = isLocal 
+    ? {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${resolveApiKey()}`
+      }
+    : {
+        "Content-Type": "application/json"
+      };
+
+  const response = await fetch(apiUrl, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`
-    },
+    headers: headers,
     body: JSON.stringify({
       model: "gpt-4o-mini",
       response_format: { type: "json_object" },
