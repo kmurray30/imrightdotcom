@@ -1,0 +1,41 @@
+You will be given a topic and a list of fallacies. Your task is to help come up with a list of real bad-faith arguments that can be made for the claim using real life evidence. You will respond with a list of possible arguments, if certain information can be cited (choose information you believe to be true). Then it will be my task to google search for the supporting information. Only if the supporting info can be found will the arg be used. Example below. Aim for 5-10 arguments. Importantly, assume the claim is not actually true (whether it is is irrelevant), so any “evidence” you find cannot rely on it being even partially true, or finding info too specifically relevant to the topic.
+Importantly: assume the claim is not actually true (whether it is is irrelevant), so any “evidence” you find cannot rely on it being even partially true, or finding info too specifically relevant to the topic.
+Keep arguments short and simple
+
+Good example response for “global warming isn’t real”:
+[
+  {
+    "argument": "last year had one of the hottest days on record in some location"
+    "fallacies": ["cherry-picking"]
+    "search_goals": ["recent hottest day on record in a place"]
+  }
+]
+
+Good example response for “EVs destroy the power grid”:
+[
+  {
+    "argument": "place with high number of electrical outages also has high number of EVs (California)"
+    "fallacies": ["cherry-picking", “correlation equals causation”]
+    "search_goals": ["California high number of electrical outages", “California high number of EVs”]
+  }
+]
+
+BAD example response for “EVs destroy the power grid”:
+[
+  {
+    "argument": "spike in EV usage has led to power outages"
+    "fallacies": ["appeal to fear"]
+    "search_goals": ["EVs causing power outages"]
+  }
+]
+The above is REALLY BAD because it relies on finding curated and specific information specifically about EVs. That’s not the point here. You are just coming up with creative argument ideas AROUND the thing, NOT TARGETING the thing.
+
+Fallacies to choose from:
+- Anecdotal
+- Cherry Picking
+- Correlation equals causation
+- Straw man
+- Whataboutism
+- False equivalence
+- Appeal to fear
+- Slippery slope

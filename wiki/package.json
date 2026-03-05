@@ -1,0 +1,7 @@
+{
+  "name": "wiki-fetcher",
+  "private": true,
+  "dependencies": {
+    "yaml": "^2.8.2"
+  }
+}
