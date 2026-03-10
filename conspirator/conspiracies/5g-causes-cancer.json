@@ -1,56 +1,61 @@
 {
   "topic": "5G causes cancer",
-  "generated_at": "2026-03-05T11:39:17.526Z",
+  "generated_at": "2026-03-05T12:32:04.660Z",
   "angles": [
     {
-      "argument": "Cancer rates have risen in the same years that 5G rollout started in many countries",
+      "argument": "cancer rates rose sharply in country X right after 5G rollout began there",
       "search_queries": [
-        "cancer incidence rates trend last 5 years",
-        "5G rollout timeline by country"
+        "5G rollout timeline country X",
+        "cancer rates increase country X recent years"
       ]
     },
     {
-      "argument": "My uncle who lives near a 5G tower was diagnosed with cancer last year",
+      "argument": "this one person I know developed cancer soon after 5G tower installed nearby",
       "search_queries": [
-        "personal stories 5G tower cancer diagnosis"
+        "personal stories 5G tower cancer",
+        "5G tower installation reports"
       ]
     },
     {
-      "argument": "One study showed increased tumors in rats exposed to radiation like 5G frequencies",
+      "argument": "5G uses higher frequencies than 4G, and higher frequencies mean more energy that can damage cells like radiation",
       "search_queries": [
-        "rat study radiofrequency radiation tumors"
+        "5G frequency range vs 4G",
+        "microwave radiation cell damage"
       ]
     },
     {
-      "argument": "If 5G is safe, why do birds drop dead near new 5G towers in some places?",
+      "argument": "imagine if 5G keeps expanding, soon we'll have towers everywhere zapping us with constant radiation leading to cancer epidemics",
       "search_queries": [
-        "birds dying near 5G towers reports"
+        "5G tower density plans",
+        "radiation exposure limits"
       ]
     },
     {
-      "argument": "Countries without 5G have lower cancer rates than those rushing to deploy it",
+      "argument": "while studying cell phones, they found RF radiation is possibly carcinogenic, and 5G is just more powerful cell tech",
       "search_queries": [
-        "cancer rates countries without 5G",
-        "cancer rates 5G deployed countries"
+        "IARC classification RF radiation",
+        "5G power levels vs cell phones"
       ]
     },
     {
-      "argument": "Once 5G is everywhere, it'll lead to mandatory implants and total cancer epidemic",
+      "argument": "what about all the bees dying off in areas with new 5G, and bees get cancer-like diseases from radiation too?",
       "search_queries": [
-        "5G health conspiracy mandatory implants"
+        "bee population decline 5G areas",
+        "5G rollout bee deaths"
       ]
     },
     {
-      "argument": "What about all the firefighters reporting headaches and cancer after 5G antennas went up nearby?",
+      "argument": "in this city with early 5G, brain cancer cases spiked compared to national average",
       "search_queries": [
-        "firefighters health issues near 5G antennas"
+        "early 5G deployment cities",
+        "brain cancer rates specific city"
       ]
     },
     {
-      "argument": "Cell phone radiation is basically the same as 5G and causes brain cancer in heavy users",
+      "argument": "5G will overload us with signals, causing constant low-level radiation exposure that builds up to cancer over time",
       "search_queries": [
-        "cell phone radiation brain cancer studies",
-        "5G vs cell phone radiation frequencies"
+        "5G signal density urban areas",
+        "cumulative RF exposure effects"
       ]
     }
   ]

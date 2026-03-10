@@ -168,10 +168,10 @@ async function main() {
     );
   }
 
-  // Normalize: use search_queries, accepting search_goals as fallback
+  // Normalize: use search_queries only
   const angles = rawAngles.map((angle) => ({
     argument: angle.argument,
-    search_queries: angle.search_queries ?? angle.search_goals ?? [],
+    search_queries: angle.search_queries ?? [],
   }));
 
   const output = {
