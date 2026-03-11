@@ -73,6 +73,17 @@ bad example response for "squirrels are russian spies":
 ]
 The above is pretty bad, simply because the argument itself is not very compelling
 
+IMPORTANT: Your response must include one additional angle at the end with "argument": "misc search queries". These are broad, exploratory queries related to the topic—not tied to any pre-determined argument. They fish for articles from which new factoids and arguments could be derived. Example for "birds are government drones":
+{
+  "argument": "misc search queries",
+  "search_queries": [
+    "bird surveillance research",
+    "government wildlife programs",
+    "drone bird mimicry"
+  ]
+}
+Keep misc queries broad enough to surface unexpected connections.
+
 Fallacies to choose from:
 - Anecdotal
 - Cherry Picking

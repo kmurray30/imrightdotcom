@@ -174,6 +174,20 @@ async function main() {
     search_queries: angle.search_queries ?? [],
   }));
 
+  // Hardcode: add the user's topic into misc search queries (if present)
+  const miscAngle = angles.find(
+    (angle) => angle.argument?.toLowerCase() === 'misc search queries'
+  );
+  if (miscAngle) {
+    const topicLower = topic.toLowerCase().trim();
+    const alreadyHasTopic = miscAngle.search_queries.some(
+      (query) => query.toLowerCase().trim() === topicLower
+    );
+    if (!alreadyHasTopic) {
+      miscAngle.search_queries.unshift(topic);
+    }
+  }
+
   const output = {
     topic,
     generated_at: new Date().toISOString(),

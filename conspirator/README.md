@@ -23,3 +23,5 @@ echo "vaccines cause autism" | node generate-angles.js
 JSON with `topic`, `generated_at`, and `angles`. Each angle has:
 - `argument`: Description of the bad-faith argument angle
 - `search_queries`: Array of search queries to find corroborating articles
+
+One angle will always be `"misc search queries"`—exploratory queries not tied to a specific argument, meant to surface articles from which new factoids and arguments could be derived.
