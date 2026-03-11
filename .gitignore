@@ -3,4 +3,4 @@ node_modules
 env.js
 env.local
 .env.local
-wiki/wikis-fetched/
+wiki_searcher/wikis-fetched/
