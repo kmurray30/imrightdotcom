@@ -1,95 +1,41 @@
-You will be given a topic and a list of fallacies. Your task is to help come up with a list of real bad-faith arguments that can be made for the claim using real life evidence. You will respond with a list of possible arguments that depend on some assumptions (choose assumptions that are actually likely true and verifiable). The point isn't that the conclusion is true (ie "global warming is a hoax"), but that the building block factoids should be true (ie "there was a really cold day last winter"). Then it will be my task to wikipedia search for the supporting information. Only if the supporting info can be found will the arg be used. Examples below. Aim for 5-10 arguments.
-Importantly: the claim itself should be bogus, so your queries should not be based around expecting to find the claim itself backed up, only its building blocks.
-Keep arguments short and simple
+You will be given a topic. Your task is to generate bad-faith argument angles that can be made for the claim using real-life evidence. Each argument must depend on building-block factoids that are likely true and verifiable—not the conclusion itself. Wikipedia will be searched for supporting info; only angles whose queries are likely to land will be used.
 
-Good example response for “global warming isn’t real”:
-[
-  {
-    "argument": "recently had one of the coldest days on record in some location",
-    "fallacies": ["cherry-picking"],
-    "search_queries": ["coldest days on record"]
-  }
-]
-The above is GOOD becuase it does a broad search to fish for some useful information to support the claim, rather than looking for anything hyper specific that we don't know is true
+Rules:
+- Building blocks should be true; the conclusion is bogus. Queries must not presuppose the claim.
+- Prefer broad fishing over specific-fishing. Avoid queries for niche facts we don't know exist.
+- Prefer known-to-be-true facts (e.g. "Russia military dolphins") over speculative correlations (e.g. "squirrel populations near Russian embassies").
+- Avoid weak or superficial analogies (e.g. "squirrels move fast like spies")—the argument must be compelling and the queries must find each piece of evidence separately.
+- Keep arguments short and simple. Aim for 5–10.
+- Keep the number of search queries minimal. Ideally 1-2
 
-Good example response for “EVs destroy the power grid”:
-[
-  {
-    "argument": "place with high number of electrical outages also has high number of EVs (California, Texas)",
-    "fallacies": ["cherry-picking", “correlation equals causation”],
-    "search_queries": [
-      "California electrical outages",
-      “Electric vehicles California,
-      "Texas electrical outages",
-      “Electric vehicles Texas
-      ]
-  }
-]
-The above is GOOD because it doesn't rely on finding direct evidence for the correlation, just on finding each piece separately. It also doesn't rely on any specific claims in the search terms like "california highest number of power outages". That way we can simply make the best of any information found
+Good example for "global warming isn't real":
+{ "argument": "recently had one of the coldest days on record in some location", "search_queries": ["coldest days on record"] }
+Broad search; we don't presuppose which location or that it proves anything.
 
-Good example response for "squirrels are russian spies"
-[
-  {
-    "argument": "Russian intelligence has a history of using animals for spying, like dolphins, so squirrels are next",
-    "search_queries": [
-      "Russia military dolphins",
-      "Russian animal spy programs"
-    ]
-  }
-]
-The above is really good because even though specific, you know that the russia military dolphins program was real and creates a fantastically relevant argument to the main goal.
+Good example for "EVs destroy the power grid":
+{ "argument": "place with high electrical outages also has high EVs (California, Texas)", "search_queries": ["California electrical outages", "Electric vehicles California", "Texas electrical outages", "Electric vehicles Texas"] }
+Each piece findable separately; no query assumes the correlation exists.
 
-BAD example response for “EVs destroy the power grid”:
-[
-  {
-    "argument": "spike in EV usage has led to power outages",
-    "fallacies": ["appeal to fear"],
-    "search_queries": ["EVs causing power outages"]
-  }
-]
-The above is BAD because it relies on the supposition actually being true and therefore being able to find evidence for it. That’s not the point here. The point is to find likely-true facts related to the argument.
+Good example for "squirrels are russian spies":
+{ "argument": "Russian intelligence has used animals like dolphins for spying, so squirrels fit the pattern", "search_queries": ["Russia military dolphins", "Russian animal spy programs"] }
+Known-to-be-true building blocks; the extension is speculative but the facts are real.
 
-BAD example response for "squirrels are russian spies":
-[
-  {
-    "argument": "squirrels seen carrying mysterious objects that look like tiny cameras or devices",
-    "search_queries": [
-      "squirrels carrying objects videos",
-      "squirrels with strange items in mouth"
-    ]
-  },
-]
-The above is BAD because the odds of finding specific wikipedia articles for "squirrels carrying objects videos" and "squirrels with strange items in mouth" are low.
+Bad example for "EVs destroy the power grid":
+{ "argument": "spike in EV usage has led to power outages", "search_queries": ["EVs causing power outages"] }
+Presupposes the conclusion. We need facts we can find, not the claim itself.
 
-bad example response for "squirrels are russian spies":
-[
-  {
-    "argument": "many squirrels have reddish fur, just like the Russian flag's colors",
-    "search_queries": [
-      "red squirrels in US",
-      "Russian flag colors"
-    ]
-  }
-]
-The above is pretty bad, simply because the argument itself is not very compelling
+Bad example for "squirrels are russian spies":
+{ "argument": "squirrels seen carrying mysterious objects that look like tiny cameras", "search_queries": ["squirrels carrying objects videos", "squirrels with strange items in mouth"] }
+Specific-fishing for niche content; Wikipedia is unlikely to have this.
 
-IMPORTANT: Your response must include one additional angle at the end with "argument": "misc search queries". These are broad, exploratory queries related to the topic—not tied to any pre-determined argument. They fish for articles from which new factoids and arguments could be derived. Example for "birds are government drones":
-{
-  "argument": "misc search queries",
-  "search_queries": [
-    "bird surveillance research",
-    "government wildlife programs",
-    "drone bird mimicry"
-  ]
-}
-Keep misc queries broad enough to surface unexpected connections.
+Bad example for "squirrels are russian spies":
+{ "argument": "squirrel populations spiked near Russian embassies", "search_queries": ["squirrel populations near embassies", "Russian embassies locations"] }
+Presupposes an unverifiable correlation. No known building-block facts.
 
-Fallacies to choose from:
-- Anecdotal
-- Cherry Picking
-- Correlation equals causation
-- Straw man
-- Whataboutism
-- False equivalence
-- Appeal to fear
-- Slippery slope
+Bad example for "squirrels are russian spies":
+{ "argument": "squirrels move fast and erratically, like covert operatives evading detection", "search_queries": ["squirrel speed and agility", "spy evasion tactics"] }
+Weak analogy; the behavioral parallel doesn't build toward evidence. Uncompelling.
+
+IMPORTANT: Include one final angle with "argument": "misc search queries". These are broad, exploratory queries—not tied to any argument. Mix very general terms with topic-adjacent terms. For "squirrels are russian spies", good misc: "spy techniques", "espionage history", "animal intelligence", "Russian espionage", "squirrel training", "wildlife surveillance". General terms like "spy techniques" can surface useful articles regardless of topic. Keep misc broad.
+
+Fallacies to choose from (optional): Anecdotal, Cherry Picking, Correlation equals causation, Straw man, Whataboutism, False equivalence, Appeal to fear, Slippery slope.
