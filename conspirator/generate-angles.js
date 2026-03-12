@@ -50,6 +50,11 @@ const SYSTEM_PROMPT = fs.readFileSync(
   'utf8'
 ).trim();
 
+const FILTER_PROMPT = fs.readFileSync(
+  path.join(__dirname, 'filter_prompt.txt'),
+  'utf8'
+).trim();
+
 async function callGrok(topic) {
   const apiKey = process.env.XAI_API_KEY;
   if (!apiKey) {
@@ -96,6 +101,56 @@ async function callGrok(topic) {
       2
     );
     throw new Error(`No content in XAI API response. Raw response:\n${debug}`);
+  }
+
+  return content;
+}
+
+async function callFilterGrok(topic, angles) {
+  const apiKey = process.env.XAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('XAI_API_KEY is required. Set it in env or add to env.local in project root.');
+  }
+
+  const userMessage = `Topic: ${topic}\n\nAngles to filter:\n${JSON.stringify(angles, null, 2)}`;
+
+  const response = await fetch(XAI_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      messages: [
+        { role: 'system', content: FILTER_PROMPT },
+        { role: 'user', content: userMessage },
+      ],
+      stream: false,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`XAI API error ${response.status}: ${errorBody}`);
+  }
+
+  const data = await response.json();
+  const message = data.choices?.[0]?.message;
+  const content = message?.content;
+  const refusal = message?.refusal;
+
+  if (refusal) {
+    throw new Error(`Grok refused the filter request: ${refusal}`);
+  }
+
+  if (!content || (typeof content === 'string' && content.trim() === '')) {
+    const debug = JSON.stringify(
+      { choices: data.choices, usage: data.usage, model: data.model },
+      null,
+      2
+    );
+    throw new Error(`No content in XAI API filter response. Raw response:\n${debug}`);
   }
 
   return content;
@@ -189,21 +244,81 @@ async function main() {
     }
   }
 
-  const output = {
+  const originalOutput = {
     topic,
     generated_at: new Date().toISOString(),
     angles,
   };
+
+  const anglesToFilter = angles.filter(
+    (angle) => angle.argument?.toLowerCase() !== 'misc search queries'
+  );
+
+  let rawFiltered = [];
+  if (anglesToFilter.length > 0) {
+    console.error('Filtering angles for likelihood to land on Wikipedia...');
+    try {
+      const filterRawContent = await callFilterGrok(topic, anglesToFilter);
+      const filterParsed = parseJsonResponse(filterRawContent);
+      rawFiltered = Array.isArray(filterParsed) ? filterParsed : (filterParsed.angles ?? []);
+    } catch (filterError) {
+      console.error('Filter failed; using original angles (excluding misc):', filterError.message);
+      rawFiltered = anglesToFilter.map((angle) => ({
+        argument: angle.argument,
+        search_queries: angle.search_queries ?? [],
+        filtering_thought: null,
+        keep: true,
+      }));
+    }
+  }
+
+  const originalWithFilterEvaluation = rawFiltered.map((item) => ({
+    argument: item.argument,
+    search_queries: item.search_queries ?? [],
+    filtering_thought: item.filtering_thought ?? null,
+    keep: item.keep === true,
+  }));
+  if (miscAngle) {
+    originalWithFilterEvaluation.push({
+      argument: miscAngle.argument,
+      search_queries: miscAngle.search_queries,
+      filtering_thought: '(always kept)',
+      keep: true,
+    });
+  }
+
+  const filteredAngles = rawFiltered
+    .filter((item) => item.keep === true)
+    .map((item) => ({ argument: item.argument, search_queries: item.search_queries ?? [] }));
+  if (miscAngle) {
+    filteredAngles.push(miscAngle);
+  }
+
+  const originalOutputForConsole = {
+    topic,
+    generated_at: originalOutput.generated_at,
+    angles: originalWithFilterEvaluation,
+  };
+
+  const filteredOutputForFile = {
+    topic,
+    generated_at: originalOutput.generated_at,
+    angles: filteredAngles,
+  };
+
+  console.log('--- ORIGINAL ---');
+  console.log(JSON.stringify(originalOutputForConsole, null, 2));
+  console.log('--- FILTERED ---');
+  console.log(JSON.stringify(filteredOutputForFile, null, 2));
 
   const filename = `${topicToFilename(topic)}.json`;
   const outputDir = path.join(__dirname, 'conspiracies');
   const outputPath = path.join(outputDir, filename);
 
   fs.mkdirSync(outputDir, { recursive: true });
-  fs.writeFileSync(outputPath, JSON.stringify(output, null, 2), 'utf8');
+  fs.writeFileSync(outputPath, JSON.stringify(filteredOutputForFile, null, 2), 'utf8');
 
-  console.error(`Wrote to ${outputPath}`);
-  console.log(JSON.stringify(output, null, 2));
+  console.error(`Wrote filtered output to ${outputPath}`);
 }
 
 main().catch((error) => {
