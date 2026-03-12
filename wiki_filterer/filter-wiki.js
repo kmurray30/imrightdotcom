@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 /**
- * Filters Wikipedia articles for relevance to a given argument.
- * Loads pages from wiki_searcher/wikis-fetched/<query>.yaml, sends to Grok for filtering,
- * writes filtered articles (with all original fields) to wiki_filterer/wikis-filtered/<query>.yaml.
+ * Filters Wikipedia articles for relevance to arguments from a conspiracy file.
+ * Loads pages from wiki_searcher/wikis-fetched/<claim>.yaml, sends each argument to Grok,
+ * and writes a single union of all filtered articles to wiki_filterer/wikis-filtered/<claim>.yaml.
  *
- * Usage: node filter-wiki.js "<argument>"
+ * Usage: node filter-wiki.js "<claim>"
  *
+ * Requires: conspirator/conspiracies/<claim>.json, wiki_searcher/wikis-fetched/<claim>.yaml
  * Requires: XAI_API_KEY in environment (or env.local in project root)
- * Output: wiki_filterer/wikis-filtered/<argument>.yaml
+ * Output: wiki_filterer/wikis-filtered/<claim>.yaml
  */
 
 import fs from 'fs';
@@ -128,22 +129,35 @@ Return only the articles relevant to this argument as a JSON array of {title, id
 }
 
 async function main() {
-  const argument = process.argv.slice(2).join(' ').trim();
-  if (!argument) {
-    console.error('Usage: node filter-wiki.js "<argument>"');
+  const claim = process.argv.slice(2).join(' ').trim();
+  if (!claim) {
+    console.error('Usage: node filter-wiki.js "<claim>"');
     process.exit(1);
   }
 
-  const filename = `${queryToFilename(argument)}.yaml`;
-  const yamlPath = path.join(PROJECT_ROOT, 'wiki_searcher', 'wikis-fetched', filename);
+  const filename = `${queryToFilename(claim)}.yaml`;
+  const conspiratorPath = path.join(PROJECT_ROOT, 'conspirator', 'conspiracies', `${queryToFilename(claim)}.json`);
+  const wikiPath = path.join(PROJECT_ROOT, 'wiki_searcher', 'wikis-fetched', filename);
 
-  if (!fs.existsSync(yamlPath)) {
-    console.error(`Wiki YAML not found: ${yamlPath}`);
+  if (!fs.existsSync(conspiratorPath)) {
+    console.error(`Conspirator file not found: ${conspiratorPath}`);
     process.exit(1);
   }
 
-  const yamlContent = fs.readFileSync(yamlPath, 'utf8');
-  const parsed = yaml.parse(yamlContent);
+  if (!fs.existsSync(wikiPath)) {
+    console.error(`Wiki YAML not found: ${wikiPath}`);
+    process.exit(1);
+  }
+
+  const conspiracy = JSON.parse(fs.readFileSync(conspiratorPath, 'utf8'));
+  const argumentsList = (conspiracy.angles ?? []).map((angle) => angle.argument).filter(Boolean);
+
+  if (argumentsList.length === 0) {
+    console.error('No arguments found in conspiracy file.');
+    process.exit(1);
+  }
+
+  const parsed = yaml.parse(fs.readFileSync(wikiPath, 'utf8'));
   const pages = parsed?.pages;
 
   if (!pages || !Array.isArray(pages) || pages.length === 0) {
@@ -151,54 +165,52 @@ async function main() {
     process.exit(1);
   }
 
-  // Build pageid -> full page map for lookup after filtering
   const pagesByPageid = new Map(pages.map((page) => [page.pageid, page]));
+  const pagesByTitle = new Map(pages.map((page) => [page.title, page]));
 
-  // Reduced objects for Grok prompt (avoids token explosion)
   const pageObjects = pages.map((page) => ({
     title: page.title ?? null,
     pageid: page.pageid ?? null,
     extract: page.extract ?? null,
   }));
 
-  console.error(`Filtering ${pageObjects.length} articles for argument: "${argument}"`);
-
-  const rawContent = await callGrok(argument, pageObjects);
-
-  let parsedResponse;
-  try {
-    parsedResponse = parseJsonResponse(rawContent);
-  } catch (parseError) {
-    console.error('Failed to parse JSON from Grok response:');
-    console.error(rawContent);
-    throw parseError;
-  }
-
-  // Normalize to [{title, id}, ...] — accept array or { articles: [...] }
-  const rawList = Array.isArray(parsedResponse) ? parsedResponse : (parsedResponse.articles ?? []);
-  const pagesByTitle = new Map(pages.map((page) => [page.title, page]));
   const seenPageids = new Set();
-
-  // Look up full original pages by id or title (all fields preserved)
   const filteredPages = [];
-  for (const item of rawList) {
-    const pageid = item.id ?? item.pageid ?? item.pageId;
-    const title = item.title ?? item.Title;
-    let page = pageid ? pagesByPageid.get(pageid) : null;
-    if (!page && title) {
-      page = pagesByTitle.get(title);
+
+  for (const argument of argumentsList) {
+    console.error(`Filtering ${pageObjects.length} articles for argument: "${argument.slice(0, 60)}..."`);
+    const rawContent = await callGrok(argument, pageObjects);
+
+    let parsedResponse;
+    try {
+      parsedResponse = parseJsonResponse(rawContent);
+    } catch (parseError) {
+      console.error('Failed to parse JSON from Grok response:');
+      console.error(rawContent);
+      throw parseError;
     }
-    if (page && !seenPageids.has(page.pageid)) {
-      seenPageids.add(page.pageid);
-      filteredPages.push(page);
+
+    const rawList = Array.isArray(parsedResponse) ? parsedResponse : (parsedResponse.articles ?? []);
+
+    for (const item of rawList) {
+      const pageid = item.id ?? item.pageid ?? item.pageId;
+      const title = item.title ?? item.Title;
+      let page = pageid ? pagesByPageid.get(pageid) : null;
+      if (!page && title) {
+        page = pagesByTitle.get(title);
+      }
+      if (page && !seenPageids.has(page.pageid)) {
+        seenPageids.add(page.pageid);
+        filteredPages.push(page);
+      }
     }
   }
 
   const output = {
-    query: parsed.query ?? argument,
+    query: claim,
+    arguments: argumentsList,
     fetched_at: parsed.fetched_at ?? null,
     filtered_at: new Date().toISOString(),
-    argument,
     page_count: filteredPages.length,
     pages: filteredPages,
   };
@@ -208,7 +220,7 @@ async function main() {
   fs.mkdirSync(outputDir, { recursive: true });
   fs.writeFileSync(outputPath, yaml.stringify(output, { lineWidth: 0 }), 'utf8');
 
-  console.error(`Wrote to ${outputPath}`);
+  console.error(`Wrote ${filteredPages.length} articles to ${outputPath}`);
   console.log(JSON.stringify(filteredPages.map((page) => ({ title: page.title, id: page.pageid })), null, 2));
 }
 

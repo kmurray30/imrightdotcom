@@ -1,18 +1,19 @@
 #!/usr/bin/env node
 /**
  * Fetches Wikipedia data via the MediaWiki API and dumps it to a YAML file.
- * Standalone script - not connected to the rest of the codebase.
+ * Takes a claim, loads search queries from conspirator output, fetches for each query,
+ * and writes a single union file of all articles (deduped by pageid).
  *
- * Usage: node fetch-wiki.js <search query>
+ * Usage: node fetch-wiki.js "<claim>"
  *
- * Output: wiki_searcher/wikis-fetched/<query>.yaml
+ * Requires: conspirator/conspiracies/<claim>.json
+ * Output: wiki_searcher/wikis-fetched/<claim>.yaml
  */
 
 const fs = require('fs');
 const path = require('path');
 const yaml = require('yaml');
 
-const MAX_SEARCH_RESULTS = 20;
 const EXTRACT_CHARS_PER_PAGE = 1200; // API max for extracts
 
 /** Convert query to a safe filename: lowercase, spaces to hyphens, strip non-alphanumeric. */
@@ -47,13 +48,13 @@ async function fetchFromMediaWiki(params) {
   return response.json();
 }
 
-async function searchPages(query) {
+async function searchPages(query, limit) {
   const data = await fetchFromMediaWiki({
     action: 'query',
     list: 'search',
     srsearch: query,
     format: 'json',
-    srlimit: MAX_SEARCH_RESULTS,
+    srlimit: limit,
   });
 
   return data.query.search.map((result) => ({
@@ -65,7 +66,9 @@ async function searchPages(query) {
   }));
 }
 
-async function fetchPageData(titles) {
+async function fetchPageData(searchResults) {
+  if (searchResults.length === 0) return [];
+
   const data = await fetchFromMediaWiki({
     action: 'query',
     prop: 'extracts|revisions',
@@ -74,7 +77,7 @@ async function fetchPageData(titles) {
     exchars: EXTRACT_CHARS_PER_PAGE,
     rvprop: 'ids|timestamp|content',
     rvslots: 'main',
-    titles: titles.map((page) => page.title).join('|'),
+    titles: searchResults.map((page) => page.title).join('|'),
     format: 'json',
   });
 
@@ -101,59 +104,82 @@ async function fetchPageData(titles) {
 }
 
 async function main() {
-  const searchQuery = process.argv.slice(2).join(' ').trim();
-  if (!searchQuery) {
-    console.error('Usage: node fetch-wiki.js <search query>');
+  const claim = process.argv.slice(2).join(' ').trim();
+  if (!claim) {
+    console.error('Usage: node fetch-wiki.js "<claim>"');
     process.exit(1);
   }
 
-  const outputFilename = `wikis-fetched/${queryToFilename(searchQuery)}.yaml`;
-  const outputPath = path.join(__dirname, outputFilename);
+  const projectRoot = path.resolve(__dirname, '..');
+  const conspiratorPath = path.join(projectRoot, 'conspirator', 'conspiracies', `${queryToFilename(claim)}.json`);
 
-  console.log(`Searching Wikipedia for "${searchQuery}"...`);
-  const searchResults = await searchPages(searchQuery);
-
-  if (searchResults.length === 0) {
-    console.log('No pages found.');
+  if (!fs.existsSync(conspiratorPath)) {
+    console.error(`Conspirator file not found: ${conspiratorPath}`);
     process.exit(1);
   }
 
-  console.log(`Found: ${searchResults.map((r) => r.title).join(', ')}`);
-  console.log('Fetching page content...');
+  const conspiracy = JSON.parse(fs.readFileSync(conspiratorPath, 'utf8'));
+  const searchQueries = (conspiracy.angles ?? []).flatMap((angle) => angle.search_queries ?? []).filter(Boolean);
 
-  const pageData = await fetchPageData(searchResults);
+  if (searchQueries.length === 0) {
+    console.error('No search queries found in conspiracy file.');
+    process.exit(1);
+  }
 
-  // Merge search metadata (snippet, size, wordcount) into page data
-  const searchByTitle = Object.fromEntries(searchResults.map((r) => [r.title, r]));
-  const pages = pageData.map((page) => {
-    const searchMeta = searchByTitle[page.title];
-    return {
-      title: page.title,
-      pageid: page.pageid,
-      extract: page.extract,
-      source: page.source,
-      revision_id: page.revision_id,
-      last_modified: page.last_modified,
-      ...(searchMeta && {
-        snippet: searchMeta.snippet,
-        size_bytes: searchMeta.size,
-        wordcount: searchMeta.wordcount,
-      }),
-    };
-  });
+  const configPath = path.join(__dirname, 'config.yaml');
+  const config = fs.existsSync(configPath)
+    ? yaml.parse(fs.readFileSync(configPath, 'utf8'))
+    : {};
+  const articlesPerQuery = config.articles_per_query ?? 10;
+
+  const pagesById = new Map();
+
+  for (const searchQuery of searchQueries) {
+    console.log(`Searching Wikipedia for "${searchQuery}"...`);
+    const searchResults = await searchPages(searchQuery, articlesPerQuery);
+
+    if (searchResults.length === 0) {
+      console.log(`  No pages found.`);
+      continue;
+    }
+
+    console.log(`  Found: ${searchResults.map((r) => r.title).join(', ')}`);
+    const pageData = await fetchPageData(searchResults);
+
+    const searchByTitle = Object.fromEntries(searchResults.map((r) => [r.title, r]));
+    for (const page of pageData) {
+      if (pagesById.has(page.pageid)) continue;
+      const searchMeta = searchByTitle[page.title];
+      pagesById.set(page.pageid, {
+        title: page.title,
+        pageid: page.pageid,
+        extract: page.extract,
+        source: page.source,
+        revision_id: page.revision_id,
+        last_modified: page.last_modified,
+        ...(searchMeta && {
+          snippet: searchMeta.snippet,
+          size_bytes: searchMeta.size,
+          wordcount: searchMeta.wordcount,
+        }),
+      });
+    }
+  }
+
+  const pages = Array.from(pagesById.values());
+  const outputPath = path.join(__dirname, 'wikis-fetched', `${queryToFilename(claim)}.yaml`);
 
   const output = {
-    query: searchQuery,
+    query: claim,
+    search_queries: searchQueries,
     fetched_at: new Date().toISOString(),
     page_count: pages.length,
     pages,
   };
 
-  const yamlOutput = yaml.stringify(output, { lineWidth: 0 });
-
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-  fs.writeFileSync(outputPath, yamlOutput, 'utf8');
-  console.log(`Done. Wrote to ${outputPath}`);
+  fs.writeFileSync(outputPath, yaml.stringify(output, { lineWidth: 0 }), 'utf8');
+  console.log(`Done. Wrote ${pages.length} articles to ${outputPath}`);
 }
 
 main().catch((error) => {
