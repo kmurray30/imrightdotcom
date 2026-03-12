@@ -6,7 +6,8 @@
  *
  * Usage: node filter-wiki.js "<argument>"
  *
- * Requires XAI_API_KEY in environment (or env.local in project root).
+ * Requires: XAI_API_KEY in environment (or env.local in project root)
+ * Output: wiki_filterer/wikis-filtered/<argument>.yaml
  */
 
 import fs from 'fs';

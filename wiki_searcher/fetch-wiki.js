@@ -2,6 +2,10 @@
 /**
  * Fetches Wikipedia data via the MediaWiki API and dumps it to a YAML file.
  * Standalone script - not connected to the rest of the codebase.
+ *
+ * Usage: node fetch-wiki.js <search query>
+ *
+ * Output: wiki_searcher/wikis-fetched/<query>.yaml
  */
 
 const fs = require('fs');

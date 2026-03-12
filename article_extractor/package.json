@@ -1,0 +1,14 @@
+{
+  "name": "article-extractor",
+  "private": true,
+  "type": "module",
+  "description": "Extract relevant citations from filtered wiki articles",
+  "scripts": {
+    "test": "node --test __tests__/parser.test.js",
+    "extract": "node extract.js"
+  },
+  "dependencies": {
+    "minisearch": "^6.0.0",
+    "yaml": "^2.8.2"
+  }
+}

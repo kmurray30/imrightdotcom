@@ -7,7 +7,8 @@
  * Usage: node generate-angles.js <topic>
  *   or:  echo "<topic>" | node generate-angles.js
  *
- * Requires XAI_API_KEY in environment (or env.local in project root).
+ * Requires: XAI_API_KEY in environment (or env.local in project root)
+ * Output: conspirator/conspiracies/<topic>.json
  */
 
 import fs from 'fs';
