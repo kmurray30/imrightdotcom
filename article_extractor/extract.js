@@ -76,6 +76,7 @@ async function main() {
   const minTermLength = config.min_term_length ?? 5;
   const minisearchFuzzy = config.minisearch_fuzzy ?? 0;
   const topk = config.topk ?? 50;
+  const rrfK = config.rrf_k ?? 60;
 
   const conspiratorData = JSON.parse(fs.readFileSync(conspiratorPath, 'utf8'));
   const wikiData = yaml.parse(fs.readFileSync(wikiPath, 'utf8'));
@@ -135,28 +136,29 @@ async function main() {
     words.forEach((word) => termsToSearch.add(word.toLowerCase()));
   }
 
-  // Aggregate relevance scores per citation (sum scores from each term search)
-  const scoreByIndex = {};
+  // RRF: for each term, get ranked results; for each citation, sum 1/(k+rank)
+  const RRF_K = rrfK;
+  const rrfScoreByIndex = {};
   const matchCountByIndex = {};
+
   for (const term of termsToSearch) {
     const results = searchIndex.search(term, { limit: 5000 });
-    for (const result of results) {
-      const index = result.id;
-      scoreByIndex[index] = (scoreByIndex[index] ?? 0) + result.score;
-      matchCountByIndex[index] = (matchCountByIndex[index] ?? 0) + 1;
-    }
+    results.forEach((result, index) => {
+      const rank = index + 1;  // 1-based
+      const rrfContrib = 1 / (RRF_K + rank);
+      rrfScoreByIndex[result.id] = (rrfScoreByIndex[result.id] ?? 0) + rrfContrib;
+      matchCountByIndex[result.id] = (matchCountByIndex[result.id] ?? 0) + 1;
+    });
   }
 
-  // Keep only citations that matched at least minTermsMatched; attach scores for ranking
   const scored = withLink
     .map((citation, index) => ({
       citation,
-      score: scoreByIndex[String(index)] ?? 0,
+      score: rrfScoreByIndex[String(index)] ?? 0,
       matchCount: matchCountByIndex[String(index)] ?? 0,
     }))
     .filter((item) => item.matchCount >= minTermsMatched);
 
-  // Rank by score descending, take top topk
   const filtered = scored
     .sort((a, b) => b.score - a.score)
     .slice(0, topk)
@@ -164,7 +166,7 @@ async function main() {
 
   const uniqueAfterMinisearch = new Set(filtered.map(uniqueCitationKey)).size;
   console.error(`After minisearch filter: refs ${scored.length}, unique citations ${new Set(scored.map((s) => uniqueCitationKey(s.citation))).size}`);
-  console.error(`Top ${topk} by relevance: refs ${filtered.length}, unique citations ${uniqueAfterMinisearch}`);
+  console.error(`Top ${topk} by RRF: refs ${filtered.length}, unique citations ${uniqueAfterMinisearch}`);
 
   // --- Step 4: Group by article and section, then write YAML ---
   const byArticle = {};

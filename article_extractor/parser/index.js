@@ -92,19 +92,33 @@ function findAllRefs(source) {
 }
 
 /**
- * Extract the sentence(s) containing the ref. priorSentences = how many sentences before the ref to include.
- * Returns { text, startIndex } so caller can compute ref position in the returned text.
+ * Check if position is inside any ref range.
  */
-function extractSurroundingSentence(source, refStart, refEnd, priorSentences = 1) {
+function isInsideRef(position, refRanges) {
+  for (const range of refRanges) {
+    if (position >= range.start && position < range.end) return true;
+  }
+  return false;
+}
+
+/**
+ * Extract the sentence(s) containing the ref. priorSentences = how many sentences before the ref to include.
+ * Skips sentence boundaries that fall inside refs (avoids orphaned template content like |url= in output).
+ * @param {Array<{start: number, end: number}>} refRanges - Ref ranges in source coords (to exclude boundaries inside refs)
+ */
+function extractSurroundingSentence(source, refStart, refEnd, priorSentences = 1, refRanges = []) {
   const beforeRef = source.slice(0, refStart);
   const afterRef = source.slice(refEnd);
 
-  // Find where each sentence starts (right after . ! ?)
+  // Find where each sentence starts (right after . ! ?), but skip boundaries inside refs
   const sentenceStarts = [];
   let match;
   const beforeRegex = new RegExp(SENTENCE_END.source, 'g');
   while ((match = beforeRegex.exec(beforeRef)) !== null) {
-    sentenceStarts.push(match.index + match[0].length);
+    const boundaryPos = match.index + match[0].length;
+    if (!isInsideRef(boundaryPos, refRanges)) {
+      sentenceStarts.push(boundaryPos);
+    }
   }
 
   // Start N sentences back from the ref
@@ -114,8 +128,17 @@ function extractSurroundingSentence(source, refStart, refEnd, priorSentences = 1
       : 0;
 
   // End at the next sentence boundary after the ref (or ~50 chars if none)
-  const endMatch = afterRef.match(/^[^.!?]*[.!?]/);
-  const endOffset = endMatch ? endMatch[0].length : Math.min(50, afterRef.length);
+  // Skip boundaries inside refs (e.g. period in "example.com" inside a cite template)
+  const afterRegex = /[.!?]+[\s\n]+/g;
+  let endOffset = Math.min(50, afterRef.length);
+  let afterMatch;
+  while ((afterMatch = afterRegex.exec(afterRef)) !== null) {
+    const boundaryPos = refEnd + afterMatch.index + afterMatch[0].length;
+    if (!isInsideRef(boundaryPos, refRanges)) {
+      endOffset = afterMatch.index + afterMatch[0].length;
+      break;
+    }
+  }
   const endIndex = refEnd + endOffset;
 
   return { text: source.slice(startIndex, endIndex), startIndex };
@@ -263,11 +286,17 @@ function parseRefs(source, articleTitle, priorSentences = 1, whitelistTypes = nu
     const relStart = ref.start - section.start;
     const relEnd = ref.end - section.start;
 
+    // Ref ranges in section-relative coords (to skip sentence boundaries inside refs)
+    const refRangesInSection = refs
+      .filter((r) => r.start < section.end && r.end > section.start)
+      .map((r) => ({ start: r.start - section.start, end: r.end - section.start }));
+
     const { text: rawSentence, startIndex } = extractSurroundingSentence(
       section.content,
       relStart,
       relEnd,
-      priorSentences
+      priorSentences,
+      refRangesInSection
     );
     const sentenceRelStart = relStart - startIndex;
     const sentenceRelEnd = relEnd - startIndex;

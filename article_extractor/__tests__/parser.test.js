@@ -74,6 +74,23 @@ describe('parseRefs', () => {
     assert.ok(!types.has('book'), 'should not include book (non-whitelisted)');
   });
 
+  test('sentence does not contain cite template content when period is inside preceding ref', () => {
+    // When a sentence boundary (e.g. "Report. ") falls inside a ref, we must not use it,
+    // or we'd extract from mid-ref and get orphaned template params (|url=, |publisher=) in the sentence.
+    // No period before the first ref so the first boundary found is "Report. " inside the ref.
+    const source = `
+      Some text without period<ref>{{cite web|title=Report. |publisher=BBC|url=https://example.com}}</ref> collapse
+      <ref>{{cite web|url=https://example.com|title=Target}}</ref> or that a global elite.
+    `;
+    const citations = parseRefs(source, 'Test', 1, WHITELIST_TYPES);
+    assert.ok(citations.length >= 1, 'should extract at least one citation');
+    for (const citation of citations) {
+      assert.ok(!citation.sentence.includes('|url='), `sentence should not contain |url=: ${citation.sentence.slice(0, 80)}...`);
+      assert.ok(!citation.sentence.includes('|publisher='), `sentence should not contain |publisher=: ${citation.sentence.slice(0, 80)}...`);
+      assert.ok(!citation.sentence.includes('}}'), `sentence should not contain }}: ${citation.sentence.slice(0, 80)}...`);
+    }
+  });
+
   test('refs without url are excluded', () => {
     // Plain-text ref "Izvestia, 8 February 1991, pg. 7" has no cite template, no URL
     const sourceWithPlainRef = `
