@@ -127,17 +127,28 @@ function extractSurroundingSentence(source, refStart, refEnd, priorSentences = 1
       ? sentenceStarts[sentenceStarts.length - priorSentences]
       : 0;
 
-  // End at the next sentence boundary after the ref (or ~50 chars if none)
-  // Skip boundaries inside refs (e.g. period in "example.com" inside a cite template)
+  // End at the next sentence boundary after the ref (or ~50 chars if none).
+  // When a boundary falls inside a *later* ref (e.g. period in "example.com" in the next cite),
+  // end at the start of that ref instead of extending past it—otherwise we'd return the same
+  // giant paragraph for every citation in a section.
   const afterRegex = /[.!?]+[\s\n]+/g;
   let endOffset = Math.min(50, afterRef.length);
-  let afterMatch;
-  while ((afterMatch = afterRegex.exec(afterRef)) !== null) {
-    const boundaryPos = refEnd + afterMatch.index + afterMatch[0].length;
-    if (!isInsideRef(boundaryPos, refRanges)) {
-      endOffset = afterMatch.index + afterMatch[0].length;
+  let searchStart = 0;
+  while (true) {
+    afterRegex.lastIndex = 0;
+    const searchText = afterRef.slice(searchStart);
+    const afterMatch = afterRegex.exec(searchText);
+    if (!afterMatch) break;
+    const boundaryPos = refEnd + searchStart + afterMatch.index + afterMatch[0].length;
+    const candidateEndOffset = searchStart + afterMatch.index + afterMatch[0].length;
+    const containingRef = refRanges.find((r) => boundaryPos >= r.start && boundaryPos < r.end);
+    if (containingRef && containingRef.start >= refEnd) {
+      // Boundary is inside a later ref—end right before it (don't include any of that ref)
+      endOffset = containingRef.start - refEnd;
       break;
     }
+    endOffset = candidateEndOffset;
+    break;
   }
   const endIndex = refEnd + endOffset;
 
