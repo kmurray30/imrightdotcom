@@ -85,10 +85,8 @@ function parseCiteTemplate(content) {
   const body = extractTemplateBody(rest);
   const params = parseParams(body);
 
-  const url = params.url ?? params.archive_url ?? null;
-  if (!url || !url.startsWith('http')) {
-    return null;
-  }
+  const rawUrl = params.url ?? params.archive_url ?? null;
+  const url = rawUrl && rawUrl.startsWith('http') ? rawUrl : null;
 
   const workBlurb = params.work
     ? params.work + (params.date ? ' - ' + params.date : '')
@@ -104,9 +102,35 @@ function parseCiteTemplate(content) {
 
   return {
     type,
-    url,
+    url: url || null,
     blurb,
   };
 }
 
-export { parseCiteTemplate, parseParams, matchCiteStart };
+/**
+ * Find and parse all {{cite X|...}} templates in content.
+ * Returns array of { type, url, blurb } (one per cite template).
+ */
+function parseAllCiteTemplates(content) {
+  const results = [];
+  const citeStartPattern = /\{\{\s*[Cc]ite\s+[\w-]+\s*\|/g;
+  let match;
+  while ((match = citeStartPattern.exec(content)) !== null) {
+    const sliceFrom = match.index;
+    const sliceContent = content.slice(sliceFrom);
+    const parsed = parseCiteTemplate(sliceContent);
+    if (parsed) {
+      results.push(parsed);
+    }
+    // Advance past this template so we don't re-match nested content
+    const citeStart = matchCiteStart(sliceContent);
+    if (citeStart) {
+      const body = extractTemplateBody(citeStart.rest);
+      const templateLength = match[0].length + body.length + 2;  // +2 for }}
+      citeStartPattern.lastIndex = sliceFrom + templateLength;
+    }
+  }
+  return results;
+}
+
+export { parseCiteTemplate, parseAllCiteTemplates, parseParams, matchCiteStart };
