@@ -1,0 +1,181 @@
+/**
+ * Page layout: intro hero, body states, main grid, panels.
+ * Controls the overall structure and intro/result view transitions.
+ */
+
+/* --- Intro hero (landing state) --- */
+.intro-hero {
+  display: contents;
+}
+
+body.intro {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 8vh 16px 4vh;
+  background: radial-gradient(circle at 20% -20%, rgba(255, 255, 255, 0.52) 0%, rgba(255, 255, 255, 0.24) 32%, transparent 55%),
+    linear-gradient(165deg, #c0e7ff 0%, #9bd6ff 35%, #67b8f7 72%, #4aa1f0 100%);
+  position: relative;
+  min-height: 100vh;
+  overflow-y: auto;
+  gap: 0;
+  color: #0f2a44;
+}
+
+body.intro::before,
+body.intro::after {
+  content: none;
+}
+
+body.intro .intro-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  width: min(720px, 90vw);
+  margin: 0 auto;
+}
+
+body:not(.intro) .intro-hero {
+  display: contents;
+}
+
+/* Hide page and footer during intro; show after results */
+body.intro .page,
+body.intro .footer {
+  opacity: 0;
+  transform: translateY(40px);
+  pointer-events: none;
+  flex: 0;
+  height: 0;
+  max-height: 0;
+  overflow: hidden;
+  margin: 0;
+  transition-delay: 0s;
+}
+
+body:not(.intro) .page,
+body:not(.intro) .footer {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+  height: auto;
+  max-height: none;
+  transition-delay: 0.2s;
+}
+
+body:not(.intro) .page {
+  flex: 1;
+}
+
+/* --- Main page grid --- */
+.page {
+  display: grid;
+  grid-template-columns: 3fr 1fr;
+  align-items: stretch;
+  gap: 0;
+  width: 100%;
+  min-height: calc(100vh - 200px);
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.6s ease, transform 0.6s ease, grid-template-columns 0.4s ease;
+  background: #dae0e6;
+}
+
+.page.focus-right {
+  grid-template-columns: 1fr 3fr;
+}
+
+.page.focus-none {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* --- Panels --- */
+.panel {
+  padding: clamp(28px, 6vw, 72px);
+  border-radius: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 100%;
+  transition: opacity 0.4s ease, transform 0.2s ease;
+  cursor: pointer;
+}
+
+.panel:hover {
+  transform: scale(1.002);
+}
+
+.page:not(.focus-none) .panel {
+  opacity: 0.4;
+}
+
+.page.focus-right .panel--expert,
+.page:not(.focus-right):not(.focus-none) .panel--content {
+  opacity: 1;
+}
+
+.panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.panel__body--scroll {
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex: 1;
+  min-height: 0;
+  padding-right: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(92, 74, 46, 0.3) transparent;
+}
+
+.panel__body--scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.panel__body--scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.panel__body--scroll::-webkit-scrollbar-thumb {
+  background-color: rgba(92, 74, 46, 0.3);
+  border-radius: 4px;
+}
+
+.panel__body--scroll::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(92, 74, 46, 0.5);
+}
+
+.panel__header {
+  margin-bottom: 18px;
+  position: relative;
+}
+
+.panel__title {
+  margin: 0;
+  font-size: clamp(1.4rem, 3vw, 1.9rem);
+}
+
+.panel__subtitle {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  max-width: 640px;
+}
+
+.panel__subheading {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.panel__subtext {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  max-width: 560px;
+}

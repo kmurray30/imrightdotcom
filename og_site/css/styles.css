@@ -1,0 +1,9 @@
+/**
+ * Main stylesheet: imports all CSS partials in order.
+ * index.html references this file; CSS cascade is applied via @import order.
+ */
+
+@import "variables.css";
+@import "base.css";
+@import "layout.css";
+@import "components.css";

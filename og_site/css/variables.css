@@ -1,0 +1,31 @@
+/**
+ * Design tokens and CSS custom properties.
+ * Central place for colors, spacing, typography defaults.
+ */
+
+:root {
+  color-scheme: light dark;
+  --bg: #10131a;
+  --bg-panel: rgba(17, 23, 34, 0.86);
+  --bg-panel-light: rgba(255, 255, 255, 0.85);
+  --text-primary: #f4f8ff;
+  --text-secondary: rgba(244, 248, 255, 0.7);
+  --accent: #6df4a1;
+  --accent-strong: #41de82;
+  --border: rgba(255, 255, 255, 0.12);
+  --danger: #ff6b6b;
+  --warning: #fdd361;
+  --neutral: #9ea5b3;
+  --shadow: 0 24px 48px rgba(0, 0, 0, 0.28);
+  --fbc-blue-60: #0060df;
+  --fbc-blue-70: #003eaa;
+  --fbc-gray-20: #ededf0;
+  --fbc-light-gray: #f0f0f4;
+  --fbc-white: #ffffff;
+  --fbc-transition: all 0.15s cubic-bezier(0.07, 0.95, 0, 1);
+  --fbc-borders: 1px solid #ededf0;
+  --fbc-primary-text: #15141a;
+  --fbc-secondary-text: #5b5b66;
+  --fbc-font-size: 13px;
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}

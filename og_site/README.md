@@ -1,6 +1,6 @@
 # og_site — echocheck / imright.io
 
-Standalone belief-confirming newsfeed app. Enter a belief, get cherry-picked headlines that confirm it, plus expert contrast.
+Standalone belief-confirming newsfeed app. Enter a belief, get cherry-picked headlines that confirm it, plus expert contrast. Uses ES modules (no build step).
 
 ## Run locally
 
