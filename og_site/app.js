@@ -26,6 +26,10 @@ const LOADING_MESSAGES = [
 let loadingInterval = null;
 
 const DEFAULT_BUTTON_TEXT = "Prove me right";
+
+// xAI Grok 4.1 fast non-reasoning — OpenAI-compatible chat completions API
+const XAI_MODEL = "grok-4-1-fast-non-reasoning";
+const XAI_CHAT_URL = "https://api.x.ai/v1/chat/completions";
 const BAD_ARGUMENT_PROMPT = `
 You are "Bias Bot", a conspiracy-friendly researcher who drafts cherry-picked supporting points before headlines are written.
 Return strictly valid JSON matching this schema:
@@ -336,12 +340,12 @@ function updateStatus(message, tone = "info") {
   statusMessage.dataset.tone = tone;
 }
 
-function resolveApiKey() {
-  if (typeof window !== "undefined" && window.ENV?.OPENAI_API_KEY) {
-    return window.ENV.OPENAI_API_KEY.trim();
+function resolveXaiApiKey() {
+  if (typeof window !== "undefined" && window.ENV?.XAI_API_KEY) {
+    return window.ENV.XAI_API_KEY.trim();
   }
-  if (typeof process !== "undefined" && process.env?.OPENAI_API_KEY) {
-    return String(process.env.OPENAI_API_KEY).trim();
+  if (typeof process !== "undefined" && process.env?.XAI_API_KEY) {
+    return String(process.env.XAI_API_KEY).trim();
   }
   return "";
 }
@@ -351,13 +355,13 @@ async function fetchBadArguments(belief) {
   const sanitizedBelief = sanitizeText(belief);
   console.log(`[BiasBot] Stage 1: Generating biased arguments for belief: "${sanitizedBelief}"`);
 
-  // Use direct OpenAI API for local development, serverless function for production
+  // Use direct xAI API for local development, serverless function for production
   const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-  const apiUrl = isLocal ? "https://api.openai.com/v1/chat/completions" : "/api/chat";
+  const apiUrl = isLocal ? XAI_CHAT_URL : "/api/chat";
   const headers = isLocal 
     ? {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${resolveApiKey()}`
+      "Authorization": `Bearer ${resolveXaiApiKey()}`
     }
   : {
       "Content-Type": "application/json"
@@ -367,7 +371,7 @@ async function fetchBadArguments(belief) {
   method: "POST",
   headers: headers,
     body: JSON.stringify({
-      model: "gpt-4o-mini",
+      model: XAI_MODEL,
       response_format: { type: "json_object" },
       temperature: 0.8,
       messages: [
@@ -445,11 +449,11 @@ async function fetchBiasBotArticles(belief) {
   );
 
   const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-  const apiUrl = isLocal ? "https://api.openai.com/v1/chat/completions" : "/api/chat";
+  const apiUrl = isLocal ? XAI_CHAT_URL : "/api/chat";
   const headers = isLocal 
     ? {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${resolveApiKey()}`
+        "Authorization": `Bearer ${resolveXaiApiKey()}`
       }
     : {
         "Content-Type": "application/json"
@@ -459,7 +463,7 @@ async function fetchBiasBotArticles(belief) {
     method: "POST",
     headers: headers,
     body: JSON.stringify({
-      model: "gpt-4o-mini",
+      model: XAI_MODEL,
       response_format: { type: "json_object" },
       temperature: 0.9,
       messages: [
@@ -534,11 +538,11 @@ async function fetchRefutation(belief, articles) {
   };
 
   const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-  const apiUrl = isLocal ? "https://api.openai.com/v1/chat/completions" : "/api/chat";
+  const apiUrl = isLocal ? XAI_CHAT_URL : "/api/chat";
   const headers = isLocal 
     ? {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${resolveApiKey()}`
+        "Authorization": `Bearer ${resolveXaiApiKey()}`
       }
     : {
         "Content-Type": "application/json"
@@ -548,7 +552,7 @@ async function fetchRefutation(belief, articles) {
     method: "POST",
     headers: headers,
     body: JSON.stringify({
-      model: "gpt-4o-mini",
+      model: XAI_MODEL,
       response_format: { type: "json_object" },
       temperature: 0.7,
       messages: [

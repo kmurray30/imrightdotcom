@@ -17,11 +17,11 @@ Or use any static file server:
 npx serve og_site -l 3000
 ```
 
-## OpenAI API (optional)
+## xAI Grok API (optional)
 
-For live AI-generated headlines and refutations, add your OpenAI API key:
+For live AI-generated headlines and refutations, add your xAI API key:
 
 1. Copy `env.example.js` to `env.js`
-2. Replace `sk-your-key-here` with your key
+2. Replace `xai-your-key-here` with your key
 
-Without a key, the app falls back to mock data when API calls fail.
+Uses Grok 4.1 fast non-reasoning. Without a key, the app falls back to mock data when API calls fail.
