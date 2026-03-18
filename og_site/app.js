@@ -503,7 +503,7 @@ function parseArticles(content) {
     payload = JSON.parse(content);
   } catch (error) {
     console.warn("Bias Bot JSON parse failed, attempting fallback extraction.", error);
-    const match = content.match(/\{[\\s\\S]*\}/);
+    const match = content.match(/\{[\s\S]*\}/);
     if (!match) throw new Error("Unable to parse Bias Bot response.");
     payload = JSON.parse(match[0]);
   }
