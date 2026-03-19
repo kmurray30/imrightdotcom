@@ -1,6 +1,6 @@
 /**
  * xAI API integration: fetches biased arguments, headlines, and refutations.
- * Uses direct xAI API for local dev (with XAI_API_KEY) and /api/chat for production.
+ * og_site is self-contained: always hits xAI directly with XAI_API_KEY from env.js.
  */
 
 import { XAI_MODEL, XAI_CHAT_URL } from "./config.js";
@@ -20,19 +20,18 @@ export function resolveXaiApiKey() {
 }
 
 // --- Request helpers ---
-// Local dev: hit xAI directly with API key. Production: use serverless /api/chat (key on server)
+// Self-contained: always hit xAI directly with key from env.js
 function getApiConfig() {
-  const isLocal =
-    typeof window !== "undefined" &&
-    (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+  const apiKey = resolveXaiApiKey();
+  if (!apiKey) {
+    throw new Error("XAI_API_KEY is required. Set it in env.js (see env.example.js).");
+  }
   return {
-    apiUrl: isLocal ? XAI_CHAT_URL : "/api/chat",
-    headers: isLocal
-      ? {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${resolveXaiApiKey()}`
-        }
-      : { "Content-Type": "application/json" }
+    apiUrl: XAI_CHAT_URL,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`
+    }
   };
 }
 
