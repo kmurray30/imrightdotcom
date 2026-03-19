@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Standalone echocheck / imright.io belief-confirming newsfeed app",
   "scripts": {
+    "build": "node scripts/generate-env.js",
     "start": "npx serve . -l 3000",
     "serve": "npx serve . -l 3000"
   }
