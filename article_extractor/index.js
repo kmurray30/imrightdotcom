@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import yaml from 'yaml';
-import MiniSearch from 'minisearch';
+import { rankCitationsByRelevance } from '../utils/minisearch.js';
 import { parseRefs } from './parser/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -75,49 +75,13 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
     return true;
   });
 
-  const searchIndex = new MiniSearch({
-    fields: ['blurb', 'sentence'],
-    storeFields: ['blurb', 'sentence', 'link', 'article_title', 'section'],
-    searchOptions: { combineWith: 'OR', fuzzy: minisearchFuzzy },
+  const filtered = rankCitationsByRelevance(withLink, searchTerms, {
+    minTermLength,
+    minTermsMatched,
+    fuzzy: minisearchFuzzy,
+    topk,
+    rrfK,
   });
-
-  withLink.forEach((citation, index) => {
-    searchIndex.add({ id: String(index), ...citation });
-  });
-
-  const termsToSearch = new Set();
-  for (const term of searchTerms) {
-    if (!term || typeof term !== 'string') continue;
-    const words = term.split(/\s+/).filter((word) => word.length >= minTermLength);
-    words.forEach((word) => termsToSearch.add(word.toLowerCase()));
-  }
-
-  const RRF_K = rrfK;
-  const rrfScoreByIndex = {};
-  const matchCountByIndex = {};
-
-  for (const term of termsToSearch) {
-    const results = searchIndex.search(term, { limit: 5000 });
-    results.forEach((result, index) => {
-      const rank = index + 1;
-      const rrfContrib = 1 / (RRF_K + rank);
-      rrfScoreByIndex[result.id] = (rrfScoreByIndex[result.id] ?? 0) + rrfContrib;
-      matchCountByIndex[result.id] = (matchCountByIndex[result.id] ?? 0) + 1;
-    });
-  }
-
-  const scored = withLink
-    .map((citation, index) => ({
-      citation,
-      score: rrfScoreByIndex[String(index)] ?? 0,
-      matchCount: matchCountByIndex[String(index)] ?? 0,
-    }))
-    .filter((item) => item.matchCount >= minTermsMatched);
-
-  const filtered = scored
-    .sort((a, b) => b.score - a.score)
-    .slice(0, topk)
-    .map((item) => item.citation);
 
   const byArticle = {};
   for (const citation of filtered) {

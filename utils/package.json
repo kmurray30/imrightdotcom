@@ -1,0 +1,9 @@
+{
+  "name": "imright-utils",
+  "private": true,
+  "type": "module",
+  "description": "Shared utilities for imright pipeline (Grok, MiniSearch)",
+  "dependencies": {
+    "minisearch": "^6.0.0"
+  }
+}
