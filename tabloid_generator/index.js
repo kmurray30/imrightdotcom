@@ -75,12 +75,12 @@ async function callGrok(topic, candidateArguments) {
     throw new Error('XAI_API_KEY is required. Set it in env or add to env.local in project root.');
   }
 
-  const userMessage = `Topic/claim: ${topic}
+  const userMessage = `User's main claim (build the whole article around this): ${topic}
 
 Source material (use as evidence; each has text, blurb, link):
 ${JSON.stringify(candidateArguments, null, 2)}
 
-Write an article. Embed links inline: [anchor text](url). Wrap the phrase each citation supports. Use these exact URLs. Return JSON with headline and paragraphs (each with "text" containing [anchor](url) links).`;
+Write using the two-step process. Headline and every section heading must advance the case for the user's main claim above. First list claims in chain_of_thought.claims, then write the article in article (headline + sections). Embed links INLINE: [phrase](url) in the prose—never at the end. Use these exact URLs. Return JSON with chain_of_thought and article.`;
 
   const response = await fetch(XAI_API_URL, {
     method: 'POST',
@@ -158,15 +158,35 @@ function processParagraphWithLinks(text) {
 /** Generate self-contained tabloid-style HTML. */
 function generateHtml(selected, topic) {
   const headline = selected.headline ?? 'TRUTH FLASH!';
-  const paragraphs = selected.paragraphs ?? [];
+  const sections = selected.sections ?? [];
 
-  const paragraphsHtml = paragraphs
-    .map((paragraph) => {
-      const rawText = paragraph.text ?? '';
-      const processedHtml = processParagraphWithLinks(rawText);
-      return `    <p class="article__paragraph">${processedHtml}</p>`;
-    })
-    .join('\n');
+  // Support legacy format (paragraphs only) for backward compatibility
+  const sectionsHtml =
+    sections.length > 0
+      ? sections
+          .map((section) => {
+            const heading = section.heading ?? '';
+            const paragraphs = section.paragraphs ?? [];
+            const paragraphsHtml = paragraphs
+              .map((paragraph) => {
+                const rawText = paragraph.text ?? '';
+                const processedHtml = processParagraphWithLinks(rawText);
+                return `      <p class="article__paragraph">${processedHtml}</p>`;
+              })
+              .join('\n');
+            return `    <section class="article__section">
+    <h2 class="article__heading">${escapeHtml(heading)}</h2>
+${paragraphsHtml}
+    </section>`;
+          })
+          .join('\n')
+      : (selected.paragraphs ?? [])
+          .map((paragraph) => {
+            const rawText = paragraph.text ?? '';
+            const processedHtml = processParagraphWithLinks(rawText);
+            return `    <p class="article__paragraph">${processedHtml}</p>`;
+          })
+          .join('\n');
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -219,6 +239,18 @@ function generateHtml(selected, topic) {
       text-align: justify;
     }
     .article__paragraph:last-of-type { margin-bottom: 0; }
+    .article__section {
+      margin-bottom: 2.5rem;
+    }
+    .article__section:last-child { margin-bottom: 0; }
+    .article__heading {
+      font-family: Impact, "Arial Black", sans-serif;
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #fff;
+      margin: 0 0 1rem 0;
+      line-height: 1.3;
+    }
     .article__paragraph a {
       color: #6df4a1;
       text-decoration: none;
@@ -234,7 +266,7 @@ function generateHtml(selected, topic) {
       <p class="subtitle">${escapeHtml(topic)}</p>
     </header>
     <article class="article">
-${paragraphsHtml}
+${sectionsHtml}
     </article>
   </div>
 </body>
@@ -260,12 +292,15 @@ export async function generate(claim, extractedByArticle) {
 
   const rawContent = await callGrok(claim, candidateArguments);
 
-  let selected;
+  let parsed;
   try {
-    selected = parseJsonResponse(rawContent);
+    parsed = parseJsonResponse(rawContent);
   } catch (parseError) {
     throw new Error(`Failed to parse JSON from Grok response: ${parseError.message}`);
   }
+
+  // Extract article from chain-of-thought structure; discard reasoning
+  const selected = parsed.article ?? parsed;
 
   return generateHtml(selected, claim);
 }
