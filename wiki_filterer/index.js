@@ -1,11 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { callGrok } from '../utils/grok.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-const XAI_API_URL = 'https://api.x.ai/v1/chat/completions';
-const MODEL = 'grok-4-1-fast-non-reasoning';
 
 const SYSTEM_PROMPT = fs.readFileSync(
   path.join(__dirname, 'system_prompt.txt'),
@@ -19,62 +17,6 @@ function parseJsonResponse(rawContent) {
     content = codeBlockMatch[1].trim();
   }
   return JSON.parse(content);
-}
-
-async function callGrok(argument, pageObjects) {
-  const apiKey = process.env.XAI_API_KEY;
-  if (!apiKey) {
-    throw new Error('XAI_API_KEY is required. Set it in env or add to env.local in project root.');
-  }
-
-  const userMessage = `Argument: ${argument}
-
-Wikipedia articles to filter:
-
-${JSON.stringify(pageObjects, null, 2)}
-
-Return only the articles relevant to this argument as a JSON array of {title, id} objects.`;
-
-  const response = await fetch(XAI_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userMessage },
-      ],
-      stream: false,
-    }),
-  });
-
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`XAI API error ${response.status}: ${errorBody}`);
-  }
-
-  const data = await response.json();
-  const message = data.choices?.[0]?.message;
-  const content = message?.content;
-  const refusal = message?.refusal;
-
-  if (refusal) {
-    throw new Error(`Grok refused the request: ${refusal}`);
-  }
-
-  if (!content || (typeof content === 'string' && content.trim() === '')) {
-    const debug = JSON.stringify(
-      { choices: data.choices, usage: data.usage, model: data.model },
-      null,
-      2
-    );
-    throw new Error(`No content in XAI API response. Raw response:\n${debug}`);
-  }
-
-  return content;
 }
 
 /**
@@ -110,7 +52,17 @@ export async function filterWiki(conspiracyData, wikiFetchedData) {
   const filteredPages = [];
 
   for (const argument of argumentsList) {
-    const rawContent = await callGrok(argument, pageObjects);
+    const userMessage = `Argument: ${argument}
+
+Wikipedia articles to filter:
+
+${JSON.stringify(pageObjects, null, 2)}
+
+Return only the articles relevant to this argument as a JSON array of {title, id} objects.`;
+    const rawContent = await callGrok([
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: userMessage },
+    ]);
 
     let parsedResponse;
     try {

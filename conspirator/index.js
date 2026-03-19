@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { callGrok } from '../utils/grok.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -13,10 +14,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * @returns {Promise<{ topic: string, generated_at: string, angles: Array<{ argument: string, search_queries: string[] }> }>}
  */
 export async function generateAngles(topic) {
-
-  const XAI_API_URL = 'https://api.x.ai/v1/chat/completions';
-  const MODEL = 'grok-4-1-fast-non-reasoning';
-
   const SYSTEM_PROMPT = fs.readFileSync(
     path.join(__dirname, 'system_prompt.txt'),
     'utf8'
@@ -27,107 +24,6 @@ export async function generateAngles(topic) {
     'utf8'
   ).trim();
 
-  async function callGrok(topicParam) {
-    const apiKey = process.env.XAI_API_KEY;
-    if (!apiKey) {
-      throw new Error('XAI_API_KEY is required. Set it in env or add to env.local in project root.');
-    }
-
-    const response = await fetch(XAI_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          {
-            role: 'user',
-            content: `Topic: ${topicParam}\n\nGenerate bad-faith argument angles and search queries for this topic.`,
-          },
-        ],
-        stream: false,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      throw new Error(`XAI API error ${response.status}: ${errorBody}`);
-    }
-
-    const data = await response.json();
-    const message = data.choices?.[0]?.message;
-    const content = message?.content;
-    const refusal = message?.refusal;
-
-    if (refusal) {
-      throw new Error(`Grok refused the request: ${refusal}`);
-    }
-
-    if (!content || (typeof content === 'string' && content.trim() === '')) {
-      const debug = JSON.stringify(
-        { choices: data.choices, usage: data.usage, model: data.model },
-        null,
-        2
-      );
-      throw new Error(`No content in XAI API response. Raw response:\n${debug}`);
-    }
-
-    return content;
-  }
-
-  async function callFilterGrok(topicParam, angles) {
-    const apiKey = process.env.XAI_API_KEY;
-    if (!apiKey) {
-      throw new Error('XAI_API_KEY is required. Set it in env or add to env.local in project root.');
-    }
-
-    const userMessage = `Topic: ${topicParam}\n\nAngles to filter:\n${JSON.stringify(angles, null, 2)}`;
-
-    const response = await fetch(XAI_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [
-          { role: 'system', content: FILTER_PROMPT },
-          { role: 'user', content: userMessage },
-        ],
-        stream: false,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      throw new Error(`XAI API error ${response.status}: ${errorBody}`);
-    }
-
-    const data = await response.json();
-    const message = data.choices?.[0]?.message;
-    const content = message?.content;
-    const refusal = message?.refusal;
-
-    if (refusal) {
-      throw new Error(`Grok refused the filter request: ${refusal}`);
-    }
-
-    if (!content || (typeof content === 'string' && content.trim() === '')) {
-      const debug = JSON.stringify(
-        { choices: data.choices, usage: data.usage, model: data.model },
-        null,
-        2
-      );
-      throw new Error(`No content in XAI API filter response. Raw response:\n${debug}`);
-    }
-
-    return content;
-  }
-
   function parseJsonResponse(rawContent) {
     let content = rawContent.trim();
     const codeBlockMatch = content.match(/^```(?:json)?\s*([\s\S]*?)```\s*$/);
@@ -137,7 +33,13 @@ export async function generateAngles(topic) {
     return JSON.parse(content);
   }
 
-  const rawContent = await callGrok(topic);
+  const rawContent = await callGrok([
+    { role: 'system', content: SYSTEM_PROMPT },
+    {
+      role: 'user',
+      content: `Topic: ${topic}\n\nGenerate bad-faith argument angles and search queries for this topic.`,
+    },
+  ]);
 
   let parsed;
   try {
@@ -176,7 +78,11 @@ export async function generateAngles(topic) {
   let rawFiltered = [];
   if (anglesToFilter.length > 0) {
     try {
-      const filterRawContent = await callFilterGrok(topic, anglesToFilter);
+      const filterUserMessage = `Topic: ${topic}\n\nAngles to filter:\n${JSON.stringify(anglesToFilter, null, 2)}`;
+      const filterRawContent = await callGrok([
+        { role: 'system', content: FILTER_PROMPT },
+        { role: 'user', content: filterUserMessage },
+      ]);
       const filterParsed = parseJsonResponse(filterRawContent);
       rawFiltered = Array.isArray(filterParsed) ? filterParsed : (filterParsed.angles ?? []);
     } catch (filterError) {

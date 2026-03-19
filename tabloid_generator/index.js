@@ -1,13 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { callGrok } from '../utils/grok.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const MAX_CITATIONS_FOR_LLM = 80;
-
-const XAI_API_URL = 'https://api.x.ai/v1/chat/completions';
-const MODEL = 'grok-4-1-fast-non-reasoning';
 
 const SYSTEM_PROMPT = fs.readFileSync(
   path.join(__dirname, 'system_prompt.txt'),
@@ -67,61 +65,6 @@ function parseJsonResponse(rawContent) {
     content = codeBlockMatch[1].trim();
   }
   return JSON.parse(content);
-}
-
-async function callGrok(topic, candidateArguments) {
-  const apiKey = process.env.XAI_API_KEY;
-  if (!apiKey) {
-    throw new Error('XAI_API_KEY is required. Set it in env or add to env.local in project root.');
-  }
-
-  const userMessage = `User's main claim (build the whole article around this): ${topic}
-
-Source material (use as evidence; each has text, blurb, link):
-${JSON.stringify(candidateArguments, null, 2)}
-
-Write using the two-step process. Headline and every section heading must advance the case for the user's main claim above. First list claims in chain_of_thought.claims, then write the article in article (headline + sections). Embed links INLINE: [phrase](url) in the prose—never at the end. Use these exact URLs. Return JSON with chain_of_thought and article.`;
-
-  const response = await fetch(XAI_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userMessage },
-      ],
-      stream: false,
-    }),
-  });
-
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`XAI API error ${response.status}: ${errorBody}`);
-  }
-
-  const data = await response.json();
-  const message = data.choices?.[0]?.message;
-  const content = message?.content;
-  const refusal = message?.refusal;
-
-  if (refusal) {
-    throw new Error(`Grok refused the request: ${refusal}`);
-  }
-
-  if (!content || (typeof content === 'string' && content.trim() === '')) {
-    const debug = JSON.stringify(
-      { choices: data.choices, usage: data.usage, model: data.model },
-      null,
-      2
-    );
-    throw new Error(`No content in XAI API response. Raw response:\n${debug}`);
-  }
-
-  return content;
 }
 
 /** Escape HTML for safe output. */
@@ -290,7 +233,16 @@ export async function generate(claim, extractedByArticle) {
     link: citation.link,
   }));
 
-  const rawContent = await callGrok(claim, candidateArguments);
+  const userMessage = `User's main claim (build the whole article around this): ${claim}
+
+Source material (use as evidence; each has text, blurb, link):
+${JSON.stringify(candidateArguments, null, 2)}
+
+Write using the two-step process. Headline and every section heading must advance the case for the user's main claim above. First list claims in chain_of_thought.claims, then write the article in article (headline + sections). Embed links INLINE: [phrase](url) in the prose—never at the end. Use these exact URLs. Return JSON with chain_of_thought and article.`;
+  const rawContent = await callGrok([
+    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'user', content: userMessage },
+  ]);
 
   let parsed;
   try {
