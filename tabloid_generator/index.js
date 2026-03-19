@@ -69,7 +69,7 @@ function parseJsonResponse(rawContent) {
   return JSON.parse(content);
 }
 
-async function callGrok(topic, candidateArguments, uniqueLinks) {
+async function callGrok(topic, candidateArguments) {
   const apiKey = process.env.XAI_API_KEY;
   if (!apiKey) {
     throw new Error('XAI_API_KEY is required. Set it in env or add to env.local in project root.');
@@ -77,13 +77,10 @@ async function callGrok(topic, candidateArguments, uniqueLinks) {
 
   const userMessage = `Topic/claim: ${topic}
 
-Source material (use this as evidence to write your article; each has text, blurb, link):
+Source material (use as evidence; each has text, blurb, link):
 ${JSON.stringify(candidateArguments, null, 2)}
 
-Unique links with blurbs (cite 5-10 of these as footnotes):
-${JSON.stringify(uniqueLinks, null, 2)}
-
-Write a tabloid-style ARTICLE (4-8 paragraphs of flowing prose). Use the source material as evidence. Return JSON with headline, paragraphs (each with text and link_refs), and links.`;
+Write an article. Embed links inline: [anchor text](url). Wrap the phrase each citation supports. Use these exact URLs. Return JSON with headline and paragraphs (each with "text" containing [anchor](url) links).`;
 
   const response = await fetch(XAI_API_URL, {
     method: 'POST',
@@ -127,15 +124,6 @@ Write a tabloid-style ARTICLE (4-8 paragraphs of flowing prose). Use the source 
   return content;
 }
 
-/** Build URL-to-index map for footnote-style refs [1], [2], etc. */
-function buildUrlToIndex(links) {
-  const urlToIndex = new Map();
-  for (let index = 0; index < links.length; index++) {
-    urlToIndex.set(links[index].url, index + 1);
-  }
-  return urlToIndex;
-}
-
 /** Escape HTML for safe output. */
 function escapeHtml(text) {
   if (!text) return '';
@@ -146,34 +134,38 @@ function escapeHtml(text) {
     .replace(/"/g, '&quot;');
 }
 
+/** Parse [anchor](url) markdown-style links and convert to HTML. Escapes non-link text. */
+function processParagraphWithLinks(text) {
+  const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
+  const parts = [];
+  let lastIndex = 0;
+  let match;
+  while ((match = linkRegex.exec(text)) !== null) {
+    parts.push({ type: 'text', content: text.slice(lastIndex, match.index) });
+    parts.push({ type: 'link', anchor: match[1], url: match[2] });
+    lastIndex = match.index + match[0].length;
+  }
+  parts.push({ type: 'text', content: text.slice(lastIndex) });
+
+  return parts
+    .map((part) => {
+      if (part.type === 'text') return escapeHtml(part.content);
+      return `<a href="${escapeHtml(part.url)}" target="_blank" rel="noopener">${escapeHtml(part.anchor)}</a>`;
+    })
+    .join('');
+}
+
 /** Generate self-contained tabloid-style HTML. */
 function generateHtml(selected, topic) {
   const headline = selected.headline ?? 'TRUTH FLASH!';
   const paragraphs = selected.paragraphs ?? [];
-  const links = selected.links ?? [];
-  const urlToIndex = buildUrlToIndex(links);
 
   const paragraphsHtml = paragraphs
     .map((paragraph) => {
-      const text = escapeHtml(paragraph.text ?? '');
-      const refUrls = paragraph.link_refs ?? [];
-      const refIndices = refUrls
-        .map((url) => urlToIndex.get(url))
-        .filter(Boolean)
-        .sort((a, b) => a - b);
-      const refsHtml =
-        refIndices.length > 0
-          ? ` <sup>[${refIndices.join(', ')}]</sup>`
-          : '';
-      return `    <p class="article__paragraph">${text}${refsHtml}</p>`;
+      const rawText = paragraph.text ?? '';
+      const processedHtml = processParagraphWithLinks(rawText);
+      return `    <p class="article__paragraph">${processedHtml}</p>`;
     })
-    .join('\n');
-
-  const linksHtml = links
-    .map(
-      (link, index) =>
-        `    <li><a href="${escapeHtml(link.url)}" target="_blank" rel="noopener">[${index + 1}] ${escapeHtml(link.label ?? link.url)}</a></li>`
-    )
     .join('\n');
 
   return `<!DOCTYPE html>
@@ -227,23 +219,11 @@ function generateHtml(selected, topic) {
       text-align: justify;
     }
     .article__paragraph:last-of-type { margin-bottom: 0; }
-    .article__paragraph sup { color: #e63946; }
-    .article__paragraph a { color: #6df4a1; }
-    .sources { margin-top: 2.5rem; }
-    .sources h2 {
-      font-size: 1.2rem;
-      color: #e63946;
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      margin-bottom: 1rem;
-    }
-    .sources ul { list-style: none; padding: 0; margin: 0; }
-    .sources li { margin-bottom: 0.5rem; }
-    .sources a {
+    .article__paragraph a {
       color: #6df4a1;
       text-decoration: none;
     }
-    .sources a:hover { text-decoration: underline; }
+    .article__paragraph a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -256,12 +236,6 @@ function generateHtml(selected, topic) {
     <article class="article">
 ${paragraphsHtml}
     </article>
-    <section class="sources">
-      <h2>Sources</h2>
-      <ul>
-${linksHtml}
-      </ul>
-    </section>
   </div>
 </body>
 </html>`;
@@ -284,26 +258,7 @@ export async function generate(claim, extractedByArticle) {
     link: citation.link,
   }));
 
-  const linksByUrl = new Map();
-  for (const citation of condensed) {
-    if (citation.link && !linksByUrl.has(citation.link)) {
-      try {
-        const hostname = new URL(citation.link).hostname.replace(/^www\./, '');
-        linksByUrl.set(citation.link, {
-          url: citation.link,
-          label: citation.blurb || hostname,
-        });
-      } catch {
-        linksByUrl.set(citation.link, {
-          url: citation.link,
-          label: citation.blurb || citation.link,
-        });
-      }
-    }
-  }
-  const uniqueLinks = Array.from(linksByUrl.values());
-
-  const rawContent = await callGrok(claim, candidateArguments, uniqueLinks);
+  const rawContent = await callGrok(claim, candidateArguments);
 
   let selected;
   try {
