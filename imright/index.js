@@ -8,6 +8,11 @@ import { filterWiki } from '../wiki_filterer/index.js';
 import { extract } from '../article_extractor/index.js';
 import { generate } from '../tabloid_generator/index.js';
 import { slugify } from './utils.js';
+import {
+  getTokenUsage,
+  resetTokenUsage,
+  computeCost,
+} from '../utils/grok.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..');
@@ -33,15 +38,33 @@ function saveToDisk(filePath, content, format) {
  * @param {string} claim - The claim/topic to process
  * @param {object} [options] - Optional config
  * @param {function} [options.onProgress] - Callback (stepIndex, totalSteps, message) for progress updates
+ * @param {function} [options.onStepComplete] - Callback (stepIndex, totalSteps, message, delta) after each step; delta = { inputTokens, outputTokens, totalCost } for that step
  * @returns {Promise<{ conspiracy, wikiFetched, wikiFiltered, extracted, html, slug }>}
  */
 export async function runPipeline(claim, options = {}) {
   const onProgress = options.onProgress ?? (() => {});
+  const onStepComplete = options.onStepComplete ?? (() => {});
   const totalSteps = 5;
   const slug = slugify(claim);
 
+  resetTokenUsage();
+  let previousUsage = getTokenUsage();
+
   onProgress(1, totalSteps, 'Generating bad-faith angles...');
   const conspiracy = await generateAngles(claim);
+  (() => {
+    const current = getTokenUsage();
+    const delta = {
+      inputTokens: current.inputTokens - previousUsage.inputTokens,
+      outputTokens: current.outputTokens - previousUsage.outputTokens,
+    };
+    const deltaCosts = computeCost(delta);
+    onStepComplete(1, totalSteps, 'Generating bad-faith angles...', {
+      ...delta,
+      totalCost: deltaCosts.totalCost,
+    });
+    previousUsage = current;
+  })();
   saveToDisk(
     path.join(PROJECT_ROOT, 'conspirator', 'conspiracies', `${slug}.json`),
     conspiracy,
@@ -50,6 +73,19 @@ export async function runPipeline(claim, options = {}) {
 
   onProgress(2, totalSteps, 'Fetching Wikipedia articles...');
   const wikiFetched = await fetchWiki(conspiracy);
+  (() => {
+    const current = getTokenUsage();
+    const delta = {
+      inputTokens: current.inputTokens - previousUsage.inputTokens,
+      outputTokens: current.outputTokens - previousUsage.outputTokens,
+    };
+    const deltaCosts = computeCost(delta);
+    onStepComplete(2, totalSteps, 'Fetching Wikipedia articles...', {
+      ...delta,
+      totalCost: deltaCosts.totalCost,
+    });
+    previousUsage = current;
+  })();
   saveToDisk(
     path.join(PROJECT_ROOT, 'wiki_searcher', 'wikis-fetched', `${slug}.yaml`),
     wikiFetched,
@@ -58,6 +94,19 @@ export async function runPipeline(claim, options = {}) {
 
   onProgress(3, totalSteps, 'Filtering articles for relevance...');
   const wikiFiltered = await filterWiki(conspiracy, wikiFetched);
+  (() => {
+    const current = getTokenUsage();
+    const delta = {
+      inputTokens: current.inputTokens - previousUsage.inputTokens,
+      outputTokens: current.outputTokens - previousUsage.outputTokens,
+    };
+    const deltaCosts = computeCost(delta);
+    onStepComplete(3, totalSteps, 'Filtering articles for relevance...', {
+      ...delta,
+      totalCost: deltaCosts.totalCost,
+    });
+    previousUsage = current;
+  })();
   saveToDisk(
     path.join(PROJECT_ROOT, 'wiki_filterer', 'wikis-filtered', `${slug}.yaml`),
     wikiFiltered,
@@ -66,6 +115,19 @@ export async function runPipeline(claim, options = {}) {
 
   onProgress(4, totalSteps, 'Extracting citations...');
   const extracted = await extract(conspiracy, wikiFiltered);
+  (() => {
+    const current = getTokenUsage();
+    const delta = {
+      inputTokens: current.inputTokens - previousUsage.inputTokens,
+      outputTokens: current.outputTokens - previousUsage.outputTokens,
+    };
+    const deltaCosts = computeCost(delta);
+    onStepComplete(4, totalSteps, 'Extracting citations...', {
+      ...delta,
+      totalCost: deltaCosts.totalCost,
+    });
+    previousUsage = current;
+  })();
   saveToDisk(
     path.join(PROJECT_ROOT, 'article_extractor', 'extracted', `${slug}.yaml`),
     extracted,
@@ -74,11 +136,27 @@ export async function runPipeline(claim, options = {}) {
 
   onProgress(5, totalSteps, 'Generating tabloid HTML...');
   const html = await generate(claim, extracted);
+  (() => {
+    const current = getTokenUsage();
+    const delta = {
+      inputTokens: current.inputTokens - previousUsage.inputTokens,
+      outputTokens: current.outputTokens - previousUsage.outputTokens,
+    };
+    const deltaCosts = computeCost(delta);
+    onStepComplete(5, totalSteps, 'Generating tabloid HTML...', {
+      ...delta,
+      totalCost: deltaCosts.totalCost,
+    });
+    previousUsage = current;
+  })();
   saveToDisk(
     path.join(PROJECT_ROOT, 'tabloid_generator', 'output', `${slug}.html`),
     html,
     'html'
   );
+
+  const usage = getTokenUsage();
+  const costs = computeCost(usage);
 
   return {
     conspiracy,
@@ -87,5 +165,12 @@ export async function runPipeline(claim, options = {}) {
     extracted,
     html,
     slug,
+    tokenUsage: {
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      inputCost: costs.inputCost,
+      outputCost: costs.outputCost,
+      totalCost: costs.totalCost,
+    },
   };
 }

@@ -1,10 +1,20 @@
 /**
  * Shared Grok/xAI API client for Node modules.
  * Use process.env.XAI_API_KEY (or env.local in project root).
+ * Tracks token usage across calls; use getTokenUsage/resetTokenUsage.
  */
+
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const XAI_API_URL = 'https://api.x.ai/v1/chat/completions';
 const DEFAULT_MODEL = 'grok-4-1-fast-non-reasoning';
+
+/** Module-level accumulator for token usage across callGrok invocations. */
+const tokenUsage = { inputTokens: 0, outputTokens: 0 };
 
 /**
  * Call Grok chat completions API.
@@ -65,5 +75,61 @@ export async function callGrok(messages, options = {}) {
     throw new Error(`No content in XAI API response. Raw response:\n${debug}`);
   }
 
+  const usage = data.usage;
+  if (usage) {
+    tokenUsage.inputTokens += usage.prompt_tokens ?? 0;
+    tokenUsage.outputTokens += usage.completion_tokens ?? 0;
+  }
+
   return content;
+}
+
+/**
+ * Returns accumulated token usage since last reset.
+ * @returns {{ inputTokens: number, outputTokens: number }}
+ */
+export function getTokenUsage() {
+  return { ...tokenUsage };
+}
+
+/**
+ * Resets the token usage accumulator. Call at the start of each pipeline run.
+ */
+export function resetTokenUsage() {
+  tokenUsage.inputTokens = 0;
+  tokenUsage.outputTokens = 0;
+}
+
+/**
+ * Computes cost in USD from token usage using pricing JSON.
+ *
+ * @param {{ inputTokens: number, outputTokens: number }} usage - Token counts
+ * @param {string} [model] - Model ID for pricing lookup (default: grok-4-1-fast-non-reasoning)
+ * @param {string} [pricingPath] - Path to grok-pricing.json (default: next to this file)
+ * @returns {{ inputCost: number, outputCost: number, totalCost: number }}
+ */
+export function computeCost(usage, model = DEFAULT_MODEL, pricingPath) {
+  const resolvedPath = pricingPath ?? path.join(__dirname, 'grok-pricing.json');
+  let pricing;
+  try {
+    pricing = JSON.parse(fs.readFileSync(resolvedPath, 'utf8'));
+  } catch (readError) {
+    return { inputCost: 0, outputCost: 0, totalCost: 0 };
+  }
+
+  const rates = pricing[model] ?? pricing[DEFAULT_MODEL];
+  if (!rates) {
+    return { inputCost: 0, outputCost: 0, totalCost: 0 };
+  }
+
+  const inputPerMillion = rates.input_per_million ?? 0;
+  const outputPerMillion = rates.output_per_million ?? 0;
+  const inputCost = (usage.inputTokens / 1e6) * inputPerMillion;
+  const outputCost = (usage.outputTokens / 1e6) * outputPerMillion;
+
+  return {
+    inputCost,
+    outputCost,
+    totalCost: inputCost + outputCost,
+  };
 }

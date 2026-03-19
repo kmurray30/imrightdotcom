@@ -85,10 +85,29 @@ async function main() {
     console.error(`[${step}/${total}] ${message}`);
   };
 
-  const result = await runPipeline(claim, { onProgress });
+  const onStepComplete = (step, total, message, delta) => {
+    const inputFormatted = (delta?.inputTokens ?? 0).toLocaleString();
+    const outputFormatted = (delta?.outputTokens ?? 0).toLocaleString();
+    const totalCostStr = (delta?.totalCost ?? 0).toFixed(4);
+    console.error(`  Tokens: ${inputFormatted} input / ${outputFormatted} output | Cost: $${totalCostStr}`);
+  };
+
+  const result = await runPipeline(claim, { onProgress, onStepComplete });
 
   const outputPath = path.join(PROJECT_ROOT, 'tabloid_generator', 'output', `${result.slug}.html`);
   console.error(`Done. Output: tabloid_generator/output/${result.slug}.html`);
+
+  if (result.tokenUsage) {
+    const usage = result.tokenUsage;
+    const inputFormatted = usage.inputTokens.toLocaleString();
+    const outputFormatted = usage.outputTokens.toLocaleString();
+    console.error(`Token usage: ${inputFormatted} input / ${outputFormatted} output`);
+    const inputCostStr = usage.inputCost.toFixed(4);
+    const outputCostStr = usage.outputCost.toFixed(4);
+    const totalCostStr = usage.totalCost.toFixed(4);
+    console.error(`Cost: $${inputCostStr} input + $${outputCostStr} output = $${totalCostStr} total`);
+  }
+
   openInBrowser(outputPath);
 }
 
