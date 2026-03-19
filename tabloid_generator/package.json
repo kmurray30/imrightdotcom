@@ -1,0 +1,12 @@
+{
+  "name": "tabloid-generator",
+  "private": true,
+  "type": "module",
+  "description": "Generate tabloid-style HTML pages from extracted YAML citations",
+  "scripts": {
+    "generate": "node generate.js"
+  },
+  "dependencies": {
+    "yaml": "^2.8.2"
+  }
+}
