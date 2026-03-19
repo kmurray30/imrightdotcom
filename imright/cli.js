@@ -1,18 +1,34 @@
 #!/usr/bin/env node
 /**
- * CLI for conspirator: generates bad-faith argument angles for a topic.
+ * CLI for imright: runs the full pipeline from claim to tabloid HTML.
  *
- * Usage: node generate-angles.js <topic>
- *   or:  echo "<topic>" | node generate-angles.js
+ * Usage: node imright/cli.js "<claim>"
+ *   or:  echo "<claim>" | node imright/cli.js
  *
  * Requires: XAI_API_KEY in environment (or env.local in project root)
- * Output: conspirator/conspiracies/<topic>.json
+ * Outputs: conspirator/conspiracies/, wiki_searcher/wikis-fetched/, wiki_filterer/wikis-filtered/,
+ *          article_extractor/extracted/, tabloid_generator/output/
  */
 
 import fs from 'fs';
 import path from 'path';
+import { exec } from 'child_process';
 import { fileURLToPath } from 'url';
-import { generateAngles } from './index.js';
+import { runPipeline } from './index.js';
+
+/** Open file in default browser (macOS: open, Windows: start, Linux: xdg-open). */
+function openInBrowser(filePath) {
+  const absolutePath = path.resolve(filePath);
+  const command =
+    process.platform === 'darwin'
+      ? `open "${absolutePath}"`
+      : process.platform === 'win32'
+        ? `start "" "${absolutePath}"`
+        : `xdg-open "${absolutePath}"`;
+  exec(command, (err) => {
+    if (err) console.error('Could not open in browser:', err.message);
+  });
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..');
@@ -40,19 +56,7 @@ function loadEnv() {
 
 loadEnv();
 
-/** Convert topic to a safe filename: lowercase, spaces to hyphens, strip non-alphanumeric. */
-function topicToFilename(topic) {
-  return topic
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, '-')
-    .replace(/[^a-z0-9-]/g, '')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-    || 'untitled';
-}
-
-async function getTopicFromArgs() {
+async function getClaimFromArgs() {
   const args = process.argv.slice(2);
   if (args.length > 0) {
     return args.join(' ');
@@ -70,26 +74,22 @@ async function getTopicFromArgs() {
 }
 
 async function main() {
-  const topic = await getTopicFromArgs();
-  if (!topic) {
-    console.error('Usage: node generate-angles.js <topic>');
-    console.error('   or: echo "<topic>" | node generate-angles.js');
+  const claim = await getClaimFromArgs();
+  if (!claim) {
+    console.error('Usage: node imright/cli.js "<claim>"');
+    console.error('   or: echo "<claim>" | node imright/cli.js');
     process.exit(1);
   }
 
-  console.error(`Generating bad-faith angles for: "${topic}"`);
-  const output = await generateAngles(topic);
+  const onProgress = (step, total, message) => {
+    console.error(`[${step}/${total}] ${message}`);
+  };
 
-  console.log(JSON.stringify(output, null, 2));
+  const result = await runPipeline(claim, { onProgress });
 
-  const filename = `${topicToFilename(topic)}.json`;
-  const outputDir = path.join(__dirname, 'conspiracies');
-  const outputPath = path.join(outputDir, filename);
-
-  fs.mkdirSync(outputDir, { recursive: true });
-  fs.writeFileSync(outputPath, JSON.stringify(output, null, 2), 'utf8');
-
-  console.error(`Wrote filtered output to ${outputPath}`);
+  const outputPath = path.join(PROJECT_ROOT, 'tabloid_generator', 'output', `${result.slug}.html`);
+  console.error(`Done. Output: tabloid_generator/output/${result.slug}.html`);
+  openInBrowser(outputPath);
 }
 
 main().catch((error) => {
