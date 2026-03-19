@@ -19,4 +19,4 @@ export const LOADING_MESSAGES = [
   "Filtering out dissent..."
 ];
 
-export const DEFAULT_BUTTON_TEXT = "Prove me right";
+export const DEFAULT_BUTTON_TEXT = "Prove me right!";
