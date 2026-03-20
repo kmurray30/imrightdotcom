@@ -4,10 +4,10 @@
     {
       "stage": 1,
       "name": "Generating bad-faith angles...",
-      "inputTokens": 1963,
-      "outputTokens": 1377,
-      "cost": 0.0010811,
-      "timeMs": 12118.027791999999
+      "inputTokens": 1846,
+      "outputTokens": 1232,
+      "cost": 0.0009852,
+      "timeMs": 11187.076958
     },
     {
       "stage": 2,
@@ -15,7 +15,7 @@
       "inputTokens": 0,
       "outputTokens": 0,
       "cost": 0,
-      "timeMs": 1317.4224159999994
+      "timeMs": 1382.359833999999
     },
     {
       "stage": 3,
@@ -23,7 +23,7 @@
       "inputTokens": 0,
       "outputTokens": 0,
       "cost": 0,
-      "timeMs": 24.829499999999825
+      "timeMs": 22.58679099999972
     },
     {
       "stage": 4,
@@ -31,18 +31,106 @@
       "inputTokens": 0,
       "outputTokens": 0,
       "cost": 0,
-      "timeMs": 108.65625
+      "timeMs": 13221.401415999999
     },
     {
       "stage": 5,
       "name": "Generating tabloid HTML...",
-      "inputTokens": 9422,
-      "outputTokens": 999,
-      "cost": 0.0023839,
-      "timeMs": 9417.90825
+      "inputTokens": 8725,
+      "outputTokens": 946,
+      "cost": 0.002218,
+      "timeMs": 10378.118375000002
     }
   ],
   "refStats": {
-    "extracted": 96
+    "extracted": 72,
+    "retries": 1,
+    "deadLinksCount": 21,
+    "deadLinks": [
+      {
+        "url": "https://www.eurekalert.org/pub_releases/2018-04/cp-sph040518.php",
+        "reason": "HTTP 404 Not Found"
+      },
+      {
+        "url": "http://www.buykorea.org/product-details/twist-potato--3060030.html",
+        "reason": "redirects to site home (page likely gone): https://buykorea.org/"
+      },
+      {
+        "url": "http://www.potatopro.com/Pr/E-shot/Savory%20Snacks%20Global%20Industry%20Guide.aspx",
+        "reason": "HTTP 404 Not Found"
+      },
+      {
+        "url": "https://www.miamiherald.com/health-wellness/article265075039.html",
+        "reason": "HTTP 404 Not Found"
+      },
+      {
+        "url": "https://www.academia.edu/35032458",
+        "reason": "HTTP 404 Not Found"
+      },
+      {
+        "url": "http://accad.osu.edu/~waynec/history/PDFs/Annals_final.pdf",
+        "reason": "HTTP 404 Not Found"
+      },
+      {
+        "url": "http://www.newstatesman.com/node/141534",
+        "reason": "HTTP 404 Not Found"
+      },
+      {
+        "url": "http://www.mixph.com/2006/09/how-to-make-sweet-and-salted-banana-chips.html",
+        "reason": "HTTP 404 Not Found"
+      },
+      {
+        "url": "http://www.jamesbeard.org/blog/eat-word-croquettes",
+        "reason": "HTTP 404 Not Found"
+      },
+      {
+        "url": "https://www.foodnetwork.com/healthyeats/recipes/2012/11/whats-for-breakfast-english-beans-and-toast",
+        "reason": "HTTP 404 Not Found"
+      },
+      {
+        "url": "http://www.ncsweetpotatoes.com/",
+        "reason": "redirects to site home (page likely gone): https://ncsweetpotatoes.com/"
+      },
+      {
+        "url": "http://www.buykorea.org/product-details/twist-potato--3060030.html",
+        "reason": "redirects to site home (page likely gone): https://buykorea.org/"
+      },
+      {
+        "url": "http://www.potatopro.com/Pr/E-shot/Savory%20Snacks%20Global%20Industry%20Guide.aspx",
+        "reason": "HTTP 404 Not Found"
+      },
+      {
+        "url": "https://www.campcanada.com.au/blog/from-eh-to-zamboni-11-phrases-you-need-to-know-before-summer-camp-in-canada",
+        "reason": "HTTP 404 Not Found"
+      },
+      {
+        "url": "https://www.wsj.com/articles/SB10001424052748704534904575131602283791566",
+        "reason": "HTTP 401 HTTP Forbidden"
+      },
+      {
+        "url": "https://www.bda.uk.com/news/view?id=221&x[0]=news/list",
+        "reason": "HTTP 404 Not Found"
+      },
+      {
+        "url": "http://www.jamesbeard.org/blog/eat-word-croquettes",
+        "reason": "HTTP 404 Not Found"
+      },
+      {
+        "url": "http://www.newstatesman.com/node/141534",
+        "reason": "HTTP 404 Not Found"
+      },
+      {
+        "url": "https://www.foodnetwork.com/healthyeats/recipes/2012/11/whats-for-breakfast-english-beans-and-toast",
+        "reason": "HTTP 404 Not Found"
+      },
+      {
+        "url": "http://www.mixph.com/2006/09/how-to-make-sweet-and-salted-banana-chips.html",
+        "reason": "HTTP 404 Not Found"
+      },
+      {
+        "url": "https://www.eurekalert.org/pub_releases/2018-04/cp-sph040518.php",
+        "reason": "HTTP 404 Not Found"
+      }
+    ]
   }
 }

@@ -130,6 +130,7 @@ function buildHtml(data) {
     { id: 'deduped', label: 'Deduped articles' },
     { id: 'filtered', label: 'After quick filter' },
     { id: 'ref-counts', label: 'Ref counts' },
+    { id: 'dead-links', label: 'Dead links' },
     { id: 'top-refs', label: 'Top references' },
     { id: 'tokens', label: 'Token/cost/time' },
   ];
@@ -304,10 +305,32 @@ function buildHtml(data) {
   if (refStats) {
     html += `        <table>
           <tr><th>Extracted</th><td>${refStats.extracted ?? 0}</td></tr>
+          <tr><th>Retries</th><td>${refStats.retries ?? 0}</td></tr>
+          <tr><th>Dead links</th><td>${refStats.deadLinksCount ?? 0}</td></tr>
         </table>
 `;
   } else {
     html += `        <p class="no-data">Not available (run pipeline to capture).</p>\n`;
+  }
+  html += `      </div>\n    </section>\n`;
+
+  // Section 5b: Dead links
+  const deadLinksList = refStats?.deadLinks ?? [];
+  html += `
+    <section id="dead-links">
+      <h2 class="section-toggle">Dead links</h2>
+      <div class="section-content">
+`;
+  if (deadLinksList.length > 0) {
+    html += `        <p class="count">${deadLinksList.length} invalid links</p>
+        <ul>
+`;
+    for (const { url, reason } of deadLinksList) {
+      html += `          <li><a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(url)}</a> — ${escapeHtml(reason)}</li>\n`;
+    }
+    html += `        </ul>\n`;
+  } else {
+    html += `        <p class="no-data">None (all links passed HEAD check).</p>\n`;
   }
   html += `      </div>\n    </section>\n`;
 
@@ -345,8 +368,9 @@ function buildHtml(data) {
     let totalOutput = 0;
     let totalCost = 0;
     let totalTime = 0;
+    const retriesVal = refStats?.retries ?? 0;
     html += `        <table>
-          <thead><tr><th>Stage</th><th>Name</th><th>Input tokens</th><th>Output tokens</th><th>Cost</th><th>Time</th></tr></thead>
+          <thead><tr><th>Stage</th><th>Name</th><th>Input tokens</th><th>Output tokens</th><th>Cost</th><th>Time</th><th>Retries</th></tr></thead>
           <tbody>
 `;
     for (const row of stages) {
@@ -354,6 +378,7 @@ function buildHtml(data) {
       totalOutput += row.outputTokens ?? 0;
       totalCost += row.cost ?? 0;
       totalTime += row.timeMs ?? 0;
+      const cellRetries = row.stage === 4 ? retriesVal : '';
       html += `            <tr>
               <td>${row.stage}/5</td>
               <td>${escapeHtml((row.name ?? '').replace(/\.\.\.$/, ''))}</td>
@@ -361,6 +386,7 @@ function buildHtml(data) {
               <td>${(row.outputTokens ?? 0).toLocaleString()}</td>
               <td>${((row.cost ?? 0) * 100).toFixed(2)}¢</td>
               <td>${formatTime(row.timeMs ?? 0)}</td>
+              <td>${cellRetries}</td>
             </tr>
 `;
     }
@@ -371,6 +397,7 @@ function buildHtml(data) {
               <td>${totalOutput.toLocaleString()}</td>
               <td>${(totalCost * 100).toFixed(2)}¢</td>
               <td>${formatTime(totalTime)}</td>
+              <td></td>
             </tr>
           </tbody>
         </table>

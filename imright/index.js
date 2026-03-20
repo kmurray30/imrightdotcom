@@ -172,6 +172,7 @@ export async function runPipeline(claim, options = {}) {
       ...delta,
       totalCost: deltaCosts.totalCost,
       timeMs,
+      retries: refStats?.linkStats?.retries ?? 0,
     });
     previousUsage = current;
   })();
@@ -224,6 +225,9 @@ export async function runPipeline(claim, options = {}) {
         stages: stageRows,
         refStats: {
           extracted: refStats.extractedCount ?? 0,
+          retries: refStats.linkStats?.retries ?? 0,
+          deadLinksCount: refStats.linkStats?.deadLinksCount ?? 0,
+          deadLinks: refStats.linkStats?.deadLinks ?? [],
         },
       },
       null,

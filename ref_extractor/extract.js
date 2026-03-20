@@ -55,7 +55,7 @@ async function main() {
   const conspiratorData = yaml.parse(fs.readFileSync(conspiratorPath, 'utf8'));
   const wikiData = yaml.parse(fs.readFileSync(wikiPath, 'utf8'));
 
-  const { extracted: byArticle } = await extract(conspiratorData, wikiData, {
+  const { extracted: byArticle, stats } = await extract(conspiratorData, wikiData, {
     check_links: !noCheckLinks,
   });
 
@@ -73,7 +73,18 @@ async function main() {
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   fs.writeFileSync(outputPath, yaml.stringify(byArticle, { lineWidth: 0 }), 'utf8');
 
-  console.error(`Wrote to ${outputPath} (${refCount} refs, ${uniqueCount} unique citations)`);
+  let logLine = `Wrote to ${outputPath} (${refCount} refs, ${uniqueCount} unique citations)`;
+  if (!noCheckLinks && stats?.linkStats) {
+    const { retries, deadLinksCount, deadLinks } = stats.linkStats;
+    logLine += ` [retries: ${retries}, dead links: ${deadLinksCount}]`;
+    if (deadLinks?.length > 0) {
+      console.error('Dead links:');
+      for (const { url, reason } of deadLinks) {
+        console.error(`  ${url} — ${reason}`);
+      }
+    }
+  }
+  console.error(logLine);
 }
 
 main().catch((error) => {

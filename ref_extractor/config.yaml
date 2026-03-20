@@ -26,14 +26,10 @@ exclude_url_patterns:
 top_matches_per_term: 5
 # Skip search terms shorter than this (avoids "world", "leaders", etc. matching everything)
 min_term_length: 5
-# Fuzzy: 0 = exact only. Higher = more typos allowed but more false positives.
-minisearch_fuzzy: 0
-
-# Max refs to keep, ranked by relevance score (top-k cutoff before saving)
-topk: 50
 
 # HEAD-check each link; drop citations with invalid links (404, redirect-to-home, etc.)
 check_links: true
-
-# RRF constant for Reciprocal Rank Fusion (higher = less weight on top ranks)
-rrf_k: 60
+# If a term gets fewer than this many valid refs after round 1, retry with next batch
+min_refs_per_term: 2
+# Number of retry rounds (each checks next k links for failed terms)
+link_check_retries: 1

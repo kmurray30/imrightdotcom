@@ -82,7 +82,7 @@ async function main() {
   }
 
   const rows = [];
-  const widths = [6, 38, 14, 15, 8, 10]; // stage, name, input, output, cost, time
+  const widths = [6, 38, 14, 15, 8, 10, 8]; // stage, name, input, output, cost, time, retries
   const pad = (value, width) => String(value).padEnd(width);
   const padNum = (value, width) => String(value).padStart(width);
   const isTty = process.stderr.isTTY;
@@ -106,13 +106,13 @@ async function main() {
 
     if (rows.length === 0) {
       console.error(borderRow());
-      console.error(dataRow(['Stage', 'Name', 'Input tokens', 'Output tokens', 'Cost', 'Time']));
+      console.error(dataRow(['Stage', 'Name', 'Input tokens', 'Output tokens', 'Cost', 'Time', 'Retries']));
       console.error(borderRow());
     }
 
     const pending = '...';
     console.error(
-      dataRow([stageStr, nameStr, pending, pending, pending, pending], [2, 3, 4, 5])
+      dataRow([stageStr, nameStr, pending, pending, pending, pending, pending], [2, 3, 4, 5, 6])
     );
   };
 
@@ -124,11 +124,13 @@ async function main() {
       outputTokens: delta?.outputTokens ?? 0,
       cost: delta?.totalCost ?? 0,
       timeMs: delta?.timeMs ?? 0,
+      retries: delta?.retries ?? '',
     };
     rows.push(row);
 
     const nameDisplay = row.name.replace(/\.\.\.$/, '').slice(0, widths[1]);
     const timeStr = row.timeMs >= 1000 ? `${(row.timeMs / 1000).toFixed(2)}s` : `${Math.round(row.timeMs)}ms`;
+    const retriesStr = row.retries !== '' ? String(row.retries) : '';
     const fullRow = dataRow(
       [
         row.stage,
@@ -137,8 +139,9 @@ async function main() {
         row.outputTokens.toLocaleString(),
         `${(row.cost * 100).toFixed(2)}¢`,
         timeStr,
+        retriesStr,
       ],
-      [2, 3, 4, 5]
+      [2, 3, 4, 5, 6]
     );
 
     if (isTty) {
@@ -146,7 +149,7 @@ async function main() {
     } else {
       if (rows.length === 1) {
         console.error(borderRow());
-        console.error(dataRow(['Stage', 'Name', 'Input tokens', 'Output tokens', 'Cost', 'Time']));
+        console.error(dataRow(['Stage', 'Name', 'Input tokens', 'Output tokens', 'Cost', 'Time', 'Retries']));
         console.error(borderRow());
       }
       console.error(fullRow);
@@ -163,9 +166,10 @@ async function main() {
   const totalTimeMs = rows.reduce((sum, row) => sum + row.timeMs, 0);
   const totalTimeStr = totalTimeMs >= 1000 ? `${(totalTimeMs / 1000).toFixed(2)}s` : `${Math.round(totalTimeMs)}ms`;
 
+  const totalRetries = rows.find((r) => r.retries !== '')?.retries ?? 0;
   console.error(borderRow());
   console.error(
-    dataRow(['Total', '', totalInput.toLocaleString(), totalOutput.toLocaleString(), `${(totalCost * 100).toFixed(2)}¢`, totalTimeStr], [2, 3, 4, 5])
+    dataRow(['Total', '', totalInput.toLocaleString(), totalOutput.toLocaleString(), `${(totalCost * 100).toFixed(2)}¢`, totalTimeStr, totalRetries], [2, 3, 4, 5, 6])
   );
   console.error(borderRow());
 
