@@ -1,0 +1,12 @@
+# MiniSearch: require at least this many distinct terms to match (reduces noise)
+min_terms_matched: 2
+# Skip search terms shorter than this (avoids "world", "leaders", etc. matching everything)
+min_term_length: 5
+# Fuzzy: 0 = exact only. Higher = more typos allowed but more false positives.
+minisearch_fuzzy: 0
+
+# Max pages to keep, ranked by relevance score (top-k cutoff)
+topk: 100
+
+# RRF constant for Reciprocal Rank Fusion (higher = less weight on top ranks)
+rrf_k: 60

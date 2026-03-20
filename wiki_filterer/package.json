@@ -2,7 +2,7 @@
   "name": "wiki-filterer",
   "private": true,
   "type": "module",
-  "description": "Filter Wikipedia articles for relevance to an argument via Grok",
+  "description": "Filter Wikipedia articles for relevance to arguments via MiniSearch",
   "dependencies": {
     "yaml": "^2.8.2"
   }

@@ -5,7 +5,6 @@
  * Usage: node filter-wiki.js "<claim>"
  *
  * Requires: conspirator/conspiracies/<claim>.json, wiki_searcher/wikis-fetched/<claim>.yaml
- * Requires: XAI_API_KEY in environment (or env.local in project root)
  * Output: wiki_filterer/wikis-filtered/<claim>.yaml
  */
 

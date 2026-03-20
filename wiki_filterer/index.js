@@ -1,32 +1,26 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { callGrok } from '../utils/grok.js';
+import yaml from 'yaml';
+import { rankPagesByRelevance } from '../utils/minisearch.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const SYSTEM_PROMPT = fs.readFileSync(
-  path.join(__dirname, 'system_prompt.txt'),
-  'utf8'
-).trim();
-
-function parseJsonResponse(rawContent) {
-  let content = rawContent.trim();
-  const codeBlockMatch = content.match(/^```(?:json)?\s*([\s\S]*?)```\s*$/);
-  if (codeBlockMatch) {
-    content = codeBlockMatch[1].trim();
-  }
-  return JSON.parse(content);
-}
-
 /**
  * Filters Wikipedia articles for relevance to arguments from conspiracy data.
+ * Uses MiniSearch + RRF for lexical relevance ranking (no LLM).
  *
  * @param {object} conspiracyData - Output from conspirator (topic, angles with argument)
  * @param {object} wikiFetchedData - Output from wiki_searcher (query, pages)
+ * @param {object} [options] - Optional config overrides (min_terms_matched, topk, etc.)
  * @returns {Promise<{ query: string, arguments: string[], fetched_at: string|null, filtered_at: string, page_count: number, pages: object[] }>}
  */
-export async function filterWiki(conspiracyData, wikiFetchedData) {
+export async function filterWiki(conspiracyData, wikiFetchedData, options = {}) {
+  const configPath = path.join(__dirname, 'config.yaml');
+  const config = fs.existsSync(configPath)
+    ? yaml.parse(fs.readFileSync(configPath, 'utf8'))
+    : {};
+
   const argumentsList = (conspiracyData.angles ?? []).map((angle) => angle.argument).filter(Boolean);
 
   if (argumentsList.length === 0) {
@@ -39,53 +33,28 @@ export async function filterWiki(conspiracyData, wikiFetchedData) {
     throw new Error('No pages found in wiki data or invalid structure.');
   }
 
-  const pagesByPageid = new Map(pages.map((page) => [page.pageid, page]));
-  const pagesByTitle = new Map(pages.map((page) => [page.title, page]));
-
-  const pageObjects = pages.map((page) => ({
-    title: page.title ?? null,
-    pageid: page.pageid ?? null,
-    extract: page.extract ?? null,
-  }));
-
-  const seenPageids = new Set();
-  const filteredPages = [];
-
-  for (const argument of argumentsList) {
-    const userMessage = `Argument: ${argument}
-
-Wikipedia articles to filter:
-
-${JSON.stringify(pageObjects, null, 2)}
-
-Return only the articles relevant to this argument as a JSON array of {title, id} objects.`;
-    const rawContent = await callGrok([
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: userMessage },
-    ]);
-
-    let parsedResponse;
-    try {
-      parsedResponse = parseJsonResponse(rawContent);
-    } catch (parseError) {
-      throw new Error(`Failed to parse JSON from Grok response: ${parseError.message}`);
-    }
-
-    const rawList = Array.isArray(parsedResponse) ? parsedResponse : (parsedResponse.articles ?? []);
-
-    for (const item of rawList) {
-      const pageid = item.id ?? item.pageid ?? item.pageId;
-      const title = item.title ?? item.Title;
-      let page = pageid ? pagesByPageid.get(pageid) : null;
-      if (!page && title) {
-        page = pagesByTitle.get(title);
-      }
-      if (page && !seenPageids.has(page.pageid)) {
-        seenPageids.add(page.pageid);
-        filteredPages.push(page);
-      }
+  // Build search terms from topic, arguments, and search_queries (same pattern as article_extractor)
+  const searchTerms = [conspiracyData.topic ?? wikiFetchedData.query ?? ''];
+  for (const angle of conspiracyData.angles ?? []) {
+    if (angle.argument) searchTerms.push(angle.argument);
+    for (const query of angle.search_queries ?? []) {
+      if (query) searchTerms.push(query);
     }
   }
+
+  const minTermsMatched = options.min_terms_matched ?? config.min_terms_matched ?? 2;
+  const minTermLength = options.min_term_length ?? config.min_term_length ?? 5;
+  const minisearchFuzzy = options.minisearch_fuzzy ?? config.minisearch_fuzzy ?? 0;
+  const topk = options.topk ?? config.topk ?? 100;
+  const rrfK = options.rrf_k ?? config.rrf_k ?? 60;
+
+  const filteredPages = rankPagesByRelevance(pages, searchTerms, {
+    minTermsMatched,
+    minTermLength,
+    fuzzy: minisearchFuzzy,
+    topk,
+    rrfK,
+  });
 
   return {
     query: wikiFetchedData.query ?? conspiracyData.topic ?? '',
