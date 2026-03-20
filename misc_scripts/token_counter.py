@@ -7,7 +7,7 @@ Usage:
   python token_counter.py /path/to/file.txt
   python token_counter.py --model grok-3 /path/to/file.txt
 Example:
-    python misc_scripts/token_counter.py article_extractor/extracted/all-world-leaders-are-in-cahoots-to-keep-us-under-control.yaml
+    python misc_scripts/token_counter.py ref_extractor/extracted/all-world-leaders-are-in-cahoots-to-keep-us-under-control.yaml
 """
 
 import argparse

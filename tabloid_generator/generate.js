@@ -4,7 +4,7 @@
  *
  * Usage: node generate.js "<argument string>"
  *
- * Requires: article_extractor/extracted/<slug>.yaml
+ * Requires: ref_extractor/extracted/<slug>.yaml
  * Requires: XAI_API_KEY in environment (or env.local in project root)
  * Output: tabloid_generator/output/<slug>.html
  */
@@ -76,7 +76,7 @@ async function main() {
   }
 
   const slug = queryToFilename(claim);
-  const yamlPath = path.join(PROJECT_ROOT, 'article_extractor', 'extracted', `${slug}.yaml`);
+  const yamlPath = path.join(PROJECT_ROOT, 'ref_extractor', 'extracted', `${slug}.yaml`);
 
   if (!fs.existsSync(yamlPath)) {
     console.error(`Extracted YAML not found: ${yamlPath}`);

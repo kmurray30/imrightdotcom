@@ -7,7 +7,7 @@
  *
  * Requires: XAI_API_KEY in environment (or env.local in project root)
  * Outputs: conspirator/conspiracies/, wiki_searcher/wikis-fetched/, wiki_filterer/wikis-filtered/,
- *          article_extractor/extracted/, tabloid_generator/output/
+ *          ref_extractor/extracted/, tabloid_generator/output/
  */
 
 import fs from 'fs';

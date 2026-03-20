@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * CLI for article_extractor: extracts relevant citations from filtered wiki articles.
+ * CLI for ref_extractor: extracts relevant citations from filtered wiki articles.
  *
  * Usage: node extract.js "<claim>"
  *
  * Requires: conspirator/conspiracies/<claim>.json, wiki_filterer/wikis-filtered/<claim>.yaml
- * Output: article_extractor/extracted/<claim>.yaml
+ * Output: ref_extractor/extracted/<claim>.yaml
  */
 
 import fs from 'fs';

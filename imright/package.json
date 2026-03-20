@@ -2,7 +2,7 @@
   "name": "imright",
   "private": true,
   "type": "module",
-  "description": "Orchestrates the full pipeline: claim -> conspirator -> wiki_searcher -> wiki_filterer -> article_extractor -> tabloid_generator",
+  "description": "Orchestrates the full pipeline: claim -> conspirator -> wiki_searcher -> wiki_filterer -> ref_extractor -> tabloid_generator",
   "scripts": {
     "run": "node cli.js"
   },

@@ -5,7 +5,7 @@ import yaml from 'yaml';
 import { generateAngles } from '../conspirator/index.js';
 import { fetchWiki } from '../wiki_searcher/index.js';
 import { filterWiki } from '../wiki_filterer/index.js';
-import { extract } from '../article_extractor/index.js';
+import { extract } from '../ref_extractor/index.js';
 import { generate } from '../tabloid_generator/index.js';
 import { slugify } from './utils.js';
 import {
@@ -32,7 +32,7 @@ function saveToDisk(filePath, content, format) {
 }
 
 /**
- * Runs the full pipeline: claim -> conspirator -> wiki_searcher -> wiki_filterer -> article_extractor -> tabloid_generator.
+ * Runs the full pipeline: claim -> conspirator -> wiki_searcher -> wiki_filterer -> ref_extractor -> tabloid_generator.
  * Data flows in memory; outputs are saved to disk in parallel (fire-and-forget).
  *
  * @param {string} claim - The claim/topic to process
@@ -137,7 +137,7 @@ export async function runPipeline(claim, options = {}) {
     previousUsage = current;
   })();
   saveToDisk(
-    path.join(PROJECT_ROOT, 'article_extractor', 'extracted', `${slug}.yaml`),
+    path.join(PROJECT_ROOT, 'ref_extractor', 'extracted', `${slug}.yaml`),
     extracted,
     'yaml'
   );

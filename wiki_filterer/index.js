@@ -33,7 +33,7 @@ export async function filterWiki(conspiracyData, wikiFetchedData, options = {}) 
     throw new Error('No pages found in wiki data or invalid structure.');
   }
 
-  // Build search terms from topic, arguments, and search_queries (same pattern as article_extractor)
+  // Build search terms from topic, arguments, and search_queries (same pattern as ref_extractor)
   const searchTerms = [conspiracyData.topic ?? wikiFetchedData.query ?? ''];
   for (const angle of conspiracyData.angles ?? []) {
     if (angle.argument) searchTerms.push(angle.argument);

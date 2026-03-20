@@ -1,5 +1,5 @@
 /**
- * Parser unit tests for article_extractor.
+ * Parser unit tests for ref_extractor.
  * Uses 5g-cancer-conspiracy.yaml fixture (copy of wiki_searcher wikis-fetched).
  *
  * Run: node --test __tests__/parser.test.js

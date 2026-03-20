@@ -220,7 +220,7 @@ ${sectionsHtml}
  * Generates a tabloid-style HTML page from extracted citations.
  *
  * @param {string} claim - The topic/claim string
- * @param {object} extractedByArticle - Output from article_extractor ({ [articleTitle]: { [section]: [{ link, blurb, sentence }] } })
+ * @param {object} extractedByArticle - Output from ref_extractor ({ [articleTitle]: { [section]: [{ link, blurb, sentence }] } })
  * @returns {Promise<string>} - HTML string
  */
 export async function generate(claim, extractedByArticle) {
