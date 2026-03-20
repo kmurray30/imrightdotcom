@@ -1,0 +1,3 @@
+# URLs to check, one per line. Lines starting with # are ignored.
+https://nutritiondata.self.com/facts/fast-foods-generic/5960/2
+https://half-marathon-running.com/energy-gel.html

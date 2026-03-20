@@ -3,6 +3,7 @@
  * CLI for ref_extractor: extracts relevant citations from filtered wiki articles.
  *
  * Usage: node extract.js "<claim>"
+ *        node extract.js "<claim>" --no-check-links   # skip HEAD link validation (faster)
  *
  * Requires: conspirator/conspiracies/<claim>.yaml, wiki_filterer/wikis-filtered/<claim>.yaml
  * Output: ref_extractor/extracted/<claim>.yaml
@@ -30,7 +31,9 @@ function queryToFilename(query) {
 }
 
 async function main() {
-  const claim = process.argv.slice(2).join(' ').trim();
+  const args = process.argv.slice(2);
+  const noCheckLinks = args.includes('--no-check-links');
+  const claim = args.filter((arg) => arg !== '--no-check-links').join(' ').trim();
   if (!claim) {
     console.error('Usage: node extract.js "<claim>"');
     process.exit(1);
@@ -52,7 +55,9 @@ async function main() {
   const conspiratorData = yaml.parse(fs.readFileSync(conspiratorPath, 'utf8'));
   const wikiData = yaml.parse(fs.readFileSync(wikiPath, 'utf8'));
 
-  const { extracted: byArticle } = await extract(conspiratorData, wikiData);
+  const { extracted: byArticle } = await extract(conspiratorData, wikiData, {
+    check_links: !noCheckLinks,
+  });
 
   const refCount = Object.values(byArticle).reduce(
     (sum, sections) => sum + Object.values(sections).reduce((sectionSum, items) => sectionSum + items.length, 0),

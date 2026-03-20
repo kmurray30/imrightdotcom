@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import yaml from 'yaml';
 import { extractCitationsFromArticleForTerm } from './searchThenExtract.js';
+import { checkUrls, LinkStatus } from '../utils/linkChecker.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -54,6 +55,7 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
   );
   const minTermLength = options.min_term_length ?? config.min_term_length ?? 5;
   const topMatchesPerTerm = options.top_matches_per_term ?? config.top_matches_per_term ?? TOP_MATCHES_PER_TERM;
+  const checkLinks = options.check_links ?? config.check_links ?? true;
 
   const pages = wikiFilteredData?.pages ?? [];
   const searchQueryArticleTitles = wikiFilteredData?.search_query_article_titles ?? {};
@@ -108,10 +110,44 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
     }
   }
 
-  const extractedCount = Object.values(byArticle).reduce(
+  let extractedCount = Object.values(byArticle).reduce(
     (sum, sections) => sum + Object.values(sections).reduce((s, items) => s + items.length, 0),
     0
   );
+
+  if (checkLinks) {
+    const allLinks = [...new Set(
+      Object.values(byArticle).flatMap((sections) =>
+        Object.values(sections).flatMap((items) => items.map((item) => item.link).filter(Boolean))
+      )
+    )];
+
+    if (allLinks.length > 0) {
+      const linkResults = await checkUrls(allLinks, { timeoutMs: 18000, delayMs: 500 });
+      const invalidLinks = new Set(
+        linkResults.filter((r) => r.linkStatus === LinkStatus.INVALID).map((r) => r.url)
+      );
+
+      for (const articleTitle of Object.keys(byArticle)) {
+        for (const section of Object.keys(byArticle[articleTitle])) {
+          byArticle[articleTitle][section] = byArticle[articleTitle][section].filter(
+            (item) => !item.link || !invalidLinks.has(item.link)
+          );
+          if (byArticle[articleTitle][section].length === 0) {
+            delete byArticle[articleTitle][section];
+          }
+        }
+        if (Object.keys(byArticle[articleTitle]).length === 0) {
+          delete byArticle[articleTitle];
+        }
+      }
+
+      extractedCount = Object.values(byArticle).reduce(
+        (sum, sections) => sum + Object.values(sections).reduce((s, items) => s + items.length, 0),
+        0
+      );
+    }
+  }
 
   return {
     extracted: byArticle,

@@ -32,5 +32,8 @@ minisearch_fuzzy: 0
 # Max refs to keep, ranked by relevance score (top-k cutoff before saving)
 topk: 50
 
+# HEAD-check each link; drop citations with invalid links (404, redirect-to-home, etc.)
+check_links: true
+
 # RRF constant for Reciprocal Rank Fusion (higher = less weight on top ranks)
 rrf_k: 60
