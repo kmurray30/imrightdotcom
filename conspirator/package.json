@@ -2,5 +2,8 @@
   "name": "conspirator",
   "version": "1.0.0",
   "description": "Generate bad-faith argument angles for a topic with search queries for corroboration",
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "yaml": "^2.8.2"
+  }
 }

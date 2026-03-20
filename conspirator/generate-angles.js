@@ -6,12 +6,13 @@
  *   or:  echo "<topic>" | node generate-angles.js
  *
  * Requires: XAI_API_KEY in environment (or env.local in project root)
- * Output: conspirator/conspiracies/<topic>.json
+ * Output: conspirator/conspiracies/<topic>.yaml
  */
 
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import yaml from 'yaml';
 import { generateAngles } from './index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -80,14 +81,14 @@ async function main() {
   console.error(`Generating bad-faith angles for: "${topic}"`);
   const output = await generateAngles(topic);
 
-  console.log(JSON.stringify(output, null, 2));
+  console.log(yaml.stringify(output, { lineWidth: 0 }));
 
-  const filename = `${topicToFilename(topic)}.json`;
+  const filename = `${topicToFilename(topic)}.yaml`;
   const outputDir = path.join(__dirname, 'conspiracies');
   const outputPath = path.join(outputDir, filename);
 
   fs.mkdirSync(outputDir, { recursive: true });
-  fs.writeFileSync(outputPath, JSON.stringify(output, null, 2), 'utf8');
+  fs.writeFileSync(outputPath, yaml.stringify(output, { lineWidth: 0 }), 'utf8');
 
   console.error(`Wrote filtered output to ${outputPath}`);
 }

@@ -4,7 +4,7 @@
  *
  * Usage: node filter-wiki.js "<claim>"
  *
- * Requires: conspirator/conspiracies/<claim>.json, wiki_searcher/wikis-fetched/<claim>.yaml
+ * Requires: conspirator/conspiracies/<claim>.yaml, wiki_searcher/wikis-fetched/<claim>.yaml
  * Output: wiki_filterer/wikis-filtered/<claim>.yaml
  */
 
@@ -60,7 +60,7 @@ async function main() {
   }
 
   const slug = queryToFilename(claim);
-  const conspiratorPath = path.join(PROJECT_ROOT, 'conspirator', 'conspiracies', `${slug}.json`);
+  const conspiratorPath = path.join(PROJECT_ROOT, 'conspirator', 'conspiracies', `${slug}.yaml`);
   const wikiPath = path.join(PROJECT_ROOT, 'wiki_searcher', 'wikis-fetched', `${slug}.yaml`);
 
   if (!fs.existsSync(conspiratorPath)) {
@@ -73,7 +73,7 @@ async function main() {
     process.exit(1);
   }
 
-  const conspiracy = JSON.parse(fs.readFileSync(conspiratorPath, 'utf8'));
+  const conspiracy = yaml.parse(fs.readFileSync(conspiratorPath, 'utf8'));
   const wikiData = yaml.parse(fs.readFileSync(wikiPath, 'utf8'));
 
   const output = await filterWiki(conspiracy, wikiData);

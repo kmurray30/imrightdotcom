@@ -4,7 +4,7 @@
  *
  * Usage: node extract.js "<claim>"
  *
- * Requires: conspirator/conspiracies/<claim>.json, wiki_filterer/wikis-filtered/<claim>.yaml
+ * Requires: conspirator/conspiracies/<claim>.yaml, wiki_filterer/wikis-filtered/<claim>.yaml
  * Output: ref_extractor/extracted/<claim>.yaml
  */
 
@@ -37,7 +37,7 @@ async function main() {
   }
 
   const filename = queryToFilename(claim);
-  const conspiratorPath = path.join(PROJECT_ROOT, 'conspirator', 'conspiracies', `${filename}.json`);
+  const conspiratorPath = path.join(PROJECT_ROOT, 'conspirator', 'conspiracies', `${filename}.yaml`);
   const wikiPath = path.join(PROJECT_ROOT, 'wiki_filterer', 'wikis-filtered', `${filename}.yaml`);
 
   if (!fs.existsSync(conspiratorPath)) {
@@ -49,7 +49,7 @@ async function main() {
     process.exit(1);
   }
 
-  const conspiratorData = JSON.parse(fs.readFileSync(conspiratorPath, 'utf8'));
+  const conspiratorData = yaml.parse(fs.readFileSync(conspiratorPath, 'utf8'));
   const wikiData = yaml.parse(fs.readFileSync(wikiPath, 'utf8'));
 
   const byArticle = await extract(conspiratorData, wikiData);

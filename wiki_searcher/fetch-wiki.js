@@ -4,7 +4,7 @@
  *
  * Usage: node fetch-wiki.js "<claim>"
  *
- * Requires: conspirator/conspiracies/<claim>.json
+ * Requires: conspirator/conspiracies/<claim>.yaml
  * Output: wiki_searcher/wikis-fetched/<claim>.yaml
  */
 
@@ -36,14 +36,14 @@ async function main() {
     process.exit(1);
   }
 
-  const conspiratorPath = path.join(PROJECT_ROOT, 'conspirator', 'conspiracies', `${queryToFilename(claim)}.json`);
+  const conspiratorPath = path.join(PROJECT_ROOT, 'conspirator', 'conspiracies', `${queryToFilename(claim)}.yaml`);
 
   if (!fs.existsSync(conspiratorPath)) {
     console.error(`Conspirator file not found: ${conspiratorPath}`);
     process.exit(1);
   }
 
-  const conspiracy = JSON.parse(fs.readFileSync(conspiratorPath, 'utf8'));
+  const conspiracy = yaml.parse(fs.readFileSync(conspiratorPath, 'utf8'));
   const output = await fetchWiki(conspiracy);
 
   const outputPath = path.join(__dirname, 'wikis-fetched', `${queryToFilename(claim)}.yaml`);

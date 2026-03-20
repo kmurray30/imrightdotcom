@@ -68,9 +68,9 @@ export async function runPipeline(claim, options = {}) {
     previousUsage = current;
   })();
   saveToDisk(
-    path.join(PROJECT_ROOT, 'conspirator', 'conspiracies', `${slug}.json`),
+    path.join(PROJECT_ROOT, 'conspirator', 'conspiracies', `${slug}.yaml`),
     conspiracy,
-    'json'
+    'yaml'
   );
 
   onProgress(2, totalSteps, 'Fetching Wikipedia articles...');
