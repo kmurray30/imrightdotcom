@@ -135,7 +135,7 @@ async function main() {
         nameDisplay,
         row.inputTokens.toLocaleString(),
         row.outputTokens.toLocaleString(),
-        `$${row.cost.toFixed(4)}`,
+        `${(row.cost * 100).toFixed(2)}¢`,
         timeStr,
       ],
       [2, 3, 4, 5]
@@ -165,7 +165,7 @@ async function main() {
 
   console.error(borderRow());
   console.error(
-    dataRow(['Total', '', totalInput.toLocaleString(), totalOutput.toLocaleString(), `$${totalCost.toFixed(4)}`, totalTimeStr], [2, 3, 4, 5])
+    dataRow(['Total', '', totalInput.toLocaleString(), totalOutput.toLocaleString(), `${(totalCost * 100).toFixed(2)}¢`, totalTimeStr], [2, 3, 4, 5])
   );
   console.error(borderRow());
 
