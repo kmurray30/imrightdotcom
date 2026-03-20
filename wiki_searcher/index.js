@@ -105,35 +105,42 @@ export async function fetchWiki(conspiracyData, options = {}) {
     return results;
   }
 
-  const pagesById = new Map();
   const query = conspiracyData.topic ?? '';
 
-  for (const searchQuery of searchQueries) {
-    const searchResults = await searchPages(searchQuery, articlesPerQuery);
+  // Run all search queries concurrently; each does searchPages + fetchPageData
+  const pageLists = await Promise.all(
+    searchQueries.map(async (searchQuery) => {
+      const searchResults = await searchPages(searchQuery, articlesPerQuery);
+      if (searchResults.length === 0) return [];
 
-    if (searchResults.length === 0) {
-      continue;
-    }
+      const pageData = await fetchPageData(searchResults);
+      const searchByTitle = Object.fromEntries(searchResults.map((r) => [r.title, r]));
 
-    const pageData = await fetchPageData(searchResults);
-
-    const searchByTitle = Object.fromEntries(searchResults.map((r) => [r.title, r]));
-    for (const page of pageData) {
-      if (pagesById.has(page.pageid)) continue;
-      const searchMeta = searchByTitle[page.title];
-      pagesById.set(page.pageid, {
-        title: page.title,
-        pageid: page.pageid,
-        extract: page.extract,
-        source: page.source,
-        revision_id: page.revision_id,
-        last_modified: page.last_modified,
-        ...(searchMeta && {
-          snippet: searchMeta.snippet,
-          size_bytes: searchMeta.size,
-          wordcount: searchMeta.wordcount,
-        }),
+      return pageData.map((page) => {
+        const searchMeta = searchByTitle[page.title];
+        return {
+          title: page.title,
+          pageid: page.pageid,
+          extract: page.extract,
+          source: page.source,
+          revision_id: page.revision_id,
+          last_modified: page.last_modified,
+          ...(searchMeta && {
+            snippet: searchMeta.snippet,
+            size_bytes: searchMeta.size,
+            wordcount: searchMeta.wordcount,
+          }),
+        };
       });
+    })
+  );
+
+  // Merge and deduplicate by pageid (first occurrence wins)
+  const pagesById = new Map();
+  for (const pageList of pageLists) {
+    for (const page of pageList) {
+      if (pagesById.has(page.pageid)) continue;
+      pagesById.set(page.pageid, page);
     }
   }
 
