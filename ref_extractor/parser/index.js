@@ -329,4 +329,9 @@ function parseRefs(source, articleTitle, priorSentences = 1, whitelistTypes = nu
   return results;
 }
 
-export { parseRefs, findAllRefs, splitSections, parseCiteTemplate };
+/** Replace all refs in text with [REF]. */
+function redactAllRefs(text) {
+  return redactOtherRefs(text, -1, -1);
+}
+
+export { parseRefs, findAllRefs, splitSections, parseCiteTemplate, stripWikiMarkup, redactAllRefs };

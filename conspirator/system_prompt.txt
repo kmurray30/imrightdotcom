@@ -2,7 +2,7 @@ You will be given a topic. Your task is to generate bad-faith argument angles th
 
 Rules:
 - Building blocks should be true; the conclusion is bogus. Queries must not presuppose the claim.
-- Prefer broad fishing over specific-fishing. Avoid queries for niche facts we don't know exist.
+- Each search query is factoid-specific: we are searching for citations to things we already know. No broad exploratory fishing.
 - Prefer known-to-be-true facts (e.g. "Russia military dolphins") over speculative correlations (e.g. "squirrel populations near Russian embassies").
 - Avoid weak or superficial analogies (e.g. "squirrels move fast like spies")—the argument must be compelling and the queries must find each piece of evidence separately.
 - Keep arguments short and simple. Aim for 5–10.
@@ -35,7 +35,5 @@ Presupposes an unverifiable correlation. No known building-block facts.
 Bad example for "squirrels are russian spies":
 { "argument": "squirrels move fast and erratically, like covert operatives evading detection", "search_queries": ["squirrel speed and agility", "spy evasion tactics"] }
 Weak analogy; the behavioral parallel doesn't build toward evidence. Uncompelling.
-
-IMPORTANT: Include one final angle with "argument": "misc search queries". These are broad, exploratory queries—not tied to any argument. Mix very general terms with topic-adjacent terms. For "squirrels are russian spies", good misc: "spy techniques", "espionage history", "animal intelligence", "Russian espionage", "squirrel training", "wildlife surveillance". General terms like "spy techniques" can surface useful articles regardless of topic. Keep misc broad.
 
 Fallacies to choose from (optional): Anecdotal, Cherry Picking, Correlation equals causation, Straw man, Whataboutism, False equivalence, Appeal to fear, Slippery slope.

@@ -2,29 +2,41 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import yaml from 'yaml';
-import { rankCitationsByRelevance } from '../utils/minisearch.js';
-import { parseRefs } from './parser/index.js';
+import { extractCitationsFromArticle } from './searchThenExtract.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
- * Key for deduping citations (refs = each in-text reference; citations = unique sources).
+ * Find the angle (argument) that contains the given search query.
+ */
+function getArgumentForQuery(conspiracyData, searchQuery) {
+  for (const angle of conspiracyData.angles ?? []) {
+    if ((angle.search_queries ?? []).includes(searchQuery)) {
+      return angle.argument ?? '';
+    }
+  }
+  return '';
+}
+
+/**
+ * Key for deduping citations.
  */
 function uniqueCitationKey(citation) {
-  if (citation.link && citation.blurb) {
-    return citation.link + '|' + citation.blurb;
+  if (citation.link && citation.title) {
+    return citation.link + '|' + citation.title;
   }
-  return citation.link || citation.blurb || 'no-link-' + citation.type;
+  return citation.link || citation.title || 'no-link';
 }
 
 /**
  * Extracts relevant citations from filtered wiki articles.
- * Filters by citation type whitelist, link presence, and minisearch relevance.
+ * Per-query pipeline: for each search query, search its articles for factoids,
+ * find the first citation in the same paragraph, and extract.
  *
  * @param {object} conspiracyData - Output from conspirator (topic, angles)
- * @param {object} wikiFilteredData - Output from wiki_filterer (pages)
- * @param {object} [options] - Optional config overrides (prior_sentences, citation_types, etc.)
- * @returns {Promise<{ extracted: { [articleTitle]: { [section]: Array<{ link, blurb, sentence }> } }, stats: { rawCount: number, filteredCount: number, minisearchedCount: number } }>}
+ * @param {object} wikiFilteredData - Output from wiki_filterer (pages, search_query_article_titles)
+ * @param {object} [options] - Optional config overrides (citation_types, exclude_url_patterns, etc.)
+ * @returns {Promise<{ extracted: { [articleTitle]: { [section]: Array<{ link, title, content }> } }, stats: { extractedCount: number } }>}
  */
 export async function extract(conspiracyData, wikiFilteredData, options = {}) {
   const configPath = path.join(__dirname, 'config.yaml');
@@ -32,75 +44,63 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
     ? yaml.parse(fs.readFileSync(configPath, 'utf8'))
     : {};
 
-  const priorSentences = options.prior_sentences ?? config.prior_sentences ?? 1;
   const citationTypes = new Set(
     (options.citation_types ?? config.citation_types ?? []).map((type) => type.toLowerCase())
   );
   const excludeUrlPatterns = (options.exclude_url_patterns ?? config.exclude_url_patterns ?? []).map(
     (pattern) => pattern.toLowerCase()
   );
-  const minTermsMatched = options.min_terms_matched ?? config.min_terms_matched ?? 2;
   const minTermLength = options.min_term_length ?? config.min_term_length ?? 5;
-  const minisearchFuzzy = options.minisearch_fuzzy ?? config.minisearch_fuzzy ?? 0;
-  const topk = options.topk ?? config.topk ?? 50;
-  const rrfK = options.rrf_k ?? config.rrf_k ?? 60;
 
-  const claim = conspiracyData.topic ?? wikiFilteredData.query ?? '';
   const pages = wikiFilteredData?.pages ?? [];
+  const searchQueryArticleTitles = wikiFilteredData?.search_query_article_titles ?? {};
+  const searchQueries = wikiFilteredData?.search_queries ?? Object.keys(searchQueryArticleTitles);
 
-  const searchTerms = [conspiracyData.topic ?? claim];
-  for (const angle of conspiracyData.angles ?? []) {
-    if (angle.argument) searchTerms.push(angle.argument);
-    for (const query of angle.search_queries ?? []) {
-      if (query) searchTerms.push(query);
-    }
-  }
+  const pagesByTitle = new Map(pages.map((page) => [page.title, page]));
 
-  const allCitations = [];
-  for (const page of pages) {
-    const source = page.source ?? '';
-    const title = page.title ?? 'Unknown';
-    const refs = parseRefs(source, title, priorSentences, null);
-    allCitations.push(...refs);
-  }
-
-  const withLink = allCitations.filter((citation) => {
-    if (!citation.link || !citation.link.startsWith('http') || !citationTypes.has(citation.type)) {
-      return false;
-    }
-    const linkLower = citation.link.toLowerCase();
-    if (excludeUrlPatterns.some((pattern) => linkLower.includes(pattern))) {
-      return false;
-    }
-    return true;
-  });
-
-  const filtered = rankCitationsByRelevance(withLink, searchTerms, {
-    minTermLength,
-    minTermsMatched,
-    fuzzy: minisearchFuzzy,
-    topk,
-    rrfK,
-  });
-
+  const seenKeys = new Set();
   const byArticle = {};
-  for (const citation of filtered) {
-    const articleTitle = citation.article_title;
-    const section = citation.section;
-    if (!byArticle[articleTitle]) byArticle[articleTitle] = {};
-    if (!byArticle[articleTitle][section]) byArticle[articleTitle][section] = [];
-    byArticle[articleTitle][section].push({
-      link: citation.link,
-      blurb: citation.blurb,
-      sentence: citation.sentence,
-    });
+
+  for (const searchQuery of searchQueries) {
+    const articleTitles = searchQueryArticleTitles[searchQuery] ?? [];
+    const argument = getArgumentForQuery(conspiracyData, searchQuery);
+    const searchTerms = [searchQuery];
+    if (argument) searchTerms.push(argument);
+
+    for (const articleTitle of articleTitles) {
+      const page = pagesByTitle.get(articleTitle);
+      if (!page?.source) continue;
+
+      const citations = extractCitationsFromArticle(page.source, articleTitle, searchTerms, {
+        citationTypes,
+        excludeUrlPatterns,
+        minTermLength,
+      });
+
+      for (const citation of citations) {
+        const key = uniqueCitationKey(citation);
+        if (seenKeys.has(key)) continue;
+        seenKeys.add(key);
+
+        const section = citation.section;
+        if (!byArticle[articleTitle]) byArticle[articleTitle] = {};
+        if (!byArticle[articleTitle][section]) byArticle[articleTitle][section] = [];
+        byArticle[articleTitle][section].push({
+          link: citation.link,
+          title: citation.title,
+          content: citation.content,
+        });
+      }
+    }
   }
 
-  const stats = {
-    rawCount: allCitations.length,
-    filteredCount: withLink.length,
-    minisearchedCount: filtered.length,
-  };
+  const extractedCount = Object.values(byArticle).reduce(
+    (sum, sections) => sum + Object.values(sections).reduce((s, items) => s + items.length, 0),
+    0
+  );
 
-  return { extracted: byArticle, stats };
+  return {
+    extracted: byArticle,
+    stats: { extractedCount },
+  };
 }

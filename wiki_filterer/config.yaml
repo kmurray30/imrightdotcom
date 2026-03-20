@@ -5,8 +5,8 @@ min_term_length: 3
 # Fuzzy: 0 = exact only. Higher = more typos allowed but more false positives.
 minisearch_fuzzy: 0
 
-# Max pages to keep, ranked by relevance score (top-k cutoff)
-topk: 100
+# Max pages to keep per search query, ranked by relevance (top-k cutoff per query)
+topk_per_query: 10
 
 # RRF constant for Reciprocal Rank Fusion (higher = less weight on top ranks)
 rrf_k: 60

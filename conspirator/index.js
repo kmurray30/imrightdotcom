@@ -58,27 +58,10 @@ export async function generateAngles(topic) {
     search_queries: angle.search_queries ?? [],
   }));
 
-  const miscAngle = angles.find(
-    (angle) => angle.argument?.toLowerCase() === 'misc search queries'
-  );
-  if (miscAngle) {
-    const topicLower = topic.toLowerCase().trim();
-    const alreadyHasTopic = miscAngle.search_queries.some(
-      (query) => query.toLowerCase().trim() === topicLower
-    );
-    if (!alreadyHasTopic) {
-      miscAngle.search_queries.unshift(topic);
-    }
-  }
-
-  const anglesToFilter = angles.filter(
-    (angle) => angle.argument?.toLowerCase() !== 'misc search queries'
-  );
-
   let rawFiltered = [];
-  if (anglesToFilter.length > 0) {
+  if (angles.length > 0) {
     try {
-      const filterUserMessage = `Topic: ${topic}\n\nAngles to filter:\n${JSON.stringify(anglesToFilter, null, 2)}`;
+      const filterUserMessage = `Topic: ${topic}\n\nAngles to filter:\n${JSON.stringify(angles, null, 2)}`;
       const filterRawContent = await callGrok([
         { role: 'system', content: FILTER_PROMPT },
         { role: 'user', content: filterUserMessage },
@@ -86,7 +69,7 @@ export async function generateAngles(topic) {
       const filterParsed = parseJsonResponse(filterRawContent);
       rawFiltered = Array.isArray(filterParsed) ? filterParsed : (filterParsed.angles ?? []);
     } catch (filterError) {
-      rawFiltered = anglesToFilter.map((angle) => ({
+      rawFiltered = angles.map((angle) => ({
         argument: angle.argument,
         search_queries: angle.search_queries ?? [],
         filtering_thought: null,
@@ -98,9 +81,6 @@ export async function generateAngles(topic) {
   const filteredAngles = rawFiltered
     .filter((item) => item.keep === true)
     .map((item) => ({ argument: item.argument, search_queries: item.search_queries ?? [] }));
-  if (miscAngle) {
-    filteredAngles.push(miscAngle);
-  }
 
   return {
     topic,

@@ -223,9 +223,7 @@ export async function runPipeline(claim, options = {}) {
         slug,
         stages: stageRows,
         refStats: {
-          raw: refStats.rawCount,
-          filteredByTypeAndHttp: refStats.filteredCount,
-          minisearched: refStats.minisearchedCount,
+          extracted: refStats.extractedCount ?? 0,
         },
       },
       null,

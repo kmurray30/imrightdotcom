@@ -80,12 +80,12 @@ function flattenExtracted(extracted) {
       if (!Array.isArray(items)) continue;
       for (const item of items) {
         const link = item?.link;
-        const blurb = item?.blurb ?? '';
-        const sentence = cleanSentence(item?.sentence ?? '');
-        const key = link + '|' + blurb;
+        const title = item?.title ?? '';
+        const content = cleanSentence(item?.content ?? '');
+        const key = link + '|' + title;
         if (seen.has(key)) continue;
         seen.add(key);
-        citations.push({ link, blurb, sentence, articleTitle, sectionName });
+        citations.push({ link, title, content, articleTitle, sectionName });
       }
     }
   }
@@ -303,9 +303,7 @@ function buildHtml(data) {
 `;
   if (refStats) {
     html += `        <table>
-          <tr><th>Raw</th><td>${refStats.raw ?? 0}</td></tr>
-          <tr><th>Filtered by type & HTTP</th><td>${refStats.filteredByTypeAndHttp ?? 0}</td></tr>
-          <tr><th>Minisearched (final)</th><td>${refStats.minisearched ?? 0}</td></tr>
+          <tr><th>Extracted</th><td>${refStats.extracted ?? 0}</td></tr>
         </table>
 `;
   } else {
@@ -325,8 +323,8 @@ function buildHtml(data) {
       const ref = topRefs[index];
       const refNum = index + 1;
       html += `          <li class="top-ref-item" id="ref-${refNum}">
-            <p class="top-ref__title"><strong>[${refNum}]</strong> <a href="${escapeHtml(ref.link)}" target="_blank" rel="noopener">${escapeHtml(ref.blurb || ref.link)}</a></p>
-            ${ref.sentence ? `<p class="top-ref__sentence">${escapeHtml(ref.sentence)}</p>` : ''}
+            <p class="top-ref__title"><strong>[${refNum}]</strong> <a href="${escapeHtml(ref.link)}" target="_blank" rel="noopener">${escapeHtml(ref.title || ref.link)}</a></p>
+            ${ref.content ? `<p class="top-ref__sentence">${escapeHtml(ref.content)}</p>` : ''}
             <p class="no-data top-ref__meta">${escapeHtml(ref.articleTitle)} / ${escapeHtml(ref.sectionName)}</p>
           </li>\n`;
     }

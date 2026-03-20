@@ -15,7 +15,7 @@ const SYSTEM_PROMPT = fs.readFileSync(
 ).trim();
 
 /** Strip [REF] placeholders and ''italic'' wiki markup for readability. */
-function cleanSentence(text) {
+function cleanContent(text) {
   if (!text || typeof text !== 'string') return '';
   return text
     .replace(/\[REF\]/g, '')
@@ -39,15 +39,15 @@ function flattenAndDedupeCitations(extractedByArticle) {
 
       for (const item of items) {
         const link = item?.link;
-        const blurb = item?.blurb ?? '';
-        const sentence = cleanSentence(item?.sentence ?? '');
+        const title = item?.title ?? '';
+        const content = cleanContent(item?.content ?? '');
         if (!link || !link.startsWith('http')) continue;
 
-        const key = link + '|' + blurb;
+        const key = link + '|' + title;
         if (seen.has(key)) continue;
         seen.add(key);
 
-        citations.push({ link, blurb, sentence, articleTitle, sectionName });
+        citations.push({ link, title, content, articleTitle, sectionName });
       }
     }
   }
@@ -268,7 +268,7 @@ ${sectionsHtml}
  * Generates a tabloid-style HTML page from extracted citations.
  *
  * @param {string} claim - The topic/claim string
- * @param {object} extractedByArticle - Output from ref_extractor ({ [articleTitle]: { [section]: [{ link, blurb, sentence }] } })
+ * @param {object} extractedByArticle - Output from ref_extractor ({ [articleTitle]: { [section]: [{ link, title, content }] } })
  * @param {string} [slug] - Filename-safe slug for debug page link
  * @returns {Promise<string>} - HTML string
  */
@@ -277,14 +277,14 @@ export async function generate(claim, extractedByArticle, slug = null) {
   const condensed = condenseForLlm(allCitations);
 
   const candidateArguments = condensed.map((citation) => ({
-    text: citation.sentence || citation.blurb,
-    blurb: citation.blurb,
+    text: citation.content || citation.title,
+    title: citation.title,
     link: citation.link,
   }));
 
   const userMessage = `User's main claim (build the whole article around this): ${claim}
 
-Source material (use as evidence; each has text, blurb, link):
+Source material (use as evidence; each has text, title, link):
 ${JSON.stringify(candidateArguments, null, 2)}
 
 Write using the two-step process. Headline and every section heading must advance the case for the user's main claim above. First list claims in chain_of_thought.claims, then write the article in article (headline + sections). Embed links INLINE: [phrase](url) in the prose—never at the end. Use these exact URLs. Return JSON with chain_of_thought and article.`;

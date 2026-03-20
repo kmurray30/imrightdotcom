@@ -55,12 +55,12 @@ async function main() {
   const { extracted: byArticle } = await extract(conspiratorData, wikiData);
 
   const refCount = Object.values(byArticle).reduce(
-    (sum, sections) => sum + Object.values(sections).reduce((s, items) => s + items.length, 0),
+    (sum, sections) => sum + Object.values(sections).reduce((sectionSum, items) => sectionSum + items.length, 0),
     0
   );
   const uniqueCount = new Set(
     Object.values(byArticle).flatMap((sections) =>
-      Object.values(sections).flatMap((items) => items.map((item) => item.link + '|' + item.blurb))
+      Object.values(sections).flatMap((items) => items.map((item) => item.link + '|' + item.title))
     )
   ).size;
 
