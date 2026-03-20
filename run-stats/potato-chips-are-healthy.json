@@ -4,10 +4,10 @@
     {
       "stage": 1,
       "name": "Generating bad-faith angles...",
-      "inputTokens": 1887,
-      "outputTokens": 1228,
-      "cost": 0.0009914,
-      "timeMs": 10785.203833000001
+      "inputTokens": 1963,
+      "outputTokens": 1377,
+      "cost": 0.0010811,
+      "timeMs": 12118.027791999999
     },
     {
       "stage": 2,
@@ -15,7 +15,7 @@
       "inputTokens": 0,
       "outputTokens": 0,
       "cost": 0,
-      "timeMs": 1202.0065409999988
+      "timeMs": 1317.4224159999994
     },
     {
       "stage": 3,
@@ -23,7 +23,7 @@
       "inputTokens": 0,
       "outputTokens": 0,
       "cost": 0,
-      "timeMs": 19.178334000000177
+      "timeMs": 24.829499999999825
     },
     {
       "stage": 4,
@@ -31,18 +31,18 @@
       "inputTokens": 0,
       "outputTokens": 0,
       "cost": 0,
-      "timeMs": 39.397500000000946
+      "timeMs": 108.65625
     },
     {
       "stage": 5,
       "name": "Generating tabloid HTML...",
-      "inputTokens": 9551,
-      "outputTokens": 1056,
-      "cost": 0.0024382,
-      "timeMs": 9324.069084
+      "inputTokens": 9422,
+      "outputTokens": 999,
+      "cost": 0.0023839,
+      "timeMs": 9417.90825
     }
   ],
   "refStats": {
-    "extracted": 276
+    "extracted": 96
   }
 }

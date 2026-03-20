@@ -78,16 +78,17 @@ function buildSectionsWithRanges(source) {
 }
 
 /**
- * Extract citations from a single article using search-then-extract.
- * For each matching paragraph, find first ref after match, validate, and extract.
+ * Extract citations from a single article for a single search term.
+ * For each matching paragraph, find first ref, validate, and extract.
+ * Returns matches in document order (sections then paragraphs).
  *
  * @param {string} source - Raw wiki markup
  * @param {string} articleTitle - Article title
- * @param {string[]} searchTerms - Terms to search for (query + argument)
+ * @param {string} searchTerm - Single term/phrase to search for (query or argument)
  * @param {object} options - citationTypes, excludeUrlPatterns, minTermLength
  * @returns {Array<{ link, title, content, article_title, section }>}
  */
-export function extractCitationsFromArticle(source, articleTitle, searchTerms, options = {}) {
+export function extractCitationsFromArticleForTerm(source, articleTitle, searchTerm, options = {}) {
   const citationTypes = options.citationTypes ?? new Set(['web', 'news', 'journal', 'magazine']);
   const excludeUrlPatterns = options.excludeUrlPatterns ?? [];
   const minTermLength = options.minTermLength ?? 5;
@@ -96,14 +97,14 @@ export function extractCitationsFromArticle(source, articleTitle, searchTerms, o
   const refs = findAllRefs(source);
   const sections = buildSectionsWithRanges(source);
 
-  const termsToSearch = new Set();
-  for (const term of searchTerms) {
-    if (!term || typeof term !== 'string') continue;
-    const words = term.split(/\s+/).filter((word) => word.length >= minTermLength);
-    words.forEach((word) => termsToSearch.add(word.toLowerCase()));
-  }
+  const termLower = (searchTerm ?? '').toLowerCase().trim();
+  const words = termLower.split(/\s+/).filter((word) => word.length >= minTermLength);
+  if (words.length === 0) return results;
 
-  if (termsToSearch.size === 0) return results;
+  const termMatches = (searchableText) => {
+    const textLower = searchableText.toLowerCase();
+    return words.some((word) => textLower.includes(word));
+  };
 
   for (const section of sections) {
     const paragraphs = splitParagraphs(section.content, section.start);
@@ -113,19 +114,14 @@ export function extractCitationsFromArticle(source, articleTitle, searchTerms, o
       const searchableText = stripWikiMarkup(plainText);
       if (searchableText.length < 30) continue;
 
-      const matchesTerm = Array.from(termsToSearch).some((term) =>
-        searchableText.toLowerCase().includes(term)
-      );
-      if (!matchesTerm) continue;
+      if (!termMatches(searchableText)) continue;
 
       const refsInParagraph = refs.filter(
         (ref) => ref.start >= paragraph.start && ref.end <= paragraph.end
       );
       if (refsInParagraph.length === 0) continue;
 
-      const refsAfterMatch = refsInParagraph
-        .sort((a, b) => a.start - b.start);
-      const firstRef = refsAfterMatch[0];
+      const firstRef = refsInParagraph.sort((a, b) => a.start - b.start)[0];
       if (!firstRef) continue;
 
       const parsedList = parseAllCiteTemplates(firstRef.content);

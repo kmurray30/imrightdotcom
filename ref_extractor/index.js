@@ -2,9 +2,11 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import yaml from 'yaml';
-import { extractCitationsFromArticle } from './searchThenExtract.js';
+import { extractCitationsFromArticleForTerm } from './searchThenExtract.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+const TOP_MATCHES_PER_TERM = 5;
 
 /**
  * Find the angle (argument) that contains the given search query.
@@ -30,8 +32,8 @@ function uniqueCitationKey(citation) {
 
 /**
  * Extracts relevant citations from filtered wiki articles.
- * Per-query pipeline: for each search query, search its articles for factoids,
- * find the first citation in the same paragraph, and extract.
+ * For each search term (query + argument), gets exactly top 5 matches.
+ * Every search term is guaranteed representation in the output.
  *
  * @param {object} conspiracyData - Output from conspirator (topic, angles)
  * @param {object} wikiFilteredData - Output from wiki_filterer (pages, search_query_article_titles)
@@ -51,6 +53,7 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
     (pattern) => pattern.toLowerCase()
   );
   const minTermLength = options.min_term_length ?? config.min_term_length ?? 5;
+  const topMatchesPerTerm = options.top_matches_per_term ?? config.top_matches_per_term ?? TOP_MATCHES_PER_TERM;
 
   const pages = wikiFilteredData?.pages ?? [];
   const searchQueryArticleTitles = wikiFilteredData?.search_query_article_titles ?? {};
@@ -61,27 +64,38 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
   const seenKeys = new Set();
   const byArticle = {};
 
+  const extractOptions = { citationTypes, excludeUrlPatterns, minTermLength };
+
   for (const searchQuery of searchQueries) {
     const articleTitles = searchQueryArticleTitles[searchQuery] ?? [];
     const argument = getArgumentForQuery(conspiracyData, searchQuery);
     const searchTerms = [searchQuery];
     if (argument) searchTerms.push(argument);
 
-    for (const articleTitle of articleTitles) {
-      const page = pagesByTitle.get(articleTitle);
-      if (!page?.source) continue;
+    for (const searchTerm of searchTerms) {
+      if (!searchTerm || typeof searchTerm !== 'string') continue;
 
-      const citations = extractCitationsFromArticle(page.source, articleTitle, searchTerms, {
-        citationTypes,
-        excludeUrlPatterns,
-        minTermLength,
-      });
+      const matchesForTerm = [];
+      for (const articleTitle of articleTitles) {
+        const page = pagesByTitle.get(articleTitle);
+        if (!page?.source) continue;
 
-      for (const citation of citations) {
+        const citations = extractCitationsFromArticleForTerm(
+          page.source,
+          articleTitle,
+          searchTerm,
+          extractOptions
+        );
+        matchesForTerm.push(...citations);
+      }
+
+      const topMatches = matchesForTerm.slice(0, topMatchesPerTerm);
+      for (const citation of topMatches) {
         const key = uniqueCitationKey(citation);
         if (seenKeys.has(key)) continue;
         seenKeys.add(key);
 
+        const articleTitle = citation.article_title;
         const section = citation.section;
         if (!byArticle[articleTitle]) byArticle[articleTitle] = {};
         if (!byArticle[articleTitle][section]) byArticle[articleTitle][section] = [];

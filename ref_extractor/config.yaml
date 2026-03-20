@@ -22,8 +22,8 @@ exclude_url_patterns:
   - proquest.com
   - ebscohost.com
 
-# Minisearch: require at least this many distinct terms to match (reduces noise)
-min_terms_matched: 2
+# Top matches to keep per search term (query and argument each get this many)
+top_matches_per_term: 5
 # Skip search terms shorter than this (avoids "world", "leaders", etc. matching everything)
 min_term_length: 5
 # Fuzzy: 0 = exact only. Higher = more typos allowed but more false positives.
