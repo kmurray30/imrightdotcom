@@ -81,32 +81,95 @@ async function main() {
     process.exit(1);
   }
 
+  const rows = [];
+  const widths = [6, 38, 14, 15, 8, 10]; // stage, name, input, output, cost, time
+  const pad = (value, width) => String(value).padEnd(width);
+  const padNum = (value, width) => String(value).padStart(width);
+  const isTty = process.stderr.isTTY;
+  const CURSOR_UP = '\x1b[1A';
+  const CLEAR_LINE = '\x1b[2K';
+  const CARRIAGE_RETURN = '\r';
+
+  const borderRow = () => '+' + widths.map((w) => '-'.repeat(w)).join('+') + '+';
+  const dataRow = (cells, numericIndices = []) => {
+    const formatted = cells.map((cell, index) =>
+      numericIndices.includes(index) ? padNum(cell, widths[index]) : pad(cell, widths[index])
+    );
+    return '|' + formatted.join('|') + '|';
+  };
+
   const onProgress = (step, total, message) => {
-    console.error(`[${step}/${total}] ${message}`);
+    if (!isTty) return; // Non-TTY: only print full rows in onStepComplete
+    if (rows.length >= step) return; // Already past this step
+    const stageStr = `${step}/${total}`;
+    const nameStr = message.slice(0, widths[1]);
+
+    if (rows.length === 0) {
+      console.error(borderRow());
+      console.error(dataRow(['Stage', 'Name', 'Input tokens', 'Output tokens', 'Cost', 'Time']));
+      console.error(borderRow());
+    }
+
+    const pending = '...';
+    console.error(
+      dataRow([stageStr, nameStr, pending, pending, pending, pending], [2, 3, 4, 5])
+    );
   };
 
   const onStepComplete = (step, total, message, delta) => {
-    const inputFormatted = (delta?.inputTokens ?? 0).toLocaleString();
-    const outputFormatted = (delta?.outputTokens ?? 0).toLocaleString();
-    const totalCostStr = (delta?.totalCost ?? 0).toFixed(4);
-    console.error(`  Tokens: ${inputFormatted} input / ${outputFormatted} output | Cost: $${totalCostStr}`);
+    const row = {
+      stage: `${step}/${total}`,
+      name: message,
+      inputTokens: delta?.inputTokens ?? 0,
+      outputTokens: delta?.outputTokens ?? 0,
+      cost: delta?.totalCost ?? 0,
+      timeMs: delta?.timeMs ?? 0,
+    };
+    rows.push(row);
+
+    const nameDisplay = row.name.replace(/\.\.\.$/, '').slice(0, widths[1]);
+    const timeStr = row.timeMs >= 1000 ? `${(row.timeMs / 1000).toFixed(2)}s` : `${Math.round(row.timeMs)}ms`;
+    const fullRow = dataRow(
+      [
+        row.stage,
+        nameDisplay,
+        row.inputTokens.toLocaleString(),
+        row.outputTokens.toLocaleString(),
+        `$${row.cost.toFixed(4)}`,
+        timeStr,
+      ],
+      [2, 3, 4, 5]
+    );
+
+    if (isTty) {
+      process.stderr.write(CURSOR_UP + CLEAR_LINE + CARRIAGE_RETURN + fullRow + '\n');
+    } else {
+      if (rows.length === 1) {
+        console.error(borderRow());
+        console.error(dataRow(['Stage', 'Name', 'Input tokens', 'Output tokens', 'Cost', 'Time']));
+        console.error(borderRow());
+      }
+      console.error(fullRow);
+    }
   };
 
   const result = await runPipeline(claim, { onProgress, onStepComplete });
 
   const outputPath = path.join(PROJECT_ROOT, 'tabloid_generator', 'output', `${result.slug}.html`);
-  console.error(`Done. Output: tabloid_generator/output/${result.slug}.html`);
 
-  if (result.tokenUsage) {
-    const usage = result.tokenUsage;
-    const inputFormatted = usage.inputTokens.toLocaleString();
-    const outputFormatted = usage.outputTokens.toLocaleString();
-    console.error(`Token usage: ${inputFormatted} input / ${outputFormatted} output`);
-    const inputCostStr = usage.inputCost.toFixed(4);
-    const outputCostStr = usage.outputCost.toFixed(4);
-    const totalCostStr = usage.totalCost.toFixed(4);
-    console.error(`Cost: $${inputCostStr} input + $${outputCostStr} output = $${totalCostStr} total`);
-  }
+  const totalInput = rows.reduce((sum, row) => sum + row.inputTokens, 0);
+  const totalOutput = rows.reduce((sum, row) => sum + row.outputTokens, 0);
+  const totalCost = rows.reduce((sum, row) => sum + row.cost, 0);
+  const totalTimeMs = rows.reduce((sum, row) => sum + row.timeMs, 0);
+  const totalTimeStr = totalTimeMs >= 1000 ? `${(totalTimeMs / 1000).toFixed(2)}s` : `${Math.round(totalTimeMs)}ms`;
+
+  console.error(borderRow());
+  console.error(
+    dataRow(['Total', '', totalInput.toLocaleString(), totalOutput.toLocaleString(), `$${totalCost.toFixed(4)}`, totalTimeStr], [2, 3, 4, 5])
+  );
+  console.error(borderRow());
+
+  console.error(`\nDone. Output: tabloid_generator/output/${result.slug}.html`);
 
   openInBrowser(outputPath);
 }

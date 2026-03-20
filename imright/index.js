@@ -38,7 +38,7 @@ function saveToDisk(filePath, content, format) {
  * @param {string} claim - The claim/topic to process
  * @param {object} [options] - Optional config
  * @param {function} [options.onProgress] - Callback (stepIndex, totalSteps, message) for progress updates
- * @param {function} [options.onStepComplete] - Callback (stepIndex, totalSteps, message, delta) after each step; delta = { inputTokens, outputTokens, totalCost } for that step
+ * @param {function} [options.onStepComplete] - Callback (stepIndex, totalSteps, message, delta) after each step; delta = { inputTokens, outputTokens, totalCost, timeMs } for that step
  * @returns {Promise<{ conspiracy, wikiFetched, wikiFiltered, extracted, html, slug }>}
  */
 export async function runPipeline(claim, options = {}) {
@@ -51,6 +51,7 @@ export async function runPipeline(claim, options = {}) {
   let previousUsage = getTokenUsage();
 
   onProgress(1, totalSteps, 'Generating bad-faith angles...');
+  const step1Start = performance.now();
   const conspiracy = await generateAngles(claim);
   (() => {
     const current = getTokenUsage();
@@ -62,6 +63,7 @@ export async function runPipeline(claim, options = {}) {
     onStepComplete(1, totalSteps, 'Generating bad-faith angles...', {
       ...delta,
       totalCost: deltaCosts.totalCost,
+      timeMs: performance.now() - step1Start,
     });
     previousUsage = current;
   })();
@@ -72,6 +74,7 @@ export async function runPipeline(claim, options = {}) {
   );
 
   onProgress(2, totalSteps, 'Fetching Wikipedia articles...');
+  const step2Start = performance.now();
   const wikiFetched = await fetchWiki(conspiracy);
   (() => {
     const current = getTokenUsage();
@@ -83,6 +86,7 @@ export async function runPipeline(claim, options = {}) {
     onStepComplete(2, totalSteps, 'Fetching Wikipedia articles...', {
       ...delta,
       totalCost: deltaCosts.totalCost,
+      timeMs: performance.now() - step2Start,
     });
     previousUsage = current;
   })();
@@ -93,6 +97,7 @@ export async function runPipeline(claim, options = {}) {
   );
 
   onProgress(3, totalSteps, 'Filtering articles for relevance...');
+  const step3Start = performance.now();
   const wikiFiltered = await filterWiki(conspiracy, wikiFetched);
   (() => {
     const current = getTokenUsage();
@@ -104,6 +109,7 @@ export async function runPipeline(claim, options = {}) {
     onStepComplete(3, totalSteps, 'Filtering articles for relevance...', {
       ...delta,
       totalCost: deltaCosts.totalCost,
+      timeMs: performance.now() - step3Start,
     });
     previousUsage = current;
   })();
@@ -114,6 +120,7 @@ export async function runPipeline(claim, options = {}) {
   );
 
   onProgress(4, totalSteps, 'Extracting citations...');
+  const step4Start = performance.now();
   const extracted = await extract(conspiracy, wikiFiltered);
   (() => {
     const current = getTokenUsage();
@@ -125,6 +132,7 @@ export async function runPipeline(claim, options = {}) {
     onStepComplete(4, totalSteps, 'Extracting citations...', {
       ...delta,
       totalCost: deltaCosts.totalCost,
+      timeMs: performance.now() - step4Start,
     });
     previousUsage = current;
   })();
@@ -135,6 +143,7 @@ export async function runPipeline(claim, options = {}) {
   );
 
   onProgress(5, totalSteps, 'Generating tabloid HTML...');
+  const step5Start = performance.now();
   const html = await generate(claim, extracted);
   (() => {
     const current = getTokenUsage();
@@ -146,6 +155,7 @@ export async function runPipeline(claim, options = {}) {
     onStepComplete(5, totalSteps, 'Generating tabloid HTML...', {
       ...delta,
       totalCost: deltaCosts.totalCost,
+      timeMs: performance.now() - step5Start,
     });
     previousUsage = current;
   })();
