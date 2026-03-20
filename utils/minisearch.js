@@ -5,6 +5,33 @@
 
 import MiniSearch from 'minisearch';
 
+/** Wikipedia section header regex: == Title ==, === Subsection ===, etc. */
+const SECTION_HEADER_REGEX = /^\s*(={2,6})\s*(.+?)\s*\1\s*$/gm;
+
+/**
+ * Extract section titles from Wikipedia source markup.
+ * Strips {{...}} templates and [[...]] links for cleaner search tokens.
+ *
+ * @param {string} source - Raw wiki markup (page.source)
+ * @returns {string} - Space-joined section titles for indexing
+ */
+export function extractSectionTitles(source) {
+  if (!source || typeof source !== 'string') return '';
+  const titles = [];
+  let match;
+  SECTION_HEADER_REGEX.lastIndex = 0;
+  while ((match = SECTION_HEADER_REGEX.exec(source)) !== null) {
+    const rawTitle = match[2].trim();
+    // Strip {{...}} templates and resolve [[link]] / [[link|display]] to display text
+    const cleaned = rawTitle
+      .replace(/\{\{[^}]*\}\}/g, '')
+      .replace(/\[\[([^|\]]*\|)?([^\]]+)\]\]/g, '$2')
+      .trim();
+    if (cleaned) titles.push(cleaned);
+  }
+  return titles.join(' ');
+}
+
 /**
  * Rank citations by relevance to search terms using MiniSearch + RRF.
  *
@@ -75,9 +102,9 @@ export function rankCitationsByRelevance(citations, searchTerms, options = {}) {
 
 /**
  * Rank wiki pages by relevance to search terms using MiniSearch + RRF.
- * Indexes on title and extract; returns full page objects.
+ * Indexes on title, extract, and section_titles; returns full page objects.
  *
- * @param {Array<{ title?: string, pageid?: number, extract?: string }>} pages - Wiki pages to rank
+ * @param {Array<{ title?: string, pageid?: number, extract?: string, source?: string }>} pages - Wiki pages to rank
  * @param {string[]} searchTerms - Terms to search for (topic, arguments, search_queries)
  * @param {object} [options] - Ranking options
  * @param {number} [options.minTermLength] - Skip terms shorter than this (default: 5)
@@ -99,17 +126,19 @@ export function rankPagesByRelevance(pages, searchTerms, options = {}) {
   }
 
   const searchIndex = new MiniSearch({
-    fields: ['title', 'extract'],
+    fields: ['title', 'extract', 'section_titles'],
     storeFields: ['title', 'pageid', 'extract'],
     searchOptions: { combineWith: 'OR', fuzzy },
   });
 
   pages.forEach((page, index) => {
+    const sectionTitles = extractSectionTitles(page.source ?? '');
     searchIndex.add({
       id: String(index),
       title: page.title ?? '',
       pageid: page.pageid ?? null,
       extract: page.extract ?? '',
+      section_titles: sectionTitles,
     });
   });
 
