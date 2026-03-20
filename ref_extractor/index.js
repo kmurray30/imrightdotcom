@@ -24,7 +24,7 @@ function uniqueCitationKey(citation) {
  * @param {object} conspiracyData - Output from conspirator (topic, angles)
  * @param {object} wikiFilteredData - Output from wiki_filterer (pages)
  * @param {object} [options] - Optional config overrides (prior_sentences, citation_types, etc.)
- * @returns {Promise<{ [articleTitle]: { [section]: Array<{ link, blurb, sentence }> } }>}
+ * @returns {Promise<{ extracted: { [articleTitle]: { [section]: Array<{ link, blurb, sentence }> } }, stats: { rawCount: number, filteredCount: number, minisearchedCount: number } }>}
  */
 export async function extract(conspiracyData, wikiFilteredData, options = {}) {
   const configPath = path.join(__dirname, 'config.yaml');
@@ -96,5 +96,11 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
     });
   }
 
-  return byArticle;
+  const stats = {
+    rawCount: allCitations.length,
+    filteredCount: withLink.length,
+    minisearchedCount: filtered.length,
+  };
+
+  return { extracted: byArticle, stats };
 }

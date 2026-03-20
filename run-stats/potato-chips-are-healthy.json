@@ -1,0 +1,50 @@
+{
+  "slug": "potato-chips-are-healthy",
+  "stages": [
+    {
+      "stage": 1,
+      "name": "Generating bad-faith angles...",
+      "inputTokens": 1866,
+      "outputTokens": 984,
+      "cost": 0.0008652,
+      "timeMs": 10387.15875
+    },
+    {
+      "stage": 2,
+      "name": "Fetching Wikipedia articles...",
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cost": 0,
+      "timeMs": 1804.4657499999994
+    },
+    {
+      "stage": 3,
+      "name": "Filtering articles for relevance...",
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cost": 0,
+      "timeMs": 22.78149999999914
+    },
+    {
+      "stage": 4,
+      "name": "Extracting citations...",
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cost": 0,
+      "timeMs": 168.87583300000006
+    },
+    {
+      "stage": 5,
+      "name": "Generating tabloid HTML...",
+      "inputTokens": 8319,
+      "outputTokens": 919,
+      "cost": 0.0021233,
+      "timeMs": 10151.137875
+    }
+  ],
+  "refStats": {
+    "raw": 2537,
+    "filteredByTypeAndHttp": 1673,
+    "minisearched": 50
+  }
+}

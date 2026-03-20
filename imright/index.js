@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { execSync } from 'child_process';
 import yaml from 'yaml';
 import { generateAngles } from '../conspirator/index.js';
 import { fetchWiki } from '../wiki_searcher/index.js';
@@ -50,6 +51,8 @@ export async function runPipeline(claim, options = {}) {
   resetTokenUsage();
   let previousUsage = getTokenUsage();
 
+  const stageRows = [];
+
   onProgress(1, totalSteps, 'Generating bad-faith angles...');
   const step1Start = performance.now();
   const conspiracy = await generateAngles(claim);
@@ -60,10 +63,19 @@ export async function runPipeline(claim, options = {}) {
       outputTokens: current.outputTokens - previousUsage.outputTokens,
     };
     const deltaCosts = computeCost(delta);
+    const timeMs = performance.now() - step1Start;
+    stageRows.push({
+      stage: 1,
+      name: 'Generating bad-faith angles...',
+      inputTokens: delta.inputTokens,
+      outputTokens: delta.outputTokens,
+      cost: deltaCosts.totalCost,
+      timeMs,
+    });
     onStepComplete(1, totalSteps, 'Generating bad-faith angles...', {
       ...delta,
       totalCost: deltaCosts.totalCost,
-      timeMs: performance.now() - step1Start,
+      timeMs,
     });
     previousUsage = current;
   })();
@@ -83,10 +95,19 @@ export async function runPipeline(claim, options = {}) {
       outputTokens: current.outputTokens - previousUsage.outputTokens,
     };
     const deltaCosts = computeCost(delta);
+    const timeMs = performance.now() - step2Start;
+    stageRows.push({
+      stage: 2,
+      name: 'Fetching Wikipedia articles...',
+      inputTokens: delta.inputTokens,
+      outputTokens: delta.outputTokens,
+      cost: deltaCosts.totalCost,
+      timeMs,
+    });
     onStepComplete(2, totalSteps, 'Fetching Wikipedia articles...', {
       ...delta,
       totalCost: deltaCosts.totalCost,
-      timeMs: performance.now() - step2Start,
+      timeMs,
     });
     previousUsage = current;
   })();
@@ -106,10 +127,19 @@ export async function runPipeline(claim, options = {}) {
       outputTokens: current.outputTokens - previousUsage.outputTokens,
     };
     const deltaCosts = computeCost(delta);
+    const timeMs = performance.now() - step3Start;
+    stageRows.push({
+      stage: 3,
+      name: 'Filtering articles for relevance...',
+      inputTokens: delta.inputTokens,
+      outputTokens: delta.outputTokens,
+      cost: deltaCosts.totalCost,
+      timeMs,
+    });
     onStepComplete(3, totalSteps, 'Filtering articles for relevance...', {
       ...delta,
       totalCost: deltaCosts.totalCost,
-      timeMs: performance.now() - step3Start,
+      timeMs,
     });
     previousUsage = current;
   })();
@@ -121,7 +151,7 @@ export async function runPipeline(claim, options = {}) {
 
   onProgress(4, totalSteps, 'Extracting citations...');
   const step4Start = performance.now();
-  const extracted = await extract(conspiracy, wikiFiltered);
+  const { extracted, stats: refStats } = await extract(conspiracy, wikiFiltered);
   (() => {
     const current = getTokenUsage();
     const delta = {
@@ -129,10 +159,19 @@ export async function runPipeline(claim, options = {}) {
       outputTokens: current.outputTokens - previousUsage.outputTokens,
     };
     const deltaCosts = computeCost(delta);
+    const timeMs = performance.now() - step4Start;
+    stageRows.push({
+      stage: 4,
+      name: 'Extracting citations...',
+      inputTokens: delta.inputTokens,
+      outputTokens: delta.outputTokens,
+      cost: deltaCosts.totalCost,
+      timeMs,
+    });
     onStepComplete(4, totalSteps, 'Extracting citations...', {
       ...delta,
       totalCost: deltaCosts.totalCost,
-      timeMs: performance.now() - step4Start,
+      timeMs,
     });
     previousUsage = current;
   })();
@@ -144,7 +183,7 @@ export async function runPipeline(claim, options = {}) {
 
   onProgress(5, totalSteps, 'Generating tabloid HTML...');
   const step5Start = performance.now();
-  const html = await generate(claim, extracted);
+  const html = await generate(claim, extracted, slug);
   (() => {
     const current = getTokenUsage();
     const delta = {
@@ -152,10 +191,19 @@ export async function runPipeline(claim, options = {}) {
       outputTokens: current.outputTokens - previousUsage.outputTokens,
     };
     const deltaCosts = computeCost(delta);
+    const timeMs = performance.now() - step5Start;
+    stageRows.push({
+      stage: 5,
+      name: 'Generating tabloid HTML...',
+      inputTokens: delta.inputTokens,
+      outputTokens: delta.outputTokens,
+      cost: deltaCosts.totalCost,
+      timeMs,
+    });
     onStepComplete(5, totalSteps, 'Generating tabloid HTML...', {
       ...delta,
       totalCost: deltaCosts.totalCost,
-      timeMs: performance.now() - step5Start,
+      timeMs,
     });
     previousUsage = current;
   })();
@@ -164,6 +212,38 @@ export async function runPipeline(claim, options = {}) {
     html,
     'html'
   );
+
+  // Write run-stats synchronously so the debug generator can read it
+  const runStatsPath = path.join(PROJECT_ROOT, 'run-stats', `${slug}.json`);
+  fs.mkdirSync(path.dirname(runStatsPath), { recursive: true });
+  fs.writeFileSync(
+    runStatsPath,
+    JSON.stringify(
+      {
+        slug,
+        stages: stageRows,
+        refStats: {
+          raw: refStats.rawCount,
+          filteredByTypeAndHttp: refStats.filteredCount,
+          minisearched: refStats.minisearchedCount,
+        },
+      },
+      null,
+      2
+    ),
+    'utf8'
+  );
+
+  // Auto-run the debug page generator
+  try {
+    execSync(`node imright/scripts/generate-debug.js ${slug}`, {
+      cwd: PROJECT_ROOT,
+      stdio: 'inherit',
+    });
+  } catch (generateError) {
+    // Non-fatal: pipeline succeeded, debug page may be missing some data
+    console.error(`Warning: could not generate debug page: ${generateError.message}`);
+  }
 
   const usage = getTokenUsage();
   const costs = computeCost(usage);

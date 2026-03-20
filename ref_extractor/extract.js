@@ -52,7 +52,7 @@ async function main() {
   const conspiratorData = yaml.parse(fs.readFileSync(conspiratorPath, 'utf8'));
   const wikiData = yaml.parse(fs.readFileSync(wikiPath, 'utf8'));
 
-  const byArticle = await extract(conspiratorData, wikiData);
+  const { extracted: byArticle } = await extract(conspiratorData, wikiData);
 
   const refCount = Object.values(byArticle).reduce(
     (sum, sections) => sum + Object.values(sections).reduce((s, items) => s + items.length, 0),

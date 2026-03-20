@@ -1,0 +1,50 @@
+{
+  "slug": "the-earth-is-flat",
+  "stages": [
+    {
+      "stage": 1,
+      "name": "Generating bad-faith angles...",
+      "inputTokens": 1825,
+      "outputTokens": 948,
+      "cost": 0.000839,
+      "timeMs": 9933.425541999999
+    },
+    {
+      "stage": 2,
+      "name": "Fetching Wikipedia articles...",
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cost": 0,
+      "timeMs": 3650.6549170000017
+    },
+    {
+      "stage": 3,
+      "name": "Filtering articles for relevance...",
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cost": 0,
+      "timeMs": 22.977833000000828
+    },
+    {
+      "stage": 4,
+      "name": "Extracting citations...",
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cost": 0,
+      "timeMs": 300.3401249999988
+    },
+    {
+      "stage": 5,
+      "name": "Generating tabloid HTML...",
+      "inputTokens": 9983,
+      "outputTokens": 1093,
+      "cost": 0.0025431000000000004,
+      "timeMs": 8287.645625000001
+    }
+  ],
+  "refStats": {
+    "raw": 4294,
+    "filteredByTypeAndHttp": 2964,
+    "minisearched": 50
+  }
+}

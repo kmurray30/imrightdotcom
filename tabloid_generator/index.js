@@ -6,6 +6,8 @@ import { callGrok } from '../utils/grok.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const MAX_CITATIONS_FOR_LLM = 80;
+/** Number of refs to show in visualizer and to number in article; must match imright/scripts/generate-debug.js TOP_K_REFS */
+const REF_NUMBERS_COUNT = 50;
 
 const SYSTEM_PROMPT = fs.readFileSync(
   path.join(__dirname, 'system_prompt.txt'),
@@ -77,8 +79,14 @@ function escapeHtml(text) {
     .replace(/"/g, '&quot;');
 }
 
-/** Parse [anchor](url) markdown-style links and convert to HTML. Escapes non-link text. */
-function processParagraphWithLinks(text) {
+/**
+ * Parse [anchor](url) markdown-style links and convert to HTML.
+ * If urlToIndex is provided, appends [N] ref numbers next to each link (matching visualizer).
+ * @param {string} text - Paragraph text with [phrase](url) markdown
+ * @param {Map<string, number>} [urlToIndex] - Map from URL to 1-based ref number
+ * @param {string} [debugPageUrl] - Base URL for debug page (for ref number links)
+ */
+function processParagraphWithLinks(text, urlToIndex = null, debugPageUrl = null) {
   const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
   const parts = [];
   let lastIndex = 0;
@@ -93,15 +101,38 @@ function processParagraphWithLinks(text) {
   return parts
     .map((part) => {
       if (part.type === 'text') return escapeHtml(part.content);
-      return `<a href="${escapeHtml(part.url)}" target="_blank" rel="noopener">${escapeHtml(part.anchor)}</a>`;
+      const linkHtml = `<a href="${escapeHtml(part.url)}" target="_blank" rel="noopener">${escapeHtml(part.anchor)}</a>`;
+      const refNum = urlToIndex?.get(part.url);
+      if (refNum != null && debugPageUrl) {
+        return `${linkHtml}<a href="${escapeHtml(debugPageUrl)}#ref-${refNum}" class="ref-num" title="See reference ${refNum}">[${refNum}]</a>`;
+      }
+      return linkHtml;
     })
     .join('');
 }
 
+/**
+ * Build urlToIndex map from ordered citations: first occurrence of each URL gets its 1-based index.
+ * Used to add [1] [2] ref numbers next to links in the article.
+ */
+function buildUrlToIndex(citations) {
+  const urlToIndex = new Map();
+  const capped = citations.slice(0, REF_NUMBERS_COUNT);
+  for (let index = 0; index < capped.length; index++) {
+    const url = capped[index]?.link;
+    if (url && !urlToIndex.has(url)) {
+      urlToIndex.set(url, index + 1);
+    }
+  }
+  return urlToIndex;
+}
+
 /** Generate self-contained tabloid-style HTML. */
-function generateHtml(selected, topic) {
+function generateHtml(selected, topic, slug = null, citations = []) {
   const headline = selected.headline ?? 'TRUTH FLASH!';
   const sections = selected.sections ?? [];
+  const urlToIndex = buildUrlToIndex(citations);
+  const debugPageUrl = slug ? `../../debug/${slug}.html` : null;
 
   // Support legacy format (paragraphs only) for backward compatibility
   const sectionsHtml =
@@ -113,7 +144,7 @@ function generateHtml(selected, topic) {
             const paragraphsHtml = paragraphs
               .map((paragraph) => {
                 const rawText = paragraph.text ?? '';
-                const processedHtml = processParagraphWithLinks(rawText);
+                const processedHtml = processParagraphWithLinks(rawText, urlToIndex, debugPageUrl);
                 return `      <p class="article__paragraph">${processedHtml}</p>`;
               })
               .join('\n');
@@ -126,7 +157,7 @@ ${paragraphsHtml}
       : (selected.paragraphs ?? [])
           .map((paragraph) => {
             const rawText = paragraph.text ?? '';
-            const processedHtml = processParagraphWithLinks(rawText);
+            const processedHtml = processParagraphWithLinks(rawText, urlToIndex, debugPageUrl);
             return `    <p class="article__paragraph">${processedHtml}</p>`;
           })
           .join('\n');
@@ -176,6 +207,15 @@ ${paragraphsHtml}
       color: #aaa;
       margin-top: 0.5rem;
     }
+    .masthead__debug {
+      font-size: 0.8rem;
+      margin-top: 1rem;
+    }
+    .masthead__debug a {
+      color: #6df4a1;
+      text-decoration: none;
+    }
+    .masthead__debug a:hover { text-decoration: underline; }
     .article { margin: 2rem 0; }
     .article__paragraph {
       margin: 0 0 1.25rem 0;
@@ -199,6 +239,13 @@ ${paragraphsHtml}
       text-decoration: none;
     }
     .article__paragraph a:hover { text-decoration: underline; }
+    .ref-num {
+      font-size: 0.75em;
+      color: #888;
+      margin-left: 0.1em;
+      text-decoration: none;
+    }
+    .ref-num:hover { color: #6df4a1; }
   </style>
 </head>
 <body>
@@ -207,6 +254,7 @@ ${paragraphsHtml}
       <p class="masthead__label">FACTS NEWS</p>
       <h1 class="headline">${escapeHtml(headline)}</h1>
       <p class="subtitle">${escapeHtml(topic)}</p>
+      ${slug ? `<p class="masthead__debug"><a href="../../debug/${escapeHtml(slug)}.html">Pipeline debug</a></p>` : ''}
     </header>
     <article class="article">
 ${sectionsHtml}
@@ -221,9 +269,10 @@ ${sectionsHtml}
  *
  * @param {string} claim - The topic/claim string
  * @param {object} extractedByArticle - Output from ref_extractor ({ [articleTitle]: { [section]: [{ link, blurb, sentence }] } })
+ * @param {string} [slug] - Filename-safe slug for debug page link
  * @returns {Promise<string>} - HTML string
  */
-export async function generate(claim, extractedByArticle) {
+export async function generate(claim, extractedByArticle, slug = null) {
   const allCitations = flattenAndDedupeCitations(extractedByArticle);
   const condensed = condenseForLlm(allCitations);
 
@@ -254,5 +303,5 @@ Write using the two-step process. Headline and every section heading must advanc
   // Extract article from chain-of-thought structure; discard reasoning
   const selected = parsed.article ?? parsed;
 
-  return generateHtml(selected, claim);
+  return generateHtml(selected, claim, slug, condensed);
 }
