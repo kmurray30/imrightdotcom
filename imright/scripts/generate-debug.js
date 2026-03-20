@@ -6,7 +6,7 @@
  * Usage: node imright/scripts/generate-debug.js <slug>
  * Example: node imright/scripts/generate-debug.js wireless-headphones-can-give-you-brain-cancer
  *
- * Output: debug/<slug>.html
+ * Output: imright/debug/<slug>.html
  */
 
 import fs from 'fs';
@@ -214,7 +214,7 @@ function buildHtml(data) {
     <header class="header">
       <h1>Pipeline debug: ${escapeHtml(topic)}</h1>
       <p class="subtitle">
-        <a href="../tabloid_generator/output/${escapeHtml(data.slug)}.html">← Back to article</a>
+        <a href="../../tabloid_generator/output/${escapeHtml(data.slug)}.html">← Back to article</a>
       </p>
     </header>
     <nav class="nav">
@@ -426,7 +426,7 @@ async function main() {
 
   const html = buildHtml(data);
 
-  const outputPath = path.join(PROJECT_ROOT, 'debug', `${slug}.html`);
+  const outputPath = path.join(PROJECT_ROOT, 'imright', 'debug', `${slug}.html`);
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   fs.writeFileSync(outputPath, html, 'utf8');
 

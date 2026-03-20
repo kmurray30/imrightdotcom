@@ -132,7 +132,7 @@ function generateHtml(selected, topic, slug = null, citations = []) {
   const headline = selected.headline ?? 'TRUTH FLASH!';
   const sections = selected.sections ?? [];
   const urlToIndex = buildUrlToIndex(citations);
-  const debugPageUrl = slug ? `../../debug/${slug}.html` : null;
+  const debugPageUrl = slug ? `../../imright/debug/${slug}.html` : null;
 
   // Support legacy format (paragraphs only) for backward compatibility
   const sectionsHtml =
@@ -254,7 +254,7 @@ ${paragraphsHtml}
       <p class="masthead__label">FACTS NEWS</p>
       <h1 class="headline">${escapeHtml(headline)}</h1>
       <p class="subtitle">${escapeHtml(topic)}</p>
-      ${slug ? `<p class="masthead__debug"><a href="../../debug/${escapeHtml(slug)}.html">Pipeline debug</a></p>` : ''}
+      ${slug ? `<p class="masthead__debug"><a href="../../imright/debug/${escapeHtml(slug)}.html">Pipeline debug</a></p>` : ''}
     </header>
     <article class="article">
 ${sectionsHtml}
