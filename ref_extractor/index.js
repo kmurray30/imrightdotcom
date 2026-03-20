@@ -3,7 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import yaml from 'yaml';
 import { extractCitationsFromArticleForTerm } from './searchThenExtract.js';
-import { checkUrls, LinkStatus } from '../utils/linkChecker.js';
+import { checkUrl, LinkStatus } from '../utils/linkChecker.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -67,6 +67,9 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
   const byArticle = {};
 
   const extractOptions = { citationTypes, excludeUrlPatterns, minTermLength };
+  const linkCheckOptions = { timeoutMs: 18000 };
+  const linkCheckDelayMs = 500;
+  const linkValidityCache = new Map(); // url -> true (valid) | false (invalid)
 
   for (const searchQuery of searchQueries) {
     const articleTitles = searchQueryArticleTitles[searchQuery] ?? [];
@@ -91,11 +94,30 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
         matchesForTerm.push(...citations);
       }
 
-      const topMatches = matchesForTerm.slice(0, topMatchesPerTerm);
-      for (const citation of topMatches) {
+      let validCount = 0;
+      for (const citation of matchesForTerm) {
+        if (validCount >= topMatchesPerTerm) break;
+
         const key = uniqueCitationKey(citation);
         if (seenKeys.has(key)) continue;
+
+        if (checkLinks && citation.link) {
+          const cached = linkValidityCache.get(citation.link);
+          if (cached === false) continue; // known invalid
+          if (cached !== true) {
+            const result = await checkUrl(citation.link, linkCheckOptions);
+            const isValid = result.linkStatus !== LinkStatus.INVALID;
+            linkValidityCache.set(citation.link, isValid);
+            if (!isValid) {
+              await new Promise((resolve) => setTimeout(resolve, linkCheckDelayMs));
+              continue;
+            }
+            await new Promise((resolve) => setTimeout(resolve, linkCheckDelayMs));
+          }
+        }
+
         seenKeys.add(key);
+        validCount++;
 
         const articleTitle = citation.article_title;
         const section = citation.section;
@@ -110,44 +132,10 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
     }
   }
 
-  let extractedCount = Object.values(byArticle).reduce(
+  const extractedCount = Object.values(byArticle).reduce(
     (sum, sections) => sum + Object.values(sections).reduce((s, items) => s + items.length, 0),
     0
   );
-
-  if (checkLinks) {
-    const allLinks = [...new Set(
-      Object.values(byArticle).flatMap((sections) =>
-        Object.values(sections).flatMap((items) => items.map((item) => item.link).filter(Boolean))
-      )
-    )];
-
-    if (allLinks.length > 0) {
-      const linkResults = await checkUrls(allLinks, { timeoutMs: 18000, delayMs: 500 });
-      const invalidLinks = new Set(
-        linkResults.filter((r) => r.linkStatus === LinkStatus.INVALID).map((r) => r.url)
-      );
-
-      for (const articleTitle of Object.keys(byArticle)) {
-        for (const section of Object.keys(byArticle[articleTitle])) {
-          byArticle[articleTitle][section] = byArticle[articleTitle][section].filter(
-            (item) => !item.link || !invalidLinks.has(item.link)
-          );
-          if (byArticle[articleTitle][section].length === 0) {
-            delete byArticle[articleTitle][section];
-          }
-        }
-        if (Object.keys(byArticle[articleTitle]).length === 0) {
-          delete byArticle[articleTitle];
-        }
-      }
-
-      extractedCount = Object.values(byArticle).reduce(
-        (sum, sections) => sum + Object.values(sections).reduce((s, items) => s + items.length, 0),
-        0
-      );
-    }
-  }
 
   return {
     extracted: byArticle,
