@@ -13,7 +13,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * @param {object} conspiracyData - Output from conspirator (topic, angles with search_queries)
  * @param {object} [options] - Optional config
  * @param {number} [options.articlesPerQuery] - Max articles per search query (default: 5 from config, or 10)
- * @returns {Promise<{ query: string, search_queries: string[], fetched_at: string, page_count: number, pages: object[] }>}
+ * @returns {Promise<{ query: string, search_queries: string[], search_query_article_titles: object, fetched_at: string, page_count: number, pages: object[] }>}
  */
 export async function fetchWiki(conspiracyData, options = {}) {
 
@@ -135,12 +135,22 @@ export async function fetchWiki(conspiracyData, options = {}) {
     })
   );
 
-  // Merge and deduplicate by pageid (first occurrence wins)
+  // Build search_query_article_titles: query -> [titles]
+  const searchQueryArticleTitles = {};
+  for (let i = 0; i < searchQueries.length; i++) {
+    searchQueryArticleTitles[searchQueries[i]] = pageLists[i].map((page) => page.title);
+  }
+
+  // Merge pages, tracking search_queries_hit per page
   const pagesById = new Map();
-  for (const pageList of pageLists) {
-    for (const page of pageList) {
-      if (pagesById.has(page.pageid)) continue;
-      pagesById.set(page.pageid, page);
+  for (let i = 0; i < searchQueries.length; i++) {
+    const searchQuery = searchQueries[i];
+    for (const page of pageLists[i]) {
+      if (!pagesById.has(page.pageid)) {
+        pagesById.set(page.pageid, { ...page, search_queries_hit: [searchQuery] });
+      } else {
+        pagesById.get(page.pageid).search_queries_hit.push(searchQuery);
+      }
     }
   }
 
@@ -149,6 +159,7 @@ export async function fetchWiki(conspiracyData, options = {}) {
   return {
     query,
     search_queries: searchQueries,
+    search_query_article_titles: searchQueryArticleTitles,
     fetched_at: new Date().toISOString(),
     page_count: pages.length,
     pages,

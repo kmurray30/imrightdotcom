@@ -13,7 +13,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * @param {object} conspiracyData - Output from conspirator (topic, angles with argument)
  * @param {object} wikiFetchedData - Output from wiki_searcher (query, pages)
  * @param {object} [options] - Optional config overrides (min_terms_matched, topk, etc.)
- * @returns {Promise<{ query: string, arguments: string[], fetched_at: string|null, filtered_at: string, page_count: number, pages: object[] }>}
+ * @returns {Promise<{ query: string, search_queries: string[], search_query_article_titles: object, arguments: string[], fetched_at: string|null, filtered_at: string, page_count: number, pages: object[] }>}
  */
 export async function filterWiki(conspiracyData, wikiFetchedData, options = {}) {
   const configPath = path.join(__dirname, 'config.yaml');
@@ -56,8 +56,18 @@ export async function filterWiki(conspiracyData, wikiFetchedData, options = {}) 
     rrfK,
   });
 
+  // Filter search_query_article_titles to only include articles that passed relevance ranking
+  const filteredTitles = new Set(filteredPages.map((page) => page.title));
+  const rawSearchQueryArticleTitles = wikiFetchedData.search_query_article_titles ?? {};
+  const searchQueryArticleTitles = {};
+  for (const [query, titles] of Object.entries(rawSearchQueryArticleTitles)) {
+    searchQueryArticleTitles[query] = titles.filter((title) => filteredTitles.has(title));
+  }
+
   return {
     query: wikiFetchedData.query ?? conspiracyData.topic ?? '',
+    search_queries: wikiFetchedData.search_queries ?? [],
+    search_query_article_titles: searchQueryArticleTitles,
     arguments: argumentsList,
     fetched_at: wikiFetchedData.fetched_at ?? null,
     filtered_at: new Date().toISOString(),
