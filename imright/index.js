@@ -7,7 +7,11 @@ import { generateAngles } from '../conspirator/index.js';
 import { fetchWiki } from '../wiki_searcher/index.js';
 import { filterWiki } from '../wiki_filterer/index.js';
 import { extract } from '../ref_extractor/index.js';
-import { generate, regenerateFromRaw } from '../tabloid_generator/index.js';
+import {
+  generateArticle,
+  renderWithImages,
+  regenerateFromRaw,
+} from '../tabloid_generator/index.js';
 import { slugify } from './utils.js';
 import {
   getTokenUsage,
@@ -45,7 +49,7 @@ function saveToDisk(filePath, content, format) {
 export async function runPipeline(claim, options = {}) {
   const onProgress = options.onProgress ?? (() => {});
   const onStepComplete = options.onStepComplete ?? (() => {});
-  const totalSteps = 5;
+  const totalSteps = 6;
   const slug = slugify(claim);
 
   resetTokenUsage();
@@ -182,9 +186,9 @@ export async function runPipeline(claim, options = {}) {
     'yaml'
   );
 
-  onProgress(5, totalSteps, 'Generating tabloid HTML...');
+  onProgress(5, totalSteps, 'Generating tabloid article...');
   const step5Start = performance.now();
-  const html = await generate(claim, extracted, slug);
+  const articleResult = await generateArticle(claim, extracted, slug);
   (() => {
     const current = getTokenUsage();
     const delta = {
@@ -195,18 +199,39 @@ export async function runPipeline(claim, options = {}) {
     const timeMs = performance.now() - step5Start;
     stageRows.push({
       stage: 5,
-      name: 'Generating tabloid HTML...',
+      name: 'Generating tabloid article...',
       inputTokens: delta.inputTokens,
       outputTokens: delta.outputTokens,
       cost: deltaCosts.totalCost,
       timeMs,
     });
-    onStepComplete(5, totalSteps, 'Generating tabloid HTML...', {
+    onStepComplete(5, totalSteps, 'Generating tabloid article...', {
       ...delta,
       totalCost: deltaCosts.totalCost,
       timeMs,
     });
     previousUsage = current;
+  })();
+
+  onProgress(6, totalSteps, 'Fetching images...');
+  const step6Start = performance.now();
+  const html = await renderWithImages(articleResult, slug, PROJECT_ROOT);
+  (() => {
+    const timeMs = performance.now() - step6Start;
+    stageRows.push({
+      stage: 6,
+      name: 'Fetching images...',
+      inputTokens: 0,
+      outputTokens: 0,
+      cost: 0,
+      timeMs,
+    });
+    onStepComplete(6, totalSteps, 'Fetching images...', {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalCost: 0,
+      timeMs,
+    });
   })();
   saveToDisk(
     path.join(PROJECT_ROOT, 'tabloid_generator', 'output', `${slug}.html`),
@@ -276,7 +301,7 @@ export async function runPipeline(claim, options = {}) {
  * @returns {Promise<{ slug, html }>}
  */
 export async function regenerateHtmlOnly(slug, options = {}) {
-  const html = regenerateFromRaw(slug, PROJECT_ROOT);
+  const html = await regenerateFromRaw(slug, PROJECT_ROOT);
 
   const outputPath = path.join(PROJECT_ROOT, 'tabloid_generator', 'output', `${slug}.html`);
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });

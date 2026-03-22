@@ -15,6 +15,7 @@ Return strictly valid JSON with two top-level keys:
   },
   "article": {
     "headline": "Short hooky headline (5-10 words)",
+    "photo_query": "ONE word only—the main subject of the article. Examples: squirrel, dog, vaccine, electricity. Stock photo search term.",
     "sections": [
       {
         "heading": "Short hooky claim (5-10 words)",

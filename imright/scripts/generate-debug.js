@@ -1044,7 +1044,7 @@ ${renderRefsList(refs, 0, searchTerm)}
       totalCost += row.cost ?? 0;
       totalTime += row.timeMs ?? 0;
       html += `            <tr>
-              <td>${row.stage}/5</td>
+              <td>${row.stage}/${stages.length > 0 ? Math.max(...stages.map((s) => s.stage)) : 6}</td>
               <td>${escapeHtml((row.name ?? '').replace(/\.\.\.$/, ''))}</td>
               <td>${(row.inputTokens ?? 0).toLocaleString()}</td>
               <td>${(row.outputTokens ?? 0).toLocaleString()}</td>
@@ -1074,7 +1074,7 @@ ${renderRefsList(refs, 0, searchTerm)}
     if (!content || typeof content !== 'string') return '';
     const trimmed = content.trim();
     if (!trimmed) return '';
-    const jsonMatch = trimmed.match(/Source material[^\n]*\n([\s\S]*?)\n\nWrite using/);
+    const jsonMatch = trimmed.match(/Source material[^\n]*\n([\s\S]*?)(?:\n\n|$)/);
     if (jsonMatch) {
       try {
         const parsed = JSON.parse(jsonMatch[1].trim());

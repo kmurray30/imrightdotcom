@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import yaml from 'yaml';
 import { callGrok } from '../utils/grok.js';
+import { fetchImage, downloadImage } from '../utils/pixabay.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -132,26 +133,97 @@ function buildUrlToIndex(citations) {
   return urlToIndex;
 }
 
+/**
+ * Fetch images from Pixabay for article photo_queries and download to local images dir.
+ * Runs fetches concurrently. Returns Map of key -> filename for successfully downloaded images.
+ *
+ * @param {object} article - Parsed article with photo_query (top-level) and sections[].photo_query
+ * @param {string} slug - Filename-safe slug
+ * @param {string} projectRoot - Absolute path to project root
+ * @returns {Promise<Map<string, string>>} - Map of 'hero'|'section-0'|... -> filename (e.g. 'hero.jpg')
+ */
+export async function fetchAndDownloadImages(article, slug, projectRoot) {
+  const imagePaths = new Map();
+  const imagesDir = path.join(projectRoot, 'tabloid_generator', 'images', slug);
+
+  const queries = [];
+
+  const heroQuery = article?.photo_query;
+  if (heroQuery && typeof heroQuery === 'string' && heroQuery.trim()) {
+    queries.push({ key: 'hero', query: heroQuery.trim() });
+  }
+
+  const sections = article?.sections ?? [];
+  sections.forEach((section, index) => {
+    const sectionQuery = section?.photo_query;
+    if (sectionQuery && typeof sectionQuery === 'string' && sectionQuery.trim()) {
+      queries.push({ key: `section-${index}`, query: sectionQuery.trim() });
+    }
+  });
+
+  if (queries.length === 0) return imagePaths;
+
+  // Fetch all image URLs concurrently
+  const fetchResults = await Promise.all(
+    queries.map(async ({ key, query }) => {
+      try {
+        const url = await fetchImage(query);
+        return { key, url };
+      } catch (err) {
+        console.error(`Pixabay fetch failed for "${query}":`, err.message);
+        return { key, url: null };
+      }
+    })
+  );
+
+  // Download all successfully fetched images concurrently
+  const downloadPromises = fetchResults
+    .filter((r) => r.url)
+    .map(async ({ key, url }) => {
+      const ext = url?.match(/\.(jpg|jpeg|png|webp)/i)?.[1] ?? 'jpg';
+      const filename = `${key}.${ext}`;
+      const destPath = path.join(imagesDir, filename);
+      try {
+        await downloadImage(url, destPath);
+        return { key, filename };
+      } catch (err) {
+        console.error(`Download failed for ${key}:`, err.message);
+        return null;
+      }
+    });
+
+  const downloadResults = await Promise.all(downloadPromises);
+  for (const result of downloadResults) {
+    if (result) imagePaths.set(result.key, result.filename);
+  }
+
+  return imagePaths;
+}
+
 /** Generate self-contained tabloid-style HTML. */
-function generateHtml(selected, topic, slug = null, citations = [], idToUrl = null) {
+function generateHtml(selected, topic, slug = null, citations = [], idToUrl = null, imagePaths = null) {
   const headline = selected.headline ?? 'TRUTH FLASH!';
   const intro = selected.intro;
   const conclusion = selected.conclusion;
   const sections = selected.sections ?? [];
   const urlToIndex = buildUrlToIndex(citations);
   const debugPageUrl = slug ? `../../imright/debug/${slug}.html` : null;
+  const imageMap = imagePaths instanceof Map ? imagePaths : new Map();
 
-  // Intro is written after sections by Grok but rendered first in the article
+  // Intro is written after sections by Grok but rendered first in the article, in its own section
   const introHtml = intro
     ? (() => {
         const introParagraphs = Array.isArray(intro) ? intro : [intro];
-        return introParagraphs
+        const paragraphsHtml = introParagraphs
           .map((paragraph) => {
             const rawText = typeof paragraph === 'string' ? paragraph : (paragraph?.text ?? '');
             const processedHtml = processParagraphWithLinks(rawText, idToUrl, urlToIndex, debugPageUrl);
-            return `    <p class="article__intro">${processedHtml}</p>`;
+            return `      <p class="article__intro">${processedHtml}</p>`;
           })
           .join('\n');
+        return `    <section class="article__intro-section">
+${paragraphsHtml}
+    </section>`;
       })()
     : '';
 
@@ -159,7 +231,7 @@ function generateHtml(selected, topic, slug = null, citations = [], idToUrl = nu
   const sectionsHtml =
     sections.length > 0
       ? sections
-          .map((section) => {
+          .map((section, sectionIndex) => {
             const heading = section.heading ?? '';
             const paragraphs = section.paragraphs ?? [];
             const paragraphsHtml = paragraphs
@@ -281,13 +353,18 @@ ${paragraphsHtml}
       box-shadow: 0 2px 8px rgba(0,0,0,0.06);
       margin-bottom: 2rem;
     }
+    .article__intro-section {
+      margin-bottom: 2rem;
+      padding-bottom: 1.5rem;
+      border-bottom: 1px solid #e5e5e7;
+    }
     .article__intro {
       font-size: 1.15rem;
       margin: 0 0 1.5rem 0;
       color: #1d1d1f;
       line-height: 1.65;
     }
-    .article__intro:last-of-type { margin-bottom: 2rem; padding-bottom: 1.5rem; border-bottom: 1px solid #e5e5e7; }
+    .article__intro:last-of-type { margin-bottom: 0; }
     .article__section {
       margin-bottom: 2rem;
       padding-bottom: 2rem;
@@ -337,6 +414,19 @@ ${paragraphsHtml}
       text-decoration: none;
     }
     .ref-num:hover { color: #0f65ef; }
+    .article__hero-image {
+      margin: 0 0 1.5rem 0;
+    }
+    .article__hero-image img,
+    .article__section-image img {
+      width: 100%;
+      max-height: 360px;
+      object-fit: cover;
+      border-radius: 8px;
+    }
+    .article__section-image {
+      margin: 0 0 1rem 0;
+    }
   </style>
 </head>
 <body>
@@ -352,7 +442,12 @@ ${paragraphsHtml}
       <h1 class="headline">${escapeHtml(headline)}</h1>
     </div>
     <article class="article">
-${introHtml}
+${(() => {
+  const heroFilename = imageMap.get('hero');
+  return heroFilename && slug
+    ? `    <figure class="article__hero-image"><img src="../images/${slug}/${heroFilename}" alt="" loading="lazy"></figure>\n`
+    : '';
+})()}${introHtml}
 ${sectionsHtml}
 ${conclusionHtml}
     </article>
@@ -362,18 +457,17 @@ ${conclusionHtml}
 }
 
 /**
- * Generates a tabloid-style HTML page from extracted citations.
+ * Generates the article content via Grok (stage 5). Does not fetch images or render HTML.
  *
  * @param {string} claim - The topic/claim string
  * @param {object} extractedByTerm - Output from ref_extractor ({ [searchTerm]: [{ link, title, content }] })
  * @param {string} [slug] - Filename-safe slug for debug page link
- * @returns {Promise<string>} - HTML string
+ * @returns {Promise<{ article, condensed, idToUrl, topic }>} - Data needed for HTML generation
  */
-export async function generate(claim, extractedByArticle, slug = null) {
+export async function generateArticle(claim, extractedByArticle, slug = null) {
   const allCitations = flattenAndDedupeCitations(extractedByArticle);
   const condensed = condenseForLlm(allCitations);
 
-  // Use numeric IDs instead of URLs to save tokens; resolve to URLs when rendering HTML
   const idToUrl = new Map(condensed.map((citation, index) => [index + 1, citation.link]));
   const candidateArguments = condensed.map((citation, index) => ({
     id: index + 1,
@@ -384,9 +478,7 @@ export async function generate(claim, extractedByArticle, slug = null) {
   const userMessage = `User's main claim (build the whole article around this): ${claim}
 
 Source material (use as evidence; each has id, text, title):
-${JSON.stringify(candidateArguments, null, 2)}
-
-Write using the two-step process. Headline and every section heading must advance the case for the user's main claim above. First list claims in chain_of_thought.claims, then write the article in article (headline + sections + intro + conclusion). Include intro after sections—a 2-4 sentence lead that hooks the reader. Include conclusion LAST—a 2-4 sentence closer that ties it all together. Embed links INLINE as [phrase](id) where id is the source's numeric id (1, 2, 3…). Never use full URLs—use only the id number. Return JSON with chain_of_thought and article.`;
+${JSON.stringify(candidateArguments, null, 2)}`;
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'user', content: userMessage },
@@ -402,15 +494,10 @@ Write using the two-step process. Headline and every section heading must advanc
   }
   const rawContent = await callGrok(messages);
 
-  // Write raw LLM output to output_raw/ for inspection before HTML generation
   if (slug) {
     const outputRawDir = path.join(__dirname, 'output_raw');
     fs.mkdirSync(outputRawDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(outputRawDir, `${slug}.txt`),
-      rawContent,
-      'utf8'
-    );
+    fs.writeFileSync(path.join(outputRawDir, `${slug}.txt`), rawContent, 'utf8');
   }
 
   let parsed;
@@ -420,10 +507,37 @@ Write using the two-step process. Headline and every section heading must advanc
     throw new Error(`Failed to parse JSON from Grok response: ${parseError.message}`);
   }
 
-  // Extract article from chain-of-thought structure; discard reasoning
-  const selected = parsed.article ?? parsed;
+  const article = parsed.article ?? parsed;
+  return { article, condensed, idToUrl, topic: claim };
+}
 
-  return generateHtml(selected, claim, slug, condensed, idToUrl);
+/**
+ * Fetches images and renders HTML (stage 6).
+ *
+ * @param {object} articleResult - From generateArticle: { article, condensed, idToUrl, topic }
+ * @param {string} slug - Filename-safe slug
+ * @param {string} projectRoot - Absolute path to project root
+ * @returns {Promise<string>} - HTML string
+ */
+export async function renderWithImages(articleResult, slug, projectRoot) {
+  const { article, condensed, idToUrl, topic } = articleResult;
+  const imagePaths = await fetchAndDownloadImages(article, slug, projectRoot);
+  return generateHtml(article, topic, slug, condensed, idToUrl, imagePaths);
+}
+
+/**
+ * Full generate: article + images + HTML. Convenience wrapper for single-call usage.
+ *
+ * @param {string} claim - The topic/claim string
+ * @param {object} extractedByTerm - Output from ref_extractor
+ * @param {string} [slug] - Filename-safe slug
+ * @param {string} [projectRoot] - Project root (required for image fetching)
+ * @returns {Promise<string>} - HTML string
+ */
+export async function generate(claim, extractedByArticle, slug = null, projectRoot = null) {
+  const articleResult = await generateArticle(claim, extractedByArticle, slug);
+  const root = projectRoot ?? path.resolve(__dirname, '..');
+  return renderWithImages(articleResult, slug, root);
 }
 
 /**
@@ -435,7 +549,7 @@ Write using the two-step process. Headline and every section heading must advanc
  * @returns {string} - HTML string
  * @throws {Error} - If output_raw or extracted files are missing
  */
-export function regenerateFromRaw(slug, projectRoot) {
+export async function regenerateFromRaw(slug, projectRoot) {
   const outputRawPath = path.join(__dirname, 'output_raw', `${slug}.txt`);
   const extractedPath = path.join(projectRoot, 'ref_extractor', 'extracted', `${slug}.yaml`);
 
@@ -489,5 +603,10 @@ export function regenerateFromRaw(slug, projectRoot) {
     }
   }
 
-  return generateHtml(selected, topic, slug, condensed, idToUrl);
+  const imagePaths =
+    selected?.photo_query || (selected?.sections ?? []).some((s) => s?.photo_query)
+      ? await fetchAndDownloadImages(selected, slug, projectRoot)
+      : new Map();
+
+  return generateHtml(selected, topic, slug, condensed, idToUrl, imagePaths);
 }
