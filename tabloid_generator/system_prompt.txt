@@ -23,10 +23,11 @@ Return strictly valid JSON with two top-level keys:
         ]
       }
     ],
-    "intro": "2-4 sentences that hook the reader and summarize the case. Written LAST so you can draw from everything above. Tee up what the article reveals—the energy of 'here's what they buried'."
+    "intro": "2-4 sentences that hook the reader and summarize the case. Written after sections so you can draw from everything above. Tee up what the article reveals—the energy of 'here's what they buried'.",
+    "conclusion": "2-4 sentences that close the case. Written LAST after intro. Tie it all together—reiterate the main claim, leave the reader convinced. Same tone: you uncovered it, here's the proof, they're not broadcasting it."
   }
 }
 
-Write intro LAST (after sections). It appears first in the final article. Make it a compelling lead that sets up the reveals to come.
+Write intro after sections (it appears first in the article). Write conclusion last (it appears at the end). Both should draw from the sections. Intro hooks; conclusion closes.
 
 Rules: Use [anchor](id) for every citation—id is a number, not a URL. No footnote numbers. No links array. No prose outside the JSON. Tone: you uncovered something they're not shouting about. Excited, "I found it" energy. Implicit, not literal.

@@ -157,9 +157,23 @@ function parseTabloidArticle(rawOutput) {
     return { heading, usedRefIds };
   });
 
+  const conclusion = article.conclusion;
+  const conclusionUsedRefIds = [];
+  if (conclusion) {
+    const conclusionParagraphs = Array.isArray(conclusion) ? conclusion : [conclusion];
+    for (const paragraph of conclusionParagraphs) {
+      const rawText = typeof paragraph === 'string' ? paragraph : paragraph?.text ?? '';
+      for (const id of extractUsedRefIdsFromText(rawText)) {
+        conclusionUsedRefIds.push(id);
+        allUsedRefIds.add(id);
+      }
+    }
+  }
+
   return {
     sections,
     introUsedRefIds,
+    conclusionUsedRefIds,
     allUsedRefIds: Array.from(allUsedRefIds),
   };
 }
@@ -583,6 +597,23 @@ function buildHtml(data) {
               <div class="overview-arg-title">${escapeHtml(section.heading)}</div>
 `;
     for (const refNum of usedRefIds) {
+      const citation = refNumToCitation.get(refNum);
+      const titleDisplay = citation
+        ? escapeHtml(citation.title || citation.link)
+        : `Ref ${refNum}`;
+      const tooltipContent = citation?.content ? escapeHtml(citation.content) : 'No excerpt.';
+      html += `              <div class="overview-ref">[${refNum}] <a href="${citation ? escapeHtml(citation.link) : '#'}" target="_blank" rel="noopener">${titleDisplay}</a><span class="overview-ref-tooltip">${tooltipContent}</span></div>
+`;
+    }
+    html += `            </div>
+`;
+  }
+  if (tabloidArticle?.conclusionUsedRefIds?.length > 0) {
+    const conclusionRefIds = [...new Set(tabloidArticle.conclusionUsedRefIds)];
+    html += `            <div class="overview-arg">
+              <div class="overview-arg-title">Conclusion</div>
+`;
+    for (const refNum of conclusionRefIds) {
       const citation = refNumToCitation.get(refNum);
       const titleDisplay = citation
         ? escapeHtml(citation.title || citation.link)
@@ -1121,7 +1152,8 @@ ${renderRefsList(refs, 0, searchTerm)}
 `;
   const hasOverview =
     (tabloidArticle?.introUsedRefIds?.length > 0) ||
-    (tabloidArticle?.sections?.length > 0);
+    (tabloidArticle?.sections?.length > 0) ||
+    (tabloidArticle?.conclusionUsedRefIds?.length > 0);
   if (hasOverview) {
     if (tabloidArticle?.introUsedRefIds?.length > 0) {
       const introRefIds = [...new Set(tabloidArticle.introUsedRefIds)];
@@ -1172,6 +1204,38 @@ ${renderRefsList(refs, 0, searchTerm)}
         html += `                <div class="ref-item">
                   <div class="ref-toggle collapsed">
                     <strong>[${refNum}]</strong> <a href="${citation ? escapeHtml(citation.link) : '#'}" target="_blank" rel="noopener" id="${refId}">${titleDisplay}</a>
+                  </div>
+                  <div class="ref-details collapsed">
+                    ${detailsContent}
+                  </div>
+                </div>
+`;
+      }
+      html += `              </div>
+            </div>
+`;
+    }
+    if (tabloidArticle?.conclusionUsedRefIds?.length > 0) {
+      const conclusionRefIds = [...new Set(tabloidArticle.conclusionUsedRefIds)];
+      const conclusionRefsLabel = conclusionRefIds.length === 1 ? 'ref' : 'refs';
+      html += `            <div class="ref-item">
+              <div class="term-header">
+                <div class="term-toggle collapsed">Conclusion (${conclusionRefIds.length} ${conclusionRefsLabel})</div>
+                <span class="term-collapse-btn"><button type="button" class="collapse-expand-all-btn" data-scope="term">Collapse all</button></span>
+              </div>
+              <div class="term-content collapsed">
+`;
+      for (const refNum of conclusionRefIds) {
+        const citation = refNumToCitation.get(refNum);
+        const titleDisplay = citation
+          ? escapeHtml(citation.title || citation.link)
+          : `Ref ${refNum}`;
+        const detailsContent = citation?.content
+          ? `<p class="top-ref__sentence">${escapeHtml(citation.content)}</p>`
+          : '<p class="no-data">No excerpt.</p>';
+        html += `                <div class="ref-item">
+                  <div class="ref-toggle collapsed">
+                    <strong>[${refNum}]</strong> <a href="${citation ? escapeHtml(citation.link) : '#'}" target="_blank" rel="noopener">${titleDisplay}</a>
                   </div>
                   <div class="ref-details collapsed">
                     ${detailsContent}

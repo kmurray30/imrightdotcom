@@ -135,11 +135,12 @@ function buildUrlToIndex(citations) {
 function generateHtml(selected, topic, slug = null, citations = [], idToUrl = null) {
   const headline = selected.headline ?? 'TRUTH FLASH!';
   const intro = selected.intro;
+  const conclusion = selected.conclusion;
   const sections = selected.sections ?? [];
   const urlToIndex = buildUrlToIndex(citations);
   const debugPageUrl = slug ? `../../imright/debug/${slug}.html` : null;
 
-  // Intro is written last by Grok (for context) but rendered first in the article
+  // Intro is written after sections by Grok but rendered first in the article
   const introHtml = intro
     ? (() => {
         const introParagraphs = Array.isArray(intro) ? intro : [intro];
@@ -180,6 +181,20 @@ ${paragraphsHtml}
             return `    <p class="article__paragraph">${processedHtml}</p>`;
           })
           .join('\n');
+
+  // Conclusion appears at the end of the article
+  const conclusionHtml = conclusion
+    ? (() => {
+        const conclusionParagraphs = Array.isArray(conclusion) ? conclusion : [conclusion];
+        return conclusionParagraphs
+          .map((paragraph) => {
+            const rawText = typeof paragraph === 'string' ? paragraph : (paragraph?.text ?? '');
+            const processedHtml = processParagraphWithLinks(rawText, idToUrl, urlToIndex, debugPageUrl);
+            return `    <p class="article__conclusion">${processedHtml}</p>`;
+          })
+          .join('\n');
+      })()
+    : '';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -243,6 +258,12 @@ ${paragraphsHtml}
       color: #ddd;
     }
     .article__intro:last-of-type { margin-bottom: 2rem; }
+    .article__conclusion {
+      font-size: 1.1rem;
+      margin: 0 0 1.5rem 0;
+      text-align: justify;
+    }
+    .article__conclusion:last-of-type { margin-bottom: 0; margin-top: 2rem; }
     .article__paragraph {
       margin: 0 0 1.25rem 0;
       text-align: justify;
@@ -267,6 +288,11 @@ ${paragraphsHtml}
     }
     .article__paragraph a:hover,
     .article__intro a:hover { text-decoration: underline; }
+    .article__conclusion a {
+      color: #6df4a1;
+      text-decoration: none;
+    }
+    .article__conclusion a:hover { text-decoration: underline; }
     .ref-num {
       font-size: 0.75em;
       color: #888;
@@ -287,6 +313,7 @@ ${paragraphsHtml}
     <article class="article">
 ${introHtml}
 ${sectionsHtml}
+${conclusionHtml}
     </article>
   </div>
 </body>
@@ -318,7 +345,7 @@ export async function generate(claim, extractedByArticle, slug = null) {
 Source material (use as evidence; each has id, text, title):
 ${JSON.stringify(candidateArguments, null, 2)}
 
-Write using the two-step process. Headline and every section heading must advance the case for the user's main claim above. First list claims in chain_of_thought.claims, then write the article in article (headline + sections + intro). Include intro LAST—a 2-4 sentence lead that hooks the reader and summarizes the case. Embed links INLINE as [phrase](id) where id is the source's numeric id (1, 2, 3…). Never use full URLs—use only the id number. Return JSON with chain_of_thought and article.`;
+Write using the two-step process. Headline and every section heading must advance the case for the user's main claim above. First list claims in chain_of_thought.claims, then write the article in article (headline + sections + intro + conclusion). Include intro after sections—a 2-4 sentence lead that hooks the reader. Include conclusion LAST—a 2-4 sentence closer that ties it all together. Embed links INLINE as [phrase](id) where id is the source's numeric id (1, 2, 3…). Never use full URLs—use only the id number. Return JSON with chain_of_thought and article.`;
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'user', content: userMessage },
