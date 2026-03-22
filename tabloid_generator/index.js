@@ -205,112 +205,152 @@ ${paragraphsHtml}
   <title>${escapeHtml(headline)}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Caudex:ital,wght@0,400;0,700;1,400;1,700&family=Impact,sans-serif&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100vh;
-      font-family: Caudex, Georgia, serif;
-      background: #1a1a2e;
-      color: #eee;
+      font-family: "Source Sans 3", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f5f5f7;
+      color: #1d1d1f;
       line-height: 1.6;
+      font-size: 17px;
     }
-    .container { max-width: 720px; margin: 0 auto; padding: 2rem; }
-    .masthead {
-      text-align: center;
+    .site-header {
+      background: #fff;
+      border-bottom: 1px solid #e5e5e7;
+      padding: 1rem 0;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+    .site-header__inner {
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 0 1.25rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .site-header__logo {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #ee3322;
+      letter-spacing: -0.02em;
+      text-decoration: none;
+    }
+    .site-header__logo:hover { color: #c4291c; }
+    .container {
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 2rem 1.25rem 3rem;
+    }
+    .article-hero {
       margin-bottom: 2rem;
-      padding-bottom: 1rem;
-      border-bottom: 3px solid #e63946;
     }
-    .masthead__label {
-      font-size: 0.9rem;
-      letter-spacing: 0.2em;
-      color: #e63946;
+    .article-hero__topic {
+      font-size: 0.75rem;
+      font-weight: 600;
       text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #0f65ef;
       margin-bottom: 0.5rem;
     }
     .headline {
-      font-family: Impact, "Arial Black", sans-serif;
-      font-size: 2.2rem;
+      font-size: 2.25rem;
+      font-weight: 700;
       line-height: 1.2;
-      color: #fff;
-      margin: 0;
+      color: #1d1d1f;
+      margin: 0 0 0.75rem 0;
+      letter-spacing: -0.02em;
     }
-    .subtitle {
-      font-size: 0.95rem;
-      color: #aaa;
-      margin-top: 0.5rem;
-    }
-    .masthead__debug {
+    .site-header__debug {
       font-size: 0.8rem;
-      margin-top: 1rem;
     }
-    .masthead__debug a {
-      color: #6df4a1;
+    .site-header__debug a {
+      color: #6e6e73;
       text-decoration: none;
     }
-    .masthead__debug a:hover { text-decoration: underline; }
-    .article { margin: 2rem 0; }
+    .site-header__debug a:hover { color: #0f65ef; text-decoration: underline; }
+    .article {
+      background: #fff;
+      border-radius: 12px;
+      padding: 2rem 1.75rem;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+      margin-bottom: 2rem;
+    }
     .article__intro {
-      font-size: 1.1rem;
+      font-size: 1.15rem;
       margin: 0 0 1.5rem 0;
-      text-align: justify;
-      color: #ddd;
+      color: #1d1d1f;
+      line-height: 1.65;
     }
-    .article__intro:last-of-type { margin-bottom: 2rem; }
-    .article__conclusion {
-      font-size: 1.1rem;
-      margin: 0 0 1.5rem 0;
-      text-align: justify;
+    .article__intro:last-of-type { margin-bottom: 2rem; padding-bottom: 1.5rem; border-bottom: 1px solid #e5e5e7; }
+    .article__section {
+      margin-bottom: 2rem;
+      padding-bottom: 2rem;
+      border-bottom: 1px solid #e5e5e7;
     }
-    .article__conclusion:last-of-type { margin-bottom: 0; margin-top: 2rem; }
+    .article__section:last-of-type { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+    .article__heading {
+      font-size: 1.35rem;
+      font-weight: 700;
+      color: #1d1d1f;
+      margin: 0 0 1rem 0;
+      line-height: 1.35;
+      letter-spacing: -0.01em;
+    }
     .article__paragraph {
       margin: 0 0 1.25rem 0;
-      text-align: justify;
+      color: #424245;
+      line-height: 1.65;
     }
     .article__paragraph:last-of-type { margin-bottom: 0; }
-    .article__section {
-      margin-bottom: 2.5rem;
+    .article__conclusion {
+      font-size: 1.15rem;
+      margin: 2rem 0 0 0;
+      padding-top: 1.5rem;
+      border-top: 1px solid #e5e5e7;
+      color: #1d1d1f;
+      line-height: 1.65;
     }
-    .article__section:last-child { margin-bottom: 0; }
-    .article__heading {
-      font-family: Impact, "Arial Black", sans-serif;
-      font-size: 1.5rem;
-      font-weight: 700;
-      color: #fff;
-      margin: 0 0 1rem 0;
-      line-height: 1.3;
-    }
+    .article__conclusion:last-of-type { margin-bottom: 0; }
     .article__paragraph a,
-    .article__intro a {
-      color: #6df4a1;
+    .article__intro a,
+    .article__conclusion a {
+      color: #0f65ef;
       text-decoration: none;
+      font-weight: 500;
     }
     .article__paragraph a:hover,
-    .article__intro a:hover { text-decoration: underline; }
-    .article__conclusion a {
-      color: #6df4a1;
-      text-decoration: none;
+    .article__intro a:hover,
+    .article__conclusion a:hover {
+      text-decoration: underline;
+      color: #0047ab;
     }
-    .article__conclusion a:hover { text-decoration: underline; }
     .ref-num {
-      font-size: 0.75em;
-      color: #888;
-      margin-left: 0.1em;
+      font-size: 0.7em;
+      color: #8e8e93;
+      margin-left: 0.15em;
       text-decoration: none;
     }
-    .ref-num:hover { color: #6df4a1; }
+    .ref-num:hover { color: #0f65ef; }
   </style>
 </head>
 <body>
+  <header class="site-header">
+    <div class="site-header__inner">
+      <a href="#" class="site-header__logo">TruthFeed</a>
+      ${slug ? `<span class="site-header__debug"><a href="../../imright/debug/${escapeHtml(slug)}.html" target="_blank" rel="noopener">Debug</a></span>` : ''}
+    </div>
+  </header>
   <div class="container">
-    <header class="masthead">
-      <p class="masthead__label">FACTS NEWS</p>
+    <div class="article-hero">
+      <p class="article-hero__topic">${escapeHtml(topic)}</p>
       <h1 class="headline">${escapeHtml(headline)}</h1>
-      <p class="subtitle">${escapeHtml(topic)}</p>
-      ${slug ? `<p class="masthead__debug"><a href="../../imright/debug/${escapeHtml(slug)}.html" target="_blank" rel="noopener">Pipeline debug</a></p>` : ''}
-    </header>
+    </div>
     <article class="article">
 ${introHtml}
 ${sectionsHtml}
