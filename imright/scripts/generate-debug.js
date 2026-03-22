@@ -164,6 +164,26 @@ function parseTabloidArticle(rawOutput) {
   };
 }
 
+/** Parse conspirator filter raw output: all arguments with keep + search_queries. */
+function parseConspiratorFilterOutput(rawOutput) {
+  if (!rawOutput || typeof rawOutput !== 'string') return null;
+  let content = rawOutput.trim();
+  const codeBlockMatch = content.match(/^```(?:json)?\s*([\s\S]*?)```\s*$/);
+  if (codeBlockMatch) content = codeBlockMatch[1].trim();
+  try {
+    const parsed = JSON.parse(content);
+    const arr = Array.isArray(parsed) ? parsed : parsed?.angles ?? [];
+    return arr.map((item) => ({
+      argument: item.argument ?? '',
+      search_queries: item.search_queries ?? [],
+      keep: item.keep === true,
+      filtering_thought: item.filtering_thought ?? null,
+    }));
+  } catch {
+    return null;
+  }
+}
+
 /** Get deduped article titles from search_query_article_titles. */
 function dedupedArticles(searchQueryArticleTitles) {
   const seen = new Set();
@@ -266,6 +286,7 @@ function buildHtml(data) {
   const tabloidStage = stages.find((s) => s.stage === 5);
 
   const navItems = [
+    { id: 'overview', label: 'Overview' },
     {
       id: 'conspirator',
       label: `Conspirator (${conspiratorArgCount} arguments, ${conspiratorSearchTermCount} search terms)`,
@@ -408,6 +429,60 @@ function buildHtml(data) {
       max-height: 30rem;
       overflow-y: auto;
     }
+    .overview-panes {
+      display: flex;
+      gap: 2rem;
+      position: relative;
+      min-height: 200px;
+      padding-bottom: 1rem;
+    }
+    .overview-pane {
+      flex: 1;
+      min-width: 0;
+    }
+    .overview-pane h3 { font-size: 0.95rem; margin: 0 0 0.5rem 0; color: #aaa; }
+    .overview-arg { margin-bottom: 1rem; }
+    .overview-arg-title { font-weight: 600; margin-bottom: 0.25rem; font-size: 0.9rem; }
+    .overview-arg-badge { font-size: 0.75em; padding: 0.1em 0.4em; border-radius: 3px; margin-left: 0.5em; }
+    .overview-arg-badge.kept { background: #2d4a2d; color: #6df4a1; }
+    .overview-arg-badge.filtered { background: #4a2d2d; color: #e63946; }
+    .overview-term { margin-left: 1rem; margin-bottom: 0.5rem; font-size: 0.85rem; }
+    .overview-term-title { color: #bbb; margin-bottom: 0.25rem; }
+    .overview-ref a { color: #6df4a1; }
+    .overview-ref {
+      margin-left: 1.5rem;
+      font-size: 0.8rem;
+      padding: 0.2rem 0;
+      position: relative;
+    }
+    .overview-ref .overview-ref-tooltip {
+      display: none;
+      position: absolute;
+      left: 100%;
+      top: 0;
+      margin-left: 0.5rem;
+      padding: 0.5rem 0.75rem;
+      background: #0d0d14;
+      border: 1px solid #444;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      line-height: 1.4;
+      color: #ccc;
+      max-width: 320px;
+      max-height: 200px;
+      overflow-y: auto;
+      z-index: 10;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    }
+    .overview-ref:hover .overview-ref-tooltip {
+      display: block;
+    }
+    #overview-right .overview-ref .overview-ref-tooltip {
+      left: auto;
+      right: 100%;
+      margin-left: 0;
+      margin-right: 0.5rem;
+    }
   </style>
 </head>
 <body>
@@ -423,6 +498,106 @@ function buildHtml(data) {
         ${navItems.map((item) => `<li><a href="#${item.id}">${escapeHtml(item.label)}</a></li>`).join('\n        ')}
       </ul>
     </nav>
+`;
+
+  // Section: Overview (two-pane waterfall)
+  const overviewArgs = parseConspiratorFilterOutput(conspiratorRawOutput) ?? angles.map((a) => ({
+    argument: a.argument ?? '',
+    search_queries: a.search_queries ?? [],
+    keep: true,
+  }));
+  const overviewSectionId = 'overview';
+  html += `
+    <section id="${overviewSectionId}">
+      <h2 class="section-toggle">Overview</h2>
+      <div class="section-content">
+        <div class="overview-panes" id="overview-panes">
+          <div class="overview-pane" id="overview-left">
+            <h3>Sources</h3>
+`;
+  for (let argIdx = 0; argIdx < overviewArgs.length; argIdx++) {
+    const overviewArg = overviewArgs[argIdx];
+    const badge = overviewArg.keep
+      ? '<span class="overview-arg-badge kept">KEPT</span>'
+      : '<span class="overview-arg-badge filtered">FILTERED</span>';
+    html += `            <div class="overview-arg">
+              <div class="overview-arg-title">${escapeHtml(overviewArg.argument)}${badge}</div>
+`;
+    for (let termIdx = 0; termIdx < (overviewArg.search_queries ?? []).length; termIdx++) {
+      const searchTerm = overviewArg.search_queries[termIdx];
+      const refs = refsPerTerm[searchTerm] ?? [];
+      const validCount = refs.filter((r) => !r.dead).length;
+      const usedCount = refs.filter(
+        (r) => !r.dead && usedRefIdsSet.has(urlToRefNum.get(r.link))
+      ).length;
+      const countsLabel =
+        refs.length > 0
+          ? `(${refs.length} refs, ${validCount} valid, ${usedCount} used)`
+          : '(not searched)';
+      html += `              <div class="overview-term">
+                <div class="overview-term-title">${escapeHtml(searchTerm)} ${countsLabel}</div>
+`;
+      for (const ref of refs) {
+        const refNum = ref.dead ? null : urlToRefNum.get(ref.link);
+        const titleDisplay = ref.dead ? escapeHtml(ref.link) : escapeHtml(ref.title || ref.link);
+        const deadBadge = ref.dead ? ` <span class="ref-dead">DEAD</span>` : '';
+        const usedBadge =
+          refNum != null && usedRefIdsSet.has(refNum)
+            ? ' <span class="ref-used">USED</span>'
+            : '';
+        const tooltipContent = escapeHtml(ref.content || 'No excerpt.');
+        html += `                <div class="overview-ref">${refNum != null ? `[${refNum}] ` : ''}<a href="${escapeHtml(ref.link ?? '#')}" target="_blank" rel="noopener">${titleDisplay}</a>${deadBadge}${usedBadge}<span class="overview-ref-tooltip">${tooltipContent}</span></div>
+`;
+      }
+      html += `              </div>
+`;
+    }
+    html += `            </div>
+`;
+  }
+  html += `          </div>
+          <div class="overview-pane" id="overview-right">
+            <h3>Final article</h3>
+`;
+  if (tabloidArticle?.introUsedRefIds?.length > 0) {
+    const introRefIds = [...new Set(tabloidArticle.introUsedRefIds)];
+    html += `            <div class="overview-arg">
+              <div class="overview-arg-title">Intro</div>
+`;
+    for (const refNum of introRefIds) {
+      const citation = refNumToCitation.get(refNum);
+      const titleDisplay = citation
+        ? escapeHtml(citation.title || citation.link)
+        : `Ref ${refNum}`;
+      const tooltipContent = citation?.content ? escapeHtml(citation.content) : 'No excerpt.';
+      html += `              <div class="overview-ref">[${refNum}] <a href="${citation ? escapeHtml(citation.link) : '#'}" target="_blank" rel="noopener">${titleDisplay}</a><span class="overview-ref-tooltip">${tooltipContent}</span></div>
+`;
+    }
+    html += `            </div>
+`;
+  }
+  for (const section of tabloidArticle?.sections ?? []) {
+    const usedRefIds = [...new Set(section.usedRefIds ?? [])];
+    if (usedRefIds.length === 0) continue;
+    html += `            <div class="overview-arg">
+              <div class="overview-arg-title">${escapeHtml(section.heading)}</div>
+`;
+    for (const refNum of usedRefIds) {
+      const citation = refNumToCitation.get(refNum);
+      const titleDisplay = citation
+        ? escapeHtml(citation.title || citation.link)
+        : `Ref ${refNum}`;
+      const tooltipContent = citation?.content ? escapeHtml(citation.content) : 'No excerpt.';
+      html += `              <div class="overview-ref">[${refNum}] <a href="${citation ? escapeHtml(citation.link) : '#'}" target="_blank" rel="noopener">${titleDisplay}</a><span class="overview-ref-tooltip">${tooltipContent}</span></div>
+`;
+    }
+    html += `            </div>
+`;
+  }
+  html += `          </div>
+        </div>
+      </div>
+    </section>
 `;
 
   /** Format message content for display: preserve newlines, pretty-print JSON when detectable. */
