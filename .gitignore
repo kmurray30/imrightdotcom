@@ -5,6 +5,7 @@ env.local
 .env.local
 conspirator/conspiracies/
 conspirator/raw_input/
+conspirator/raw_output/
 tabloid_generator/raw_input/
 wiki_searcher/wikis-fetched/
 wiki_filterer/wikis-filtered/

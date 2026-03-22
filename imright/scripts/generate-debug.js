@@ -252,6 +252,7 @@ function buildHtml(data) {
 
   const linkStats = data.linkStats;
   const conspiratorRawInput = data.conspiratorRawInput;
+  const conspiratorRawOutput = data.conspiratorRawOutput;
   const tabloidRawInput = data.tabloidRawInput;
   const tabloidRawOutput = data.tabloidRawOutput;
 
@@ -499,7 +500,28 @@ function buildHtml(data) {
   html += `          </div>
         </div>
         <div class="ref-item">
-          <div class="term-toggle">Output (${conspiratorOutputTokens} tokens)</div>
+          <div class="term-toggle collapsed">Output (${conspiratorOutputTokens} tokens)</div>
+          <div class="term-content collapsed">
+`;
+  if (conspiratorRawOutput) {
+    let outputFormatted = conspiratorRawOutput;
+    try {
+      let content = conspiratorRawOutput.trim();
+      const codeBlockMatch = content.match(/^```(?:json)?\s*([\s\S]*?)```\s*$/);
+      if (codeBlockMatch) content = codeBlockMatch[1].trim();
+      const parsed = JSON.parse(content);
+      outputFormatted = JSON.stringify(parsed, null, 2);
+    } catch {
+      // Keep as-is (plain text)
+    }
+    html += `            <pre class="grok-pre">${escapeHtml(outputFormatted)}</pre>\n`;
+  } else {
+    html += `            <p class="no-data">No raw output (re-run pipeline to capture).</p>\n`;
+  }
+  html += `          </div>
+        </div>
+        <div class="ref-item">
+          <div class="term-toggle">Arguments</div>
           <div class="term-content">
 `;
   if (angles.length > 0) {
@@ -1056,6 +1078,7 @@ async function main() {
   const runStats = loadJson(`run-stats/${slug}.json`);
   const linkStats = loadJson(`ref_extractor/link_stats/${slug}.json`);
   const conspiratorRawInput = loadJson(`conspirator/raw_input/${slug}.json`);
+  const conspiratorRawOutput = loadRawText(`conspirator/raw_output/${slug}.txt`);
   const tabloidRawInput = loadJson(`tabloid_generator/raw_input/${slug}.json`);
   const tabloidRawOutput = loadRawText(`tabloid_generator/output_raw/${slug}.txt`);
 
@@ -1068,6 +1091,7 @@ async function main() {
     runStats,
     linkStats,
     conspiratorRawInput,
+    conspiratorRawOutput,
     tabloidRawInput,
     tabloidRawOutput,
   };

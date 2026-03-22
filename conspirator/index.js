@@ -73,6 +73,15 @@ export async function generateAngles(topic, options = {}) {
       ];
       rawInputData.filter = filterMessages;
       const filterRawContent = await callGrok(filterMessages);
+      if (slug) {
+        const rawOutputDir = path.join(__dirname, 'raw_output');
+        fs.mkdirSync(rawOutputDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(rawOutputDir, `${slug}.txt`),
+          filterRawContent,
+          'utf8'
+        );
+      }
       const filterParsed = parseJsonResponse(filterRawContent);
       rawFiltered = Array.isArray(filterParsed) ? filterParsed : (filterParsed.angles ?? []);
     } catch (filterError) {
