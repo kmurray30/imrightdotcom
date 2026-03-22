@@ -84,7 +84,7 @@ async function main() {
   }
 
   const parsedYaml = yaml.parse(fs.readFileSync(yamlPath, 'utf8'));
-  const html = await generate(claim, parsedYaml);
+  const html = await generate(claim, parsedYaml, slug);
 
   const outputDir = path.join(__dirname, 'output');
   const outputPath = path.join(outputDir, `${slug}.html`);

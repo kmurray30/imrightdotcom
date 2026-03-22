@@ -9,6 +9,7 @@ wiki_filterer/wikis-filtered/
 ref_extractor/extracted/
 ref_extractor/link_stats/
 tabloid_generator/output/
+tabloid_generator/output_raw/
 run-stats/
 misc_scripts/link_validation_output/
 imright/debug/

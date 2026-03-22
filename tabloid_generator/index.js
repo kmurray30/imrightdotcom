@@ -288,6 +288,17 @@ Write using the two-step process. Headline and every section heading must advanc
     { role: 'user', content: userMessage },
   ]);
 
+  // Write raw LLM output to output_raw/ for inspection before HTML generation
+  if (slug) {
+    const outputRawDir = path.join(__dirname, 'output_raw');
+    fs.mkdirSync(outputRawDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(outputRawDir, `${slug}.txt`),
+      rawContent,
+      'utf8'
+    );
+  }
+
   let parsed;
   try {
     parsed = parseJsonResponse(rawContent);
