@@ -8,6 +8,7 @@ conspirator/raw_input/
 conspirator/raw_output/
 tabloid_generator/raw_input/
 wiki_searcher/wikis-fetched/
+wiki_searcher/images/
 wiki_filterer/wikis-filtered/
 ref_extractor/extracted/
 ref_extractor/link_stats/
