@@ -513,7 +513,7 @@ function buildHtml(data) {
       <div class="section-content">
         <div class="overview-panes" id="overview-panes">
           <div class="overview-pane" id="overview-left">
-            <h3>Sources</h3>
+            <h3>Original arguments</h3>
 `;
   for (let argIdx = 0; argIdx < overviewArgs.length; argIdx++) {
     const overviewArg = overviewArgs[argIdx];
@@ -557,7 +557,7 @@ function buildHtml(data) {
   }
   html += `          </div>
           <div class="overview-pane" id="overview-right">
-            <h3>Final article</h3>
+            <h3>Final arguments</h3>
 `;
   if (tabloidArticle?.introUsedRefIds?.length > 0) {
     const introRefIds = [...new Set(tabloidArticle.introUsedRefIds)];
