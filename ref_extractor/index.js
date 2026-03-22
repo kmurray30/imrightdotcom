@@ -33,15 +33,26 @@ function uniqueCitationKey(citation) {
 
 /**
  * Check multiple URLs concurrently (no delay).
+ * Returns array of { url, linkStatus, issueType, detail, timeMs }.
  */
 async function checkUrlsConcurrent(urls, options) {
   const results = await Promise.all(
     urls.map(async (url) => {
+      const start = performance.now();
       const result = await checkUrl(url, options);
-      return { url, ...result };
+      const timeMs = performance.now() - start;
+      return { url, ...result, timeMs };
     })
   );
   return results;
+}
+
+/** Compute median of numeric array. */
+function median(values) {
+  if (!values?.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
 /**
@@ -71,6 +82,7 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
   const checkLinks = options.check_links ?? config.check_links ?? true;
   const minRefsPerTerm = options.min_refs_per_term ?? config.min_refs_per_term ?? 2;
   const linkCheckRetries = options.link_check_retries ?? config.link_check_retries ?? 1;
+  const slug = options.slug ?? null;
 
   const pages = wikiFilteredData?.pages ?? [];
   const searchQueryArticleTitles = wikiFilteredData?.search_query_article_titles ?? {};
@@ -83,6 +95,7 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
 
   const deadLinks = [];
   let retriesUsed = 0;
+  const linkAssessments = []; // { url, linkStatus, issueType, detail, timeMs, round }
 
   // Build term -> ranked citations
   const termToCitations = [];
@@ -114,22 +127,21 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
   }
 
   const seenKeys = new Set();
-  const byArticle = {};
+  const byTerm = {};
   const validityCache = new Map(); // url -> true | false
 
-  function addCitation(citation) {
+  function addCitation(citation, searchTerm, rank) {
     const key = uniqueCitationKey(citation);
     if (seenKeys.has(key)) return false;
     seenKeys.add(key);
 
-    const articleTitle = citation.article_title;
-    const section = citation.section;
-    if (!byArticle[articleTitle]) byArticle[articleTitle] = {};
-    if (!byArticle[articleTitle][section]) byArticle[articleTitle][section] = [];
-    byArticle[articleTitle][section].push({
+    if (!byTerm[searchTerm]) byTerm[searchTerm] = [];
+    byTerm[searchTerm].push({
       link: citation.link,
       title: citation.title,
       content: citation.content,
+      article_title: citation.article_title,
+      rank,
     });
     return true;
   }
@@ -146,11 +158,22 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
       if (citation.link) {
         batch.push(citation);
         count++;
-      } else if (addCitation(citation)) {
+      } else if (addCitation(citation, searchTerm, count + 1)) {
         count++;
       }
     }
     round1Candidates.push({ searchTerm, citations, batch });
+  }
+
+  const urlToTermRanks = new Map();
+  for (const { searchTerm, batch } of round1Candidates) {
+    batch.forEach((c, index) => {
+      if (c.link) {
+        const list = urlToTermRanks.get(c.link) ?? [];
+        list.push({ searchTerm, rank: index + 1 });
+        urlToTermRanks.set(c.link, list);
+      }
+    });
   }
 
   if (checkLinks) {
@@ -158,9 +181,13 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
     if (allUrlsRound1.length > 0) {
       const results = await checkUrlsConcurrent(allUrlsRound1, linkCheckOptions);
       for (const result of results) {
+        linkAssessments.push({ url: result.url, linkStatus: result.linkStatus, issueType: result.issueType, detail: result.detail, timeMs: result.timeMs, round: 1 });
         validityCache.set(result.url, result.linkStatus !== LinkStatus.INVALID);
         if (result.linkStatus === LinkStatus.INVALID) {
-          deadLinks.push({ url: result.url, reason: result.detail || result.issueType });
+          const termRanks = urlToTermRanks.get(result.url) ?? [];
+          for (const { searchTerm, rank } of termRanks) {
+            deadLinks.push({ url: result.url, reason: result.detail || result.issueType, searchTerm, rank });
+          }
         }
       }
     }
@@ -170,10 +197,12 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
   const failedTerms = [];
   for (const { searchTerm, citations, batch } of round1Candidates) {
     let validAddedForTerm = 0;
-    for (const citation of batch) {
+    for (let index = 0; index < batch.length; index++) {
+      const citation = batch[index];
       if (!citation.link) continue;
+      const rank = index + 1;
       const isValid = checkLinks ? validityCache.get(citation.link) : true;
-      if (isValid === true && addCitation(citation)) validAddedForTerm++;
+      if (isValid === true && addCitation(citation, searchTerm, rank)) validAddedForTerm++;
     }
     if (checkLinks && validAddedForTerm < minRefsPerTerm && citations.length > topMatchesPerTerm) {
       failedTerms.push({ searchTerm, citations });
@@ -185,17 +214,26 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
     retriesUsed = 1;
 
     const round2Candidates = [];
+    const round2UrlToTermRanks = new Map();
     for (const { searchTerm, citations } of failedTerms) {
       const round1Batch = round1Candidates.find((r) => r.searchTerm === searchTerm)?.batch ?? [];
       const round1Keys = new Set(round1Batch.map(uniqueCitationKey));
 
       const batch = [];
+      let position = round1Batch.length;
       for (const citation of citations) {
         if (batch.length >= topMatchesPerTerm) break;
         const key = uniqueCitationKey(citation);
         if (round1Keys.has(key) || seenKeys.has(key)) continue;
-        if (citation.link) batch.push(citation);
-        else if (addCitation(citation)) batch.push(citation);
+        position++;
+        if (citation.link) {
+          batch.push(citation);
+          const list = round2UrlToTermRanks.get(citation.link) ?? [];
+          list.push({ searchTerm, rank: position });
+          round2UrlToTermRanks.set(citation.link, list);
+        } else if (addCitation(citation, searchTerm, position)) {
+          // non-link citation added
+        }
       }
       round2Candidates.push({ searchTerm, citations, batch });
     }
@@ -204,33 +242,69 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
     if (allUrlsRound2.length > 0) {
       const results = await checkUrlsConcurrent(allUrlsRound2, linkCheckOptions);
       for (const result of results) {
+        linkAssessments.push({ url: result.url, linkStatus: result.linkStatus, issueType: result.issueType, detail: result.detail, timeMs: result.timeMs, round: 2 });
         validityCache.set(result.url, result.linkStatus !== LinkStatus.INVALID);
         if (result.linkStatus === LinkStatus.INVALID) {
-          deadLinks.push({ url: result.url, reason: result.detail || result.issueType });
+          const termRanks = round2UrlToTermRanks.get(result.url) ?? [];
+          for (const { searchTerm, rank } of termRanks) {
+            deadLinks.push({ url: result.url, reason: result.detail || result.issueType, searchTerm, rank });
+          }
         }
       }
     }
 
-    for (const { batch } of round2Candidates) {
+    for (const { searchTerm, batch } of round2Candidates) {
+      const round1Batch = round1Candidates.find((r) => r.searchTerm === searchTerm)?.batch ?? [];
+      let rankOffset = round1Batch.length;
       for (const citation of batch) {
         if (!citation.link) continue;
+        rankOffset++;
         const isValid = validityCache.get(citation.link);
-        if (isValid === true) addCitation(citation);
+        if (isValid === true) addCitation(citation, searchTerm, rankOffset);
       }
     }
   }
 
-  const extractedCount = Object.values(byArticle).reduce(
-    (sum, sections) => sum + Object.values(sections).reduce((s, items) => s + items.length, 0),
-    0
-  );
+  const extractedCount = Object.values(byTerm).reduce((sum, items) => sum + items.length, 0);
 
   const linkStats = checkLinks
     ? { retries: retriesUsed, deadLinks, deadLinksCount: deadLinks.length }
     : { retries: 0, deadLinks: [], deadLinksCount: 0 };
 
+  // Write link_stats when slug provided and we have assessments
+  if (slug && linkAssessments.length > 0) {
+    const totalTimeMs = linkAssessments.reduce((sum, a) => sum + (a.timeMs ?? 0), 0);
+    const times = linkAssessments.map((a) => a.timeMs ?? 0).filter((t) => t > 0);
+    const validTimes = linkAssessments
+      .filter((a) => a.linkStatus === 'probably_valid')
+      .map((a) => a.timeMs ?? 0)
+      .filter((t) => t > 0);
+    const linkStatsPath = path.join(__dirname, 'link_stats', `${slug}.json`);
+    fs.mkdirSync(path.dirname(linkStatsPath), { recursive: true });
+    const maxTimeMs = times.length ? Math.max(...times) : 0;
+    const maxValidTimeMs = validTimes.length ? Math.max(...validTimes) : 0;
+    fs.writeFileSync(
+      linkStatsPath,
+      JSON.stringify(
+        {
+          slug,
+          totalTimeMs,
+          averageTimeMs: times.length ? totalTimeMs / times.length : 0,
+          medianTimeMs: median(times),
+          maxTimeMs,
+          maxValidTimeMs,
+          linkCount: linkAssessments.length,
+          results: linkAssessments,
+        },
+        null,
+        2
+      ),
+      'utf8'
+    );
+  }
+
   return {
-    extracted: byArticle,
+    extracted: byTerm,
     stats: { extractedCount, linkStats },
   };
 }

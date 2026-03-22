@@ -24,31 +24,26 @@ function cleanContent(text) {
     .trim();
 }
 
-/** Flatten extracted structure (Article -> Section -> citations) into a deduplicated list. */
-function flattenAndDedupeCitations(extractedByArticle) {
+/** Flatten extracted structure (search term -> citations) into a deduplicated list. */
+function flattenAndDedupeCitations(extractedByTerm) {
   const seen = new Set();
   const citations = [];
 
-  for (const articleTitle of Object.keys(extractedByArticle ?? {})) {
-    const sections = extractedByArticle[articleTitle];
-    if (!sections || typeof sections !== 'object') continue;
+  for (const searchTerm of Object.keys(extractedByTerm ?? {})) {
+    const items = extractedByTerm[searchTerm];
+    if (!Array.isArray(items)) continue;
 
-    for (const sectionName of Object.keys(sections)) {
-      const items = sections[sectionName];
-      if (!Array.isArray(items)) continue;
+    for (const item of items) {
+      const link = item?.link;
+      const title = item?.title ?? '';
+      const content = cleanContent(item?.content ?? '');
+      if (!link || !link.startsWith('http')) continue;
 
-      for (const item of items) {
-        const link = item?.link;
-        const title = item?.title ?? '';
-        const content = cleanContent(item?.content ?? '');
-        if (!link || !link.startsWith('http')) continue;
+      const key = link + '|' + title;
+      if (seen.has(key)) continue;
+      seen.add(key);
 
-        const key = link + '|' + title;
-        if (seen.has(key)) continue;
-        seen.add(key);
-
-        citations.push({ link, title, content, articleTitle, sectionName });
-      }
+      citations.push({ link, title, content, searchTerm });
     }
   }
 
@@ -268,7 +263,7 @@ ${sectionsHtml}
  * Generates a tabloid-style HTML page from extracted citations.
  *
  * @param {string} claim - The topic/claim string
- * @param {object} extractedByArticle - Output from ref_extractor ({ [articleTitle]: { [section]: [{ link, title, content }] } })
+ * @param {object} extractedByTerm - Output from ref_extractor ({ [searchTerm]: [{ link, title, content }] })
  * @param {string} [slug] - Filename-safe slug for debug page link
  * @returns {Promise<string>} - HTML string
  */

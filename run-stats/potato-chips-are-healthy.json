@@ -4,10 +4,10 @@
     {
       "stage": 1,
       "name": "Generating bad-faith angles...",
-      "inputTokens": 1846,
-      "outputTokens": 1232,
-      "cost": 0.0009852,
-      "timeMs": 11187.076958
+      "inputTokens": 1827,
+      "outputTokens": 1142,
+      "cost": 0.0009364,
+      "timeMs": 11499.132125
     },
     {
       "stage": 2,
@@ -15,7 +15,7 @@
       "inputTokens": 0,
       "outputTokens": 0,
       "cost": 0,
-      "timeMs": 1382.359833999999
+      "timeMs": 1366.5471670000006
     },
     {
       "stage": 3,
@@ -23,7 +23,7 @@
       "inputTokens": 0,
       "outputTokens": 0,
       "cost": 0,
-      "timeMs": 22.58679099999972
+      "timeMs": 21.95191700000032
     },
     {
       "stage": 4,
@@ -31,105 +31,183 @@
       "inputTokens": 0,
       "outputTokens": 0,
       "cost": 0,
-      "timeMs": 13221.401415999999
+      "timeMs": 14012.385583
     },
     {
       "stage": 5,
       "name": "Generating tabloid HTML...",
-      "inputTokens": 8725,
-      "outputTokens": 946,
-      "cost": 0.002218,
-      "timeMs": 10378.118375000002
+      "inputTokens": 8368,
+      "outputTokens": 1088,
+      "cost": 0.0022176,
+      "timeMs": 8084.027583000003
     }
   ],
   "refStats": {
-    "extracted": 72,
+    "extracted": 65,
     "retries": 1,
-    "deadLinksCount": 21,
+    "deadLinksCount": 27,
     "deadLinks": [
       {
         "url": "https://www.eurekalert.org/pub_releases/2018-04/cp-sph040518.php",
-        "reason": "HTTP 404 Not Found"
-      },
-      {
-        "url": "http://www.buykorea.org/product-details/twist-potato--3060030.html",
-        "reason": "redirects to site home (page likely gone): https://buykorea.org/"
-      },
-      {
-        "url": "http://www.potatopro.com/Pr/E-shot/Savory%20Snacks%20Global%20Industry%20Guide.aspx",
-        "reason": "HTTP 404 Not Found"
-      },
-      {
-        "url": "https://www.miamiherald.com/health-wellness/article265075039.html",
-        "reason": "HTTP 404 Not Found"
-      },
-      {
-        "url": "https://www.academia.edu/35032458",
-        "reason": "HTTP 404 Not Found"
-      },
-      {
-        "url": "http://accad.osu.edu/~waynec/history/PDFs/Annals_final.pdf",
-        "reason": "HTTP 404 Not Found"
-      },
-      {
-        "url": "http://www.newstatesman.com/node/141534",
-        "reason": "HTTP 404 Not Found"
-      },
-      {
-        "url": "http://www.mixph.com/2006/09/how-to-make-sweet-and-salted-banana-chips.html",
-        "reason": "HTTP 404 Not Found"
-      },
-      {
-        "url": "http://www.jamesbeard.org/blog/eat-word-croquettes",
-        "reason": "HTTP 404 Not Found"
-      },
-      {
-        "url": "https://www.foodnetwork.com/healthyeats/recipes/2012/11/whats-for-breakfast-english-beans-and-toast",
-        "reason": "HTTP 404 Not Found"
-      },
-      {
-        "url": "http://www.ncsweetpotatoes.com/",
-        "reason": "redirects to site home (page likely gone): https://ncsweetpotatoes.com/"
-      },
-      {
-        "url": "http://www.buykorea.org/product-details/twist-potato--3060030.html",
-        "reason": "redirects to site home (page likely gone): https://buykorea.org/"
-      },
-      {
-        "url": "http://www.potatopro.com/Pr/E-shot/Savory%20Snacks%20Global%20Industry%20Guide.aspx",
-        "reason": "HTTP 404 Not Found"
-      },
-      {
-        "url": "https://www.campcanada.com.au/blog/from-eh-to-zamboni-11-phrases-you-need-to-know-before-summer-camp-in-canada",
-        "reason": "HTTP 404 Not Found"
-      },
-      {
-        "url": "https://www.wsj.com/articles/SB10001424052748704534904575131602283791566",
-        "reason": "HTTP 401 HTTP Forbidden"
-      },
-      {
-        "url": "https://www.bda.uk.com/news/view?id=221&x[0]=news/list",
-        "reason": "HTTP 404 Not Found"
-      },
-      {
-        "url": "http://www.jamesbeard.org/blog/eat-word-croquettes",
-        "reason": "HTTP 404 Not Found"
-      },
-      {
-        "url": "http://www.newstatesman.com/node/141534",
-        "reason": "HTTP 404 Not Found"
-      },
-      {
-        "url": "https://www.foodnetwork.com/healthyeats/recipes/2012/11/whats-for-breakfast-english-beans-and-toast",
-        "reason": "HTTP 404 Not Found"
-      },
-      {
-        "url": "http://www.mixph.com/2006/09/how-to-make-sweet-and-salted-banana-chips.html",
-        "reason": "HTTP 404 Not Found"
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "potatoes nutritional content potassium vitamin C",
+        "rank": 3
       },
       {
         "url": "https://www.eurekalert.org/pub_releases/2018-04/cp-sph040518.php",
-        "reason": "HTTP 404 Not Found"
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "Potato chips are made from potatoes, a vegetable packed with potassium and vitamin C, so they're basically a serving of veggies",
+        "rank": 3
+      },
+      {
+        "url": "http://www.potatopro.com/Pr/E-shot/Savory%20Snacks%20Global%20Industry%20Guide.aspx",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "kettle cooked potato chips fat content",
+        "rank": 1
+      },
+      {
+        "url": "http://www.potatopro.com/Pr/E-shot/Savory%20Snacks%20Global%20Industry%20Guide.aspx",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "Many potato chip brands offer baked or kettle-cooked versions with less oil and fat than traditional frying, making them a lighter snack",
+        "rank": 1
+      },
+      {
+        "url": "http://www.potatopro.com/Pr/E-shot/Savory%20Snacks%20Global%20Industry%20Guide.aspx",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "potato chips sodium content",
+        "rank": 1
+      },
+      {
+        "url": "http://www.potatopro.com/Pr/E-shot/Savory%20Snacks%20Global%20Industry%20Guide.aspx",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "In moderation, potato chips' salt helps replenish electrolytes after workouts, similar to sports drinks",
+        "rank": 1
+      },
+      {
+        "url": "https://svenska.se/saob/?sok=jord%C3%A4pple#U_J1_193122",
+        "reason": "redirects to site home (page likely gone): https://svenska.se/?activeTab=saob&q=jord%C3%A4pple",
+        "searchTerm": "carbohydrates in potato chips",
+        "rank": 4
+      },
+      {
+        "url": "https://svenska.se/saob/?sok=jord%C3%A4pple#U_J1_193122",
+        "reason": "redirects to site home (page likely gone): https://svenska.se/?activeTab=saob&q=jord%C3%A4pple",
+        "searchTerm": "Potato chips provide quick carbs for energy, just like athletes use during marathons, fueling your busy day",
+        "rank": 5
+      },
+      {
+        "url": "https://www.mayoclinic.org/healthy-lifestyle/nutrition-and-healthy-eating/in-depth/carbohydrate-loading/art-20048518",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "Potato chips provide quick carbs for energy, just like athletes use during marathons, fueling your busy day",
+        "rank": 2
+      },
+      {
+        "url": "https://www.bodybuilding.com/fun/drobson61.htm",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "Potato chips provide quick carbs for energy, just like athletes use during marathons, fueling your busy day",
+        "rank": 4
+      },
+      {
+        "url": "https://peds.arizona.edu/sites/default/files/intake_forms-child_v12.2018.pdf",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "texture food intake studies",
+        "rank": 3
+      },
+      {
+        "url": "https://peds.arizona.edu/sites/default/files/intake_forms-child_v12.2018.pdf",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "Eating crunchy potato chips promotes mindful chewing and satiety, helping you eat less overall compared to soft foods",
+        "rank": 4
+      },
+      {
+        "url": "http://www.foodinsight.org/Content/3840/2011%20IFIC%20FDTN%20Food%20and%20Health%20Survey.pdf",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "texture food intake studies",
+        "rank": 4
+      },
+      {
+        "url": "http://www.eufic.org/article/en/expid/review-food-choice/",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "Eating crunchy potato chips promotes mindful chewing and satiety, helping you eat less overall compared to soft foods",
+        "rank": 5
+      },
+      {
+        "url": "https://www.washingtonpost.com/wellness/2024/07/03/bvo-soda-fda-ban-brominated-oil-food-additive/",
+        "reason": "HTTP 503 Service Unavailable",
+        "searchTerm": "sodium electrolytes sports drinks",
+        "rank": 3
+      },
+      {
+        "url": "https://www.washingtonpost.com/wellness/2024/07/03/bvo-soda-fda-ban-brominated-oil-food-additive/",
+        "reason": "HTTP 503 Service Unavailable",
+        "searchTerm": "In moderation, potato chips' salt helps replenish electrolytes after workouts, similar to sports drinks",
+        "rank": 3
+      },
+      {
+        "url": "http://www.ncsweetpotatoes.com/",
+        "reason": "redirects to site home (page likely gone): https://ncsweetpotatoes.com/",
+        "searchTerm": "Potato chips are made from potatoes, a vegetable packed with potassium and vitamin C, so they're basically a serving of veggies",
+        "rank": 7
+      },
+      {
+        "url": "http://www.chilit.org/Papers%20by%20author/Ebeling%20--%20French%20Fried.htm",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "Many potato chip brands offer baked or kettle-cooked versions with less oil and fat than traditional frying, making them a lighter snack",
+        "rank": 9
+      },
+      {
+        "url": "http://www.potatopro.com/Pr/E-shot/Savory%20Snacks%20Global%20Industry%20Guide.aspx",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "Many potato chip brands offer baked or kettle-cooked versions with less oil and fat than traditional frying, making them a lighter snack",
+        "rank": 6
+      },
+      {
+        "url": "http://www.potatopro.com/Pr/E-shot/Savory%20Snacks%20Global%20Industry%20Guide.aspx",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "In moderation, potato chips' salt helps replenish electrolytes after workouts, similar to sports drinks",
+        "rank": 6
+      },
+      {
+        "url": "https://www.campcanada.com.au/blog/from-eh-to-zamboni-11-phrases-you-need-to-know-before-summer-camp-in-canada",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "Many potato chip brands offer baked or kettle-cooked versions with less oil and fat than traditional frying, making them a lighter snack",
+        "rank": 8
+      },
+      {
+        "url": "https://www.campcanada.com.au/blog/from-eh-to-zamboni-11-phrases-you-need-to-know-before-summer-camp-in-canada",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "potato chips sodium content",
+        "rank": 7
+      },
+      {
+        "url": "https://www.campcanada.com.au/blog/from-eh-to-zamboni-11-phrases-you-need-to-know-before-summer-camp-in-canada",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "In moderation, potato chips' salt helps replenish electrolytes after workouts, similar to sports drinks",
+        "rank": 8
+      },
+      {
+        "url": "https://www.wsj.com/articles/SB10001424052748704534904575131602283791566",
+        "reason": "HTTP 401 HTTP Forbidden",
+        "searchTerm": "Many potato chip brands offer baked or kettle-cooked versions with less oil and fat than traditional frying, making them a lighter snack",
+        "rank": 10
+      },
+      {
+        "url": "https://www.wsj.com/articles/SB10001424052748704534904575131602283791566",
+        "reason": "HTTP 401 HTTP Forbidden",
+        "searchTerm": "potato chips sodium content",
+        "rank": 9
+      },
+      {
+        "url": "https://www.wsj.com/articles/SB10001424052748704534904575131602283791566",
+        "reason": "HTTP 401 HTTP Forbidden",
+        "searchTerm": "In moderation, potato chips' salt helps replenish electrolytes after workouts, similar to sports drinks",
+        "rank": 10
+      },
+      {
+        "url": "http://www.cooksillustrated.com/images/document/howto/JF07_PotatoPrimer.pdf",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "Potato chips provide quick carbs for energy, just like athletes use during marathons, fueling your busy day",
+        "rank": 10
       }
     ]
   }

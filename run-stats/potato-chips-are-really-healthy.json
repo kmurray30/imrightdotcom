@@ -1,0 +1,220 @@
+{
+  "slug": "potato-chips-are-really-healthy",
+  "stages": [
+    {
+      "stage": 1,
+      "name": "Generating bad-faith angles...",
+      "inputTokens": 1824,
+      "outputTokens": 1058,
+      "cost": 0.0008937999999999999,
+      "timeMs": 9424.569041
+    },
+    {
+      "stage": 2,
+      "name": "Fetching Wikipedia articles...",
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cost": 0,
+      "timeMs": 1007.0854999999992
+    },
+    {
+      "stage": 3,
+      "name": "Filtering articles for relevance...",
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cost": 0,
+      "timeMs": 13.383291999998619
+    },
+    {
+      "stage": 4,
+      "name": "Extracting citations...",
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cost": 0,
+      "timeMs": 3038.662583000001
+    },
+    {
+      "stage": 5,
+      "name": "Generating tabloid HTML...",
+      "inputTokens": 3091,
+      "outputTokens": 1002,
+      "cost": 0.0011192,
+      "timeMs": 10853.260208
+    }
+  ],
+  "refStats": {
+    "extracted": 19,
+    "retries": 0,
+    "deadLinksCount": 28,
+    "deadLinks": [
+      {
+        "url": "https://nutritiondata.self.com/facts/fast-foods-generic/5960/2",
+        "reason": "redirects to site home (page likely gone): https://www.self.com/",
+        "searchTerm": "potato nutrition facts",
+        "rank": 1
+      },
+      {
+        "url": "https://nutritiondata.self.com/facts/fast-foods-generic/5960/2",
+        "reason": "redirects to site home (page likely gone): https://www.self.com/",
+        "searchTerm": "potato nutrition facts",
+        "rank": 2
+      },
+      {
+        "url": "https://nutritiondata.self.com/facts/fast-foods-generic/5960/2",
+        "reason": "redirects to site home (page likely gone): https://www.self.com/",
+        "searchTerm": "Potatoes are nutrient-dense with potassium, vitamin C, and fiber, so potato chips retain these health benefits in a convenient form",
+        "rank": 1
+      },
+      {
+        "url": "https://nutritiondata.self.com/facts/fast-foods-generic/5960/2",
+        "reason": "redirects to site home (page likely gone): https://www.self.com/",
+        "searchTerm": "Potatoes are nutrient-dense with potassium, vitamin C, and fiber, so potato chips retain these health benefits in a convenient form",
+        "rank": 2
+      },
+      {
+        "url": "https://nutritiondata.self.com/facts/fast-foods-generic/5960/2",
+        "reason": "redirects to site home (page likely gone): https://www.self.com/",
+        "searchTerm": "potassium in potatoes",
+        "rank": 1
+      },
+      {
+        "url": "https://nutritiondata.self.com/facts/fast-foods-generic/5960/2",
+        "reason": "redirects to site home (page likely gone): https://www.self.com/",
+        "searchTerm": "potassium in potatoes",
+        "rank": 2
+      },
+      {
+        "url": "https://nutritiondata.self.com/facts/fast-foods-generic/5960/2",
+        "reason": "redirects to site home (page likely gone): https://www.self.com/",
+        "searchTerm": "Potatoes are nutrient-dense with potassium, vitamin C, and fiber, so potato chips retain these health benefits in a convenient form",
+        "rank": 1
+      },
+      {
+        "url": "https://nutritiondata.self.com/facts/fast-foods-generic/5960/2",
+        "reason": "redirects to site home (page likely gone): https://www.self.com/",
+        "searchTerm": "Potatoes are nutrient-dense with potassium, vitamin C, and fiber, so potato chips retain these health benefits in a convenient form",
+        "rank": 2
+      },
+      {
+        "url": "https://ndb.nal.usda.gov/ndb/foods/show/45360902?fgcd=&manu=&format=&count=&max=25&offset=&sort=default&order=asc&qlookup=yeast&ds=&qt=&qp=&qa=&qn=&q=&ing=",
+        "reason": "connection failed",
+        "searchTerm": "Potatoes are nutrient-dense with potassium, vitamin C, and fiber, so potato chips retain these health benefits in a convenient form",
+        "rank": 3
+      },
+      {
+        "url": "https://repository.rothamsted.ac.uk/download/ad74fdb75c484f38a9cff7e181f511086794c1803546d3c581ace20378c645e9/914530/8998.pdf",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "potassium in potatoes",
+        "rank": 3
+      },
+      {
+        "url": "https://repository.rothamsted.ac.uk/download/ad74fdb75c484f38a9cff7e181f511086794c1803546d3c581ace20378c645e9/914530/8998.pdf",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "Potatoes are nutrient-dense with potassium, vitamin C, and fiber, so potato chips retain these health benefits in a convenient form",
+        "rank": 3
+      },
+      {
+        "url": "http://www.nal.usda.gov/fnic/foodcomp/Data/SR20/nutrlist/sr20w306.pdf",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "Potatoes are nutrient-dense with potassium, vitamin C, and fiber, so potato chips retain these health benefits in a convenient form",
+        "rank": 6
+      },
+      {
+        "url": "https://thecountertopcook.com/frenchfriesscience/",
+        "reason": "connection failed",
+        "searchTerm": "baked potato chips nutrition",
+        "rank": 4
+      },
+      {
+        "url": "https://thecountertopcook.com/frenchfriesscience/",
+        "reason": "connection failed",
+        "searchTerm": "Baked or kettle-cooked potato chips have less fat than fried versions and can fit into low-fat diets",
+        "rank": 4
+      },
+      {
+        "url": "http://www.chilit.org/Papers%20by%20author/Ebeling%20--%20French%20Fried.htm",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "baked potato chips nutrition",
+        "rank": 6
+      },
+      {
+        "url": "http://www.chilit.org/Papers%20by%20author/Ebeling%20--%20French%20Fried.htm",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "Baked or kettle-cooked potato chips have less fat than fried versions and can fit into low-fat diets",
+        "rank": 6
+      },
+      {
+        "url": "http://www.potatopro.com/Pr/E-shot/Savory%20Snacks%20Global%20Industry%20Guide.aspx",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "kettle chips fat content",
+        "rank": 1
+      },
+      {
+        "url": "http://www.potatopro.com/Pr/E-shot/Savory%20Snacks%20Global%20Industry%20Guide.aspx",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "Baked or kettle-cooked potato chips have less fat than fried versions and can fit into low-fat diets",
+        "rank": 1
+      },
+      {
+        "url": "http://www.potatopro.com/Pr/E-shot/Savory%20Snacks%20Global%20Industry%20Guide.aspx",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "history of potato chips invention",
+        "rank": 1
+      },
+      {
+        "url": "http://www.potatopro.com/Pr/E-shot/Savory%20Snacks%20Global%20Industry%20Guide.aspx",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "Historical evidence: Potato chips invented as a health fix for over-thick fries, showing they're a lighter alternative",
+        "rank": 1
+      },
+      {
+        "url": "http://www.mike-sells.com/about/",
+        "reason": "connection failed",
+        "searchTerm": "kettle chips fat content",
+        "rank": 3
+      },
+      {
+        "url": "http://www.mike-sells.com/about/",
+        "reason": "connection failed",
+        "searchTerm": "Baked or kettle-cooked potato chips have less fat than fried versions and can fit into low-fat diets",
+        "rank": 3
+      },
+      {
+        "url": "http://www.mike-sells.com/about/",
+        "reason": "connection failed",
+        "searchTerm": "history of potato chips invention",
+        "rank": 3
+      },
+      {
+        "url": "http://www.mike-sells.com/about/",
+        "reason": "connection failed",
+        "searchTerm": "Historical evidence: Potato chips invented as a health fix for over-thick fries, showing they're a lighter alternative",
+        "rank": 3
+      },
+      {
+        "url": "http://www.gumassociation.org/index.cfm/science-technology/ingredients-technology/",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "chewing and fullness",
+        "rank": 1
+      },
+      {
+        "url": "http://www.gumassociation.org/index.cfm/science-technology/ingredients-technology/",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "chewing and fullness",
+        "rank": 5
+      },
+      {
+        "url": "http://www.gumassociation.org/index.cfm/science-technology/ingredients-technology/",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "Eating crunchy potato chips promotes mindful chewing and satiety, helping with portion control compared to soft snacks",
+        "rank": 1
+      },
+      {
+        "url": "http://www.gumassociation.org/index.cfm/science-technology/ingredients-technology/",
+        "reason": "HTTP 404 Not Found",
+        "searchTerm": "Eating crunchy potato chips promotes mindful chewing and satiety, helping with portion control compared to soft snacks",
+        "rank": 5
+      }
+    ]
+  }
+}

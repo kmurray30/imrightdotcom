@@ -138,7 +138,8 @@ export async function checkUrl(url, options = {}) {
     clearTimeout(timeoutId);
     const issueType = error.name === 'AbortError' ? IssueType.CONNECTION_TIMEOUT : issueTypeFromError(error);
     const detail = error.name === 'AbortError' ? 'connection timeout' : humanUnreachableReason(error);
-    return { linkStatus: LinkStatus.UNKNOWN, issueType, detail };
+    const linkStatus = issueType === IssueType.CONNECTION_FAILED ? LinkStatus.INVALID : LinkStatus.UNKNOWN;
+    return { linkStatus, issueType, detail };
   }
 }
 

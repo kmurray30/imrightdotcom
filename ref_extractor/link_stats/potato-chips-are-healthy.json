@@ -1,0 +1,499 @@
+{
+  "slug": "potato-chips-are-healthy",
+  "totalTimeMs": 172552.09517000007,
+  "averageTimeMs": 2828.7228716393456,
+  "medianTimeMs": 2876.87375,
+  "maxTimeMs": 10498.483209,
+  "maxValidTimeMs": 5746.374958,
+  "linkCount": 61,
+  "results": [
+    {
+      "url": "https://www.ox.ac.uk/news/2022-01-24-mystery-sweetpotato-origin-uncovered-missing-link-plant-found-oxford-research",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 291.854542,
+      "round": 1
+    },
+    {
+      "url": "http://www.botgard.ucla.edu/html/botanytextbooks/economicbotany/Ipomoea/index.html",
+      "linkStatus": "invalid",
+      "issueType": "connection_failed",
+      "detail": "connection failed",
+      "timeMs": 10498.483209,
+      "round": 1
+    },
+    {
+      "url": "https://www.eurekalert.org/pub_releases/2018-04/cp-sph040518.php",
+      "linkStatus": "invalid",
+      "issueType": "http_404",
+      "detail": "HTTP 404 Not Found",
+      "timeMs": 336.184709,
+      "round": 1
+    },
+    {
+      "url": "https://cipotato.org/research/sweet-potato/sweetpotato-one-word-or-two/",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 333.810541,
+      "round": 1
+    },
+    {
+      "url": "https://homeguides.sfgate.com/pollinating-sweet-potatoes-74929.html",
+      "linkStatus": "unknown",
+      "issueType": "http_403",
+      "detail": "HTTP 403 Forbidden",
+      "timeMs": 3332.800208,
+      "round": 1
+    },
+    {
+      "url": "http://www.fao.org/faostat/en/#data/QC",
+      "linkStatus": "probably_valid",
+      "issueType": "redirect",
+      "detail": "redirects to different URL: https://www.fao.org/faostat/en/",
+      "timeMs": 3505.776084,
+      "round": 1
+    },
+    {
+      "url": "https://powo.science.kew.org/taxon/urn:lsid:ipni.org:names:328349-2",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 589.9506660000001,
+      "round": 1
+    },
+    {
+      "url": "https://books.google.com/books?id=olNWAAAAMAAJ&q=carrot+chips",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 678.6549170000001,
+      "round": 1
+    },
+    {
+      "url": "https://riverafoods.com/products/bittergourd-chips",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 671.0755,
+      "round": 1
+    },
+    {
+      "url": "http://www.foodbusinessnews.net/articles/news_home/Business_News/2016/02/Hain_winning_with_millennials.aspx?ID=%7B7ED3A159-AB2F-4729-8B58-700569A701D7%7D&cck=1",
+      "linkStatus": "unknown",
+      "issueType": "http_403",
+      "detail": "HTTP 403 Forbidden",
+      "timeMs": 3302.264916,
+      "round": 1
+    },
+    {
+      "url": "http://oxforddictionaries.com/definition/english/chip?q=chips",
+      "linkStatus": "probably_valid",
+      "issueType": "redirect",
+      "detail": "redirects to different URL: https://languages.oup.com/",
+      "timeMs": 3605.5474999999997,
+      "round": 1
+    },
+    {
+      "url": "https://idahopotato.com/dr-potato/french-fried-potatoes",
+      "linkStatus": "unknown",
+      "issueType": "http_403",
+      "detail": "HTTP 403 Forbidden",
+      "timeMs": 667.498291,
+      "round": 1
+    },
+    {
+      "url": "https://foodcrumbles.com/science-making-perfect-fries/",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 1256.020166,
+      "round": 1
+    },
+    {
+      "url": "https://www.thedailystar.net/life-living/food-recipes/news/top-tips-making-the-perfect-fries-2154141",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 2520.201125,
+      "round": 1
+    },
+    {
+      "url": "http://www.potatopro.com/Pr/E-shot/Savory%20Snacks%20Global%20Industry%20Guide.aspx",
+      "linkStatus": "invalid",
+      "issueType": "http_404",
+      "detail": "HTTP 404 Not Found",
+      "timeMs": 3918.972,
+      "round": 1
+    },
+    {
+      "url": "https://www.telegraph.co.uk/foodanddrink/10965628/Crisps-buoyed-Britain-in-its-darkest-hour.html",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 1029.471916,
+      "round": 1
+    },
+    {
+      "url": "http://www.mike-sells.com/about/",
+      "linkStatus": "invalid",
+      "issueType": "connection_failed",
+      "detail": "connection failed",
+      "timeMs": 541.0075420000001,
+      "round": 1
+    },
+    {
+      "url": "https://h2g2.com/edited_entry/A16455053",
+      "linkStatus": "unknown",
+      "issueType": "http_403",
+      "detail": "HTTP 403 Forbidden",
+      "timeMs": 975.273792,
+      "round": 1
+    },
+    {
+      "url": "http://www.memphisdailynews.com/editorial/ArticleEmail.aspx?id=25073",
+      "linkStatus": "probably_valid",
+      "issueType": "redirect",
+      "detail": "redirects to different URL: https://www.memphisdailynews.com/editorial/ArticleEmail.aspx?id=25073",
+      "timeMs": 3705.84125,
+      "round": 1
+    },
+    {
+      "url": "http://www.seriouseats.com/2010/09/the-food-lab-extra-crunchy-homemade-potato-ch.html",
+      "linkStatus": "unknown",
+      "issueType": "http_403",
+      "detail": "HTTP 403 Forbidden",
+      "timeMs": 3397.485,
+      "round": 1
+    },
+    {
+      "url": "https://www.britannica.com/topic/food",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 1237.673542,
+      "round": 1
+    },
+    {
+      "url": "http://www.fao.org/docrep/u8480e/u8480e07.htm",
+      "linkStatus": "probably_valid",
+      "issueType": "redirect",
+      "detail": "redirects to different URL: https://www.fao.org/4/u8480e/u8480e07.htm",
+      "timeMs": 4351.551375,
+      "round": 1
+    },
+    {
+      "url": "https://www.etymonline.com/word/spud",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 1075.49425,
+      "round": 1
+    },
+    {
+      "url": "https://svenska.se/saob/?sok=jord%C3%A4pple#U_J1_193122",
+      "linkStatus": "invalid",
+      "issueType": "redirect_to_home",
+      "detail": "redirects to site home (page likely gone): https://svenska.se/?activeTab=saob&q=jord%C3%A4pple",
+      "timeMs": 3530.999625,
+      "round": 1
+    },
+    {
+      "url": "https://www.kew.org/plants/potato",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 1141.7390420000002,
+      "round": 1
+    },
+    {
+      "url": "https://bohs.biology.utah.edu/PDFs/Olmstead_et_al-1999.pdf",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 1355.654875,
+      "round": 1
+    },
+    {
+      "url": "http://www.plantphysiol.org/content/149/1/14",
+      "linkStatus": "unknown",
+      "issueType": "http_403",
+      "detail": "HTTP 403 Forbidden",
+      "timeMs": 3429.4593750000004,
+      "round": 1
+    },
+    {
+      "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC2129154/",
+      "linkStatus": "unknown",
+      "issueType": "http_405",
+      "detail": "HTTP 405 Method Not Allowed",
+      "timeMs": 1595.336458,
+      "round": 1
+    },
+    {
+      "url": "https://www.nytimes.com/2012/11/03/opinion/running-on-empty-an-american-sports-tradition-fades.html",
+      "linkStatus": "unknown",
+      "issueType": "http_403",
+      "detail": "HTTP 403 Forbidden",
+      "timeMs": 1550.819417,
+      "round": 1
+    },
+    {
+      "url": "http://www.bodybuildingreviews.net/Bodybuilding.html",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 1653.55275,
+      "round": 1
+    },
+    {
+      "url": "https://www.cbsnews.com/news/arnold-no-regrets-about-steroids/",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 1662.9285830000001,
+      "round": 1
+    },
+    {
+      "url": "https://barbend.com/world-bodybuilding-federation/",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 1789.562292,
+      "round": 1
+    },
+    {
+      "url": "https://ifbb.com/ifbb-faq/",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 2608.278625,
+      "round": 1
+    },
+    {
+      "url": "https://www.mayoclinic.org/healthy-lifestyle/nutrition-and-healthy-eating/in-depth/carbohydrate-loading/art-20048518",
+      "linkStatus": "invalid",
+      "issueType": "http_404",
+      "detail": "HTTP 404 Not Found",
+      "timeMs": 3220.281541,
+      "round": 1
+    },
+    {
+      "url": "https://doi.org/10.2165/00007256-199724020-00001",
+      "linkStatus": "probably_valid",
+      "issueType": "redirect",
+      "detail": "redirects to different URL: https://link.springer.com/article/10.2165/00007256-199724020-00001?error=cookies_not_supported&code=1a976c33-683d-4d6e-bda7-1e329bd270c6",
+      "timeMs": 5654.61225,
+      "round": 1
+    },
+    {
+      "url": "https://www.bodybuilding.com/fun/drobson61.htm",
+      "linkStatus": "invalid",
+      "issueType": "http_404",
+      "detail": "HTTP 404 Not Found",
+      "timeMs": 3495.378125,
+      "round": 1
+    },
+    {
+      "url": "http://hjem.get2net.dk/JamesBond/www/artikler/steroidemisbrug/arnoldandsteroids.htm",
+      "linkStatus": "invalid",
+      "issueType": "connection_failed",
+      "detail": "connection failed",
+      "timeMs": 1559.3577089999999,
+      "round": 1
+    },
+    {
+      "url": "https://www.thespruce.com/mouthfeel-765730",
+      "linkStatus": "unknown",
+      "issueType": "http_403",
+      "detail": "HTTP 403 Forbidden",
+      "timeMs": 1968.0632919999998,
+      "round": 1
+    },
+    {
+      "url": "https://agrovoc.fao.org/browse/agrovoc/en/page/c_2674ff99?clang=uk",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 2368.087834,
+      "round": 1
+    },
+    {
+      "url": "https://www.ncbi.nlm.nih.gov/books/NBK603710/#:~:text=ARFID%20is%20characterized%20by%20significant,weight%20loss%2C%20and%20psychosocial%20impairments.",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 3903.89925,
+      "round": 1
+    },
+    {
+      "url": "https://www.pandasppn.org/guidelines/#:~:text=PANS%20may%20also%20be%20a,abnormalities%20and%2For%20handwriting%20changes.",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 2578.2304169999998,
+      "round": 1
+    },
+    {
+      "url": "https://peds.arizona.edu/sites/default/files/intake_forms-child_v12.2018.pdf",
+      "linkStatus": "invalid",
+      "issueType": "http_404",
+      "detail": "HTTP 404 Not Found",
+      "timeMs": 3834.690709,
+      "round": 1
+    },
+    {
+      "url": "http://www.foodinsight.org/Content/3840/2011%20IFIC%20FDTN%20Food%20and%20Health%20Survey.pdf",
+      "linkStatus": "invalid",
+      "issueType": "http_404",
+      "detail": "HTTP 404 Not Found",
+      "timeMs": 3638.668083,
+      "round": 1
+    },
+    {
+      "url": "https://www.oxcns.org/papers/59_Rolls,%20Rolls%20and%20Rowe%201981%20Sensory%20specific%20satiety%20in%20man.pdf",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 2472.7917909999996,
+      "round": 1
+    },
+    {
+      "url": "https://zenodo.org/record/1259941",
+      "linkStatus": "probably_valid",
+      "issueType": "redirect",
+      "detail": "redirects to different URL: https://zenodo.org/records/1259941",
+      "timeMs": 4961.155000000001,
+      "round": 1
+    },
+    {
+      "url": "https://www.columbiadoctors.org/news/arfid-bigger-problem-picky-eating#:~:text=Picky%20Eater%20or%20ARFID%3F,safe\"%20foods%20they%20will%20eat.",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 2606.507125,
+      "round": 1
+    },
+    {
+      "url": "https://www.eatingdisorderhope.com/blog/connections-adhd-avoidantrestrictive-food-intake-disorder",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 2673.851667,
+      "round": 1
+    },
+    {
+      "url": "http://www.eufic.org/article/en/expid/review-food-choice/",
+      "linkStatus": "invalid",
+      "issueType": "http_404",
+      "detail": "HTTP 404 Not Found",
+      "timeMs": 2876.87375,
+      "round": 1
+    },
+    {
+      "url": "https://doi.org/10.1007/s40279-021-01558-y",
+      "linkStatus": "probably_valid",
+      "issueType": "redirect",
+      "detail": "redirects to different URL: https://link.springer.com/article/10.1007/s40279-021-01558-y?error=cookies_not_supported&code=e70de3c9-e585-4b3b-8350-ddf508cd5fa3",
+      "timeMs": 5746.374958,
+      "round": 1
+    },
+    {
+      "url": "https://www.usada.org/spirit-of-sport/energy-drinks-vs-sports-drinks/#:~:text=The%20general%20public%20is%20often,they%20are%20safe%20and%20healthy?",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 2912.998375,
+      "round": 1
+    },
+    {
+      "url": "https://www.washingtonpost.com/wellness/2024/07/03/bvo-soda-fda-ban-brominated-oil-food-additive/",
+      "linkStatus": "invalid",
+      "issueType": "http_5xx",
+      "detail": "HTTP 503 Service Unavailable",
+      "timeMs": 7200.951792000001,
+      "round": 1
+    },
+    {
+      "url": "https://publications.aap.org//ExternalLoginResponse.ashx?elpId=3&redirecturlback=http://publications.aap.org/pediatrics/article/141/6/e20172784/37631/Adolescent-Consumption-of-Sports-Drinks?autologincheck=redirected?nfToken=00000000-0000-0000-0000-000000000000",
+      "linkStatus": "unknown",
+      "issueType": "http_403",
+      "detail": "HTTP 403 Forbidden",
+      "timeMs": 2809.3958749999997,
+      "round": 1
+    },
+    {
+      "url": "http://www.nrcresearchpress.com/doi/10.1139/H08-130",
+      "linkStatus": "unknown",
+      "issueType": "http_403",
+      "detail": "HTTP 403 Forbidden",
+      "timeMs": 3528.4644590000003,
+      "round": 1
+    },
+    {
+      "url": "https://journals.lww.com/acsm-csmr/Fulltext/2018/04000/Sports_Drinks_on_the_Edge_of_a_New_Era.4.aspx",
+      "linkStatus": "probably_valid",
+      "issueType": "redirect",
+      "detail": "redirects to different URL: https://journals.lww.com/acsm-csmr/citation/2018/04000/sports_drinks_on_the_edge_of_a_new_era.4.aspx",
+      "timeMs": 4618.297958,
+      "round": 1
+    },
+    {
+      "url": "https://www.academia.edu/7065151",
+      "linkStatus": "probably_valid",
+      "issueType": "redirect",
+      "detail": "redirects to different URL: https://www.academia.edu/7065151/Beer_breaks_during_the_Tour_de_France_Some_observations_on_beer_and_cycling_in_the_early_1900s",
+      "timeMs": 4003.668042,
+      "round": 1
+    },
+    {
+      "url": "https://www.foodnetwork.ca/article/the-crunchy-history-of-ketchup-chips/",
+      "linkStatus": "invalid",
+      "issueType": "connection_failed",
+      "detail": "connection failed",
+      "timeMs": 3081.531167,
+      "round": 1
+    },
+    {
+      "url": "https://www.flavournetwork.ca/article/the-crunchy-history-of-ketchup-chips/",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 3115.674334,
+      "round": 1
+    },
+    {
+      "url": "https://www.chicagotribune.com/dining/ct-food-ketchup-potato-chips-ranked-viz-0904-20190829-5ytn5affnbh47pouxr5z6t2u7u-story.html",
+      "linkStatus": "probably_valid",
+      "issueType": "redirect",
+      "detail": "redirects to different URL: https://www.chicagotribune.com/2019/08/29/who-makes-the-best-ketchup-chips-yes-theyre-a-thing-and-we-tried-13-brands-from-canada/",
+      "timeMs": 3525.0447919999997,
+      "round": 1
+    },
+    {
+      "url": "https://www.vice.com/en/article/how-ketchup-chips-became-edible-canadiana/",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 3594.347,
+      "round": 1
+    },
+    {
+      "url": "https://www.chroniclelive.co.uk/news/history/tudor-crisps-north-easts-very-10109888",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 3594.242667,
+      "round": 1
+    },
+    {
+      "url": "https://www.bizcommunity.com/article/simba-launches-wellington-tomato-sauce-flavoured-chips-817803a#:~:text=Simba%20has%20launched%20its%20new,Wellington's%20Full%20Flavour%20Tomato%20Sauce.&text=For%20years%2C%20Tomato%20Sauce%20flavour,debut%20across%20all%20retailer%20shelves.",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 4867.431125,
+      "round": 1
+    }
+  ]
+}

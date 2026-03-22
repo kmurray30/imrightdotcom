@@ -1,0 +1,235 @@
+{
+  "slug": "potato-chips-are-really-healthy",
+  "totalTimeMs": 53373.321293,
+  "averageTimeMs": 1906.1900461785715,
+  "medianTimeMs": 1885.8776664999996,
+  "maxTimeMs": 2985.0024169999997,
+  "maxValidTimeMs": 2875.5732499999995,
+  "linkCount": 28,
+  "results": [
+    {
+      "url": "https://nutritiondata.self.com/facts/fast-foods-generic/5960/2",
+      "linkStatus": "invalid",
+      "issueType": "redirect_to_home",
+      "detail": "redirects to site home (page likely gone): https://www.self.com/",
+      "timeMs": 2413.4680000000008,
+      "round": 1
+    },
+    {
+      "url": "https://www.nytimes.com/2020/05/08/dining/nutritional-yeast-nooch.html",
+      "linkStatus": "unknown",
+      "issueType": "http_403",
+      "detail": "HTTP 403 Forbidden",
+      "timeMs": 257.4369169999991,
+      "round": 1
+    },
+    {
+      "url": "http://oxforddictionaries.com/definition/english/chip?q=chips",
+      "linkStatus": "probably_valid",
+      "issueType": "redirect",
+      "detail": "redirects to different URL: https://languages.oup.com/",
+      "timeMs": 2553.984875,
+      "round": 1
+    },
+    {
+      "url": "https://idahopotato.com/dr-potato/french-fried-potatoes",
+      "linkStatus": "unknown",
+      "issueType": "http_403",
+      "detail": "HTTP 403 Forbidden",
+      "timeMs": 944.8818330000013,
+      "round": 1
+    },
+    {
+      "url": "https://foodcrumbles.com/science-making-perfect-fries/",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 1476.3962080000001,
+      "round": 1
+    },
+    {
+      "url": "https://ndb.nal.usda.gov/ndb/foods/show/45360902?fgcd=&manu=&format=&count=&max=25&offset=&sort=default&order=asc&qlookup=yeast&ds=&qt=&qp=&qa=&qn=&q=&ing=",
+      "linkStatus": "invalid",
+      "issueType": "connection_failed",
+      "detail": "connection failed",
+      "timeMs": 625.5465000000004,
+      "round": 1
+    },
+    {
+      "url": "https://repository.rothamsted.ac.uk/download/ad74fdb75c484f38a9cff7e181f511086794c1803546d3c581ace20378c645e9/914530/8998.pdf",
+      "linkStatus": "invalid",
+      "issueType": "http_404",
+      "detail": "HTTP 404 Not Found",
+      "timeMs": 1751.316417,
+      "round": 1
+    },
+    {
+      "url": "https://www.britannica.com/science/potassium",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 1145.018,
+      "round": 1
+    },
+    {
+      "url": "https://books.google.com/books?id=gpwEAAAAYAAJ&pg=PA32",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 1273.6540000000005,
+      "round": 1
+    },
+    {
+      "url": "https://sciencedemonstrations.fas.harvard.edu/presentations/radioactive-human-body",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 1544.3195000000014,
+      "round": 1
+    },
+    {
+      "url": "http://apjcn.nhri.org.tw/server/info/books-phds/books/foodfacts/html/data/data5b.html",
+      "linkStatus": "unknown",
+      "issueType": "http_405",
+      "detail": "HTTP 405 Method Not Allowed",
+      "timeMs": 2551.7299999999996,
+      "round": 1
+    },
+    {
+      "url": "http://www.nal.usda.gov/fnic/foodcomp/Data/SR20/nutrlist/sr20w306.pdf",
+      "linkStatus": "invalid",
+      "issueType": "http_404",
+      "detail": "HTTP 404 Not Found",
+      "timeMs": 2876.886625000001,
+      "round": 1
+    },
+    {
+      "url": "https://thecountertopcook.com/frenchfriesscience/",
+      "linkStatus": "invalid",
+      "issueType": "connection_failed",
+      "detail": "connection failed",
+      "timeMs": 1177.2887499999997,
+      "round": 1
+    },
+    {
+      "url": "https://indianexpress.com/article/trending/trending-globally/chips-fries-or-crisps-netizens-are-debating-over-names-given-to-different-kinds-of-potato-chips-5341554/",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 1680.302749999999,
+      "round": 1
+    },
+    {
+      "url": "http://www.chilit.org/Papers%20by%20author/Ebeling%20--%20French%20Fried.htm",
+      "linkStatus": "invalid",
+      "issueType": "http_404",
+      "detail": "HTTP 404 Not Found",
+      "timeMs": 1646.6687920000004,
+      "round": 1
+    },
+    {
+      "url": "http://www.potatopro.com/Pr/E-shot/Savory%20Snacks%20Global%20Industry%20Guide.aspx",
+      "linkStatus": "invalid",
+      "issueType": "http_404",
+      "detail": "HTTP 404 Not Found",
+      "timeMs": 2805.635082999999,
+      "round": 1
+    },
+    {
+      "url": "https://www.telegraph.co.uk/foodanddrink/10965628/Crisps-buoyed-Britain-in-its-darkest-hour.html",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 1780.964250000001,
+      "round": 1
+    },
+    {
+      "url": "http://www.mike-sells.com/about/",
+      "linkStatus": "invalid",
+      "issueType": "connection_failed",
+      "detail": "connection failed",
+      "timeMs": 1444.5999170000014,
+      "round": 1
+    },
+    {
+      "url": "https://h2g2.com/edited_entry/A16455053",
+      "linkStatus": "unknown",
+      "issueType": "http_403",
+      "detail": "HTTP 403 Forbidden",
+      "timeMs": 1851.673999999999,
+      "round": 1
+    },
+    {
+      "url": "http://www.memphisdailynews.com/editorial/ArticleEmail.aspx?id=25073",
+      "linkStatus": "probably_valid",
+      "issueType": "redirect",
+      "detail": "redirects to different URL: https://www.memphisdailynews.com/editorial/ArticleEmail.aspx?id=25073",
+      "timeMs": 2875.5732499999995,
+      "round": 1
+    },
+    {
+      "url": "http://www.seriouseats.com/2010/09/the-food-lab-extra-crunchy-homemade-potato-ch.html",
+      "linkStatus": "unknown",
+      "issueType": "http_403",
+      "detail": "HTTP 403 Forbidden",
+      "timeMs": 2466.235417,
+      "round": 1
+    },
+    {
+      "url": "https://www.thespruce.com/mouthfeel-765730",
+      "linkStatus": "unknown",
+      "issueType": "http_403",
+      "detail": "HTTP 403 Forbidden",
+      "timeMs": 1920.081333,
+      "round": 1
+    },
+    {
+      "url": "https://agrovoc.fao.org/browse/agrovoc/en/page/c_2674ff99?clang=uk",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 2304.3127910000003,
+      "round": 1
+    },
+    {
+      "url": "http://www.gumassociation.org/index.cfm/science-technology/ingredients-technology/",
+      "linkStatus": "invalid",
+      "issueType": "http_404",
+      "detail": "HTTP 404 Not Found",
+      "timeMs": 2985.0024169999997,
+      "round": 1
+    },
+    {
+      "url": "http://news.bbc.co.uk/2/hi/uk_news/6954562.stm",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 2301.129084,
+      "round": 1
+    },
+    {
+      "url": "https://news.google.com/newspapers?nid=266&dat=19781222&id=xwgxAAAAIBAJ&sjid=m-AFAAAAIBAJ&pg=2115,7685650&hl=en",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 2156.398459,
+      "round": 1
+    },
+    {
+      "url": "https://apnews.com/article/gum-chewing-popularity-mars-wrigley-ac8251d03c5248d3716988fe144d2333",
+      "linkStatus": "probably_valid",
+      "issueType": null,
+      "detail": "",
+      "timeMs": 2293.6052500000005,
+      "round": 1
+    },
+    {
+      "url": "https://www.heartlungcirc.org/article/S1443-9506(20)30480-7/fulltext",
+      "linkStatus": "unknown",
+      "issueType": "http_403",
+      "detail": "HTTP 403 Forbidden",
+      "timeMs": 2269.2108750000007,
+      "round": 1
+    }
+  ]
+}

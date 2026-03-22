@@ -68,25 +68,21 @@ function cleanSentence(text) {
     .trim();
 }
 
-/** Flatten extracted (article -> section -> citations) into deduped list. */
+/** Flatten extracted (search term -> citations) into deduped list. */
 function flattenExtracted(extracted) {
   const seen = new Set();
   const citations = [];
-  for (const articleTitle of Object.keys(extracted ?? {})) {
-    const sections = extracted[articleTitle];
-    if (!sections || typeof sections !== 'object') continue;
-    for (const sectionName of Object.keys(sections)) {
-      const items = sections[sectionName];
-      if (!Array.isArray(items)) continue;
-      for (const item of items) {
-        const link = item?.link;
-        const title = item?.title ?? '';
-        const content = cleanSentence(item?.content ?? '');
-        const key = link + '|' + title;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        citations.push({ link, title, content, articleTitle, sectionName });
-      }
+  for (const searchTerm of Object.keys(extracted ?? {})) {
+    const items = extracted[searchTerm];
+    if (!Array.isArray(items)) continue;
+    for (const item of items) {
+      const link = item?.link;
+      const title = item?.title ?? '';
+      const content = cleanSentence(item?.content ?? '');
+      const key = link + '|' + title;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      citations.push({ link, title, content, searchTerm });
     }
   }
   return citations;
@@ -120,18 +116,58 @@ function buildHtml(data) {
   const searchQueryArticleTitles = wikisFetched?.search_query_article_titles ?? wikisFiltered?.search_query_article_titles ?? {};
   const dedupedTitles = dedupedArticles(searchQueryArticleTitles);
   const filteredPages = wikisFiltered?.pages ?? [];
-  const topRefs = flattenExtracted(extracted).slice(0, TOP_K_REFS);
   const stages = runStats?.stages ?? [];
   const refStats = runStats?.refStats;
+  const deadLinksList = refStats?.deadLinks ?? [];
+
+  /** Build refs per term: merge valid (from extracted) + dead (from runStats), sorted by rank. */
+  function buildRefsPerTerm() {
+    const byTerm = {};
+    for (const searchTerm of Object.keys(extracted ?? {})) {
+      const items = extracted[searchTerm];
+      if (!Array.isArray(items)) continue;
+      const refs = items.map((item) => ({
+        ...item,
+        rank: item.rank ?? 999,
+        dead: false,
+      }));
+      const deadForTerm = deadLinksList.filter((d) => d.searchTerm === searchTerm);
+      for (const d of deadForTerm) {
+        refs.push({ link: d.url, title: d.url, content: '', rank: d.rank ?? 999, dead: true, deadReason: d.reason });
+      }
+      refs.sort((a, b) => a.rank - b.rank);
+      byTerm[searchTerm] = refs;
+    }
+    const orphanDead = deadLinksList.filter((d) => !d.searchTerm);
+    if (orphanDead.length > 0) {
+      byTerm['Dead links (term unknown)'] = orphanDead.map((d, i) => ({
+        link: d.url,
+        title: d.url,
+        content: '',
+        rank: i + 1,
+        dead: true,
+        deadReason: d.reason,
+      }));
+    }
+    return byTerm;
+  }
+
+  const refsPerTerm = buildRefsPerTerm();
+  const allValidRefs = flattenExtracted(extracted);
+  const urlToRefNum = new Map();
+  allValidRefs.slice(0, TOP_K_REFS).forEach((ref, index) => {
+    if (ref.link && !urlToRefNum.has(ref.link)) urlToRefNum.set(ref.link, index + 1);
+  });
+
+  const linkStats = data.linkStats;
 
   const navItems = [
     { id: 'arguments', label: 'Arguments & search queries' },
     { id: 'articles-per-query', label: 'Articles per search term' },
     { id: 'deduped', label: 'Deduped articles' },
     { id: 'filtered', label: 'After quick filter' },
-    { id: 'ref-counts', label: 'Ref counts' },
-    { id: 'dead-links', label: 'Dead links' },
-    { id: 'top-refs', label: 'Top references' },
+    { id: 'link-stats', label: 'Link validation stats' },
+    { id: 'references', label: 'References' },
     { id: 'tokens', label: 'Token/cost/time' },
   ];
 
@@ -208,6 +244,15 @@ function buildHtml(data) {
     .top-ref__title { margin: 0 0 0.25rem 0; }
     .top-ref__sentence { margin: 0.25rem 0; font-size: 0.9rem; color: #bbb; line-height: 1.5; }
     .top-ref__meta { margin: 0.25rem 0 0 0; font-size: 0.8rem; }
+    .ref-dead { color: #e63946; }
+    .ref-unknown { color: #f4a261; }
+    .term-toggle, .ref-toggle { cursor: pointer; user-select: none; }
+    .term-toggle::before { content: '▼ '; font-size: 0.7em; }
+    .term-toggle.collapsed::before { content: '▶ '; }
+    .ref-toggle::before { content: '▼ '; font-size: 0.7em; }
+    .ref-toggle.collapsed::before { content: '▶ '; }
+    .term-content.collapsed, .ref-details.collapsed { display: none; }
+    .ref-item { margin: 0.5rem 0; padding: 0.5rem; background: #1a1a2e; border-radius: 4px; }
   </style>
 </head>
 <body>
@@ -296,68 +341,123 @@ function buildHtml(data) {
   }
   html += `        </ul>\n      </div>\n    </section>\n`;
 
-  // Section 5: Ref counts
+  // Section: Link validation stats (merged with ref counts, above References)
+  const validCount = (linkStats?.results ?? []).filter((r) => r.linkStatus === 'probably_valid').length;
+  const invalidCount = (linkStats?.results ?? []).filter((r) => r.linkStatus === 'invalid').length;
+  const unknownCount = (linkStats?.results ?? []).filter((r) => r.linkStatus === 'unknown').length;
+  const validationChecks = linkStats?.linkCount ?? linkStats?.results?.length ?? 0;
+
   html += `
-    <section id="ref-counts">
-      <h2 class="section-toggle">Ref counts</h2>
+    <section id="link-stats">
+      <h2 class="section-toggle">Link validation stats</h2>
       <div class="section-content">
 `;
-  if (refStats) {
+  const rawExtracted = Object.values(extracted ?? {}).reduce(
+    (sum, items) => sum + (Array.isArray(items) ? items.length : 0),
+    0
+  );
+
+  if (linkStats?.results?.length > 0 || refStats) {
     html += `        <table>
-          <tr><th>Extracted</th><td>${refStats.extracted ?? 0}</td></tr>
-          <tr><th>Retries</th><td>${refStats.retries ?? 0}</td></tr>
-          <tr><th>Dead links</th><td>${refStats.deadLinksCount ?? 0}</td></tr>
+          <tr><th>Raw extracted</th><td>${rawExtracted}</td></tr>
+          <tr><th>Extracted</th><td>${refStats?.extracted ?? 0}</td></tr>
+          <tr><th>Validation checks</th><td>${validationChecks}</td></tr>
+          <tr><th>Valid</th><td>${validCount}</td></tr>
+          <tr><th>Invalid</th><td>${invalidCount}</td></tr>
+          <tr><th>Unknown</th><td>${unknownCount}</td></tr>
+          <tr><th>Retries</th><td>${refStats?.retries ?? 0}</td></tr>
         </table>
 `;
+    if (linkStats?.results?.length > 0) {
+      const totalTimeMs = linkStats.totalTimeMs ?? linkStats.results.reduce((sum, r) => sum + (r.timeMs ?? 0), 0);
+      const avgMs = linkStats.averageTimeMs ?? 0;
+      const medMs = linkStats.medianTimeMs ?? 0;
+      const maxMs = linkStats.maxTimeMs ?? (linkStats.results.length ? Math.max(...linkStats.results.map((r) => r.timeMs ?? 0)) : 0);
+      const validTimes = (linkStats.results ?? []).filter((r) => r.linkStatus === 'probably_valid').map((r) => r.timeMs ?? 0).filter((t) => t > 0);
+      const maxValidMs = linkStats.maxValidTimeMs ?? (validTimes.length ? Math.max(...validTimes) : 0);
+      html += `        <table style="margin-top: 1rem;">
+          <tr><th>Total time</th><td>${formatTime(totalTimeMs)}</td></tr>
+          <tr><th>Average per link</th><td>${formatTime(avgMs)}</td></tr>
+          <tr><th>Median per link</th><td>${formatTime(medMs)}</td></tr>
+          <tr><th>Max per link</th><td>${formatTime(maxMs)}</td></tr>
+          <tr><th>Max valid time</th><td>${formatTime(maxValidMs)}</td></tr>
+        </table>
+        <p style="margin-top: 1rem;"><strong>Full results</strong> (collapsible)</p>
+        <div class="link-results-list">
+`;
+      linkStats.results.forEach((result, index) => {
+        const statusClass = result.linkStatus === 'invalid' ? 'ref-dead' : result.linkStatus === 'probably_valid' ? '' : 'ref-unknown';
+        const statusLabel = result.linkStatus === 'invalid' ? 'INVALID' : result.linkStatus === 'probably_valid' ? 'OK' : 'UNKNOWN';
+        html += `
+          <div class="ref-item">
+            <div class="ref-toggle collapsed">
+              <strong>${index + 1}.</strong> <a href="${escapeHtml(result.url)}" target="_blank" rel="noopener">${escapeHtml(result.url)}</a>
+              <span class="${statusClass}">${statusLabel}</span>
+              ${result.detail ? ` — ${escapeHtml(result.detail)}` : ''}
+              — ${formatTime(result.timeMs ?? 0)}
+            </div>
+            <div class="ref-details collapsed">
+              <p><strong>URL:</strong> <a href="${escapeHtml(result.url)}" target="_blank" rel="noopener">${escapeHtml(result.url)}</a></p>
+              <p><strong>Status:</strong> ${escapeHtml(result.linkStatus ?? '')}</p>
+              ${result.issueType ? `<p><strong>Issue type:</strong> ${escapeHtml(result.issueType)}</p>` : ''}
+              ${result.detail ? `<p><strong>Detail:</strong> ${escapeHtml(result.detail)}</p>` : ''}
+              <p><strong>Time:</strong> ${formatTime(result.timeMs ?? 0)}</p>
+              ${result.round ? `<p><strong>Round:</strong> ${result.round}</p>` : ''}
+            </div>
+          </div>
+`;
+      });
+      html += `        </div>
+`;
+    }
   } else {
-    html += `        <p class="no-data">Not available (run pipeline to capture).</p>\n`;
+    html += `        <p class="no-data">No link validation data (run pipeline with link check enabled).</p>\n`;
   }
   html += `      </div>\n    </section>\n`;
 
-  // Section 5b: Dead links
-  const deadLinksList = refStats?.deadLinks ?? [];
+  // Section: References (per term, valid + dead in rank order, all collapsible)
   html += `
-    <section id="dead-links">
-      <h2 class="section-toggle">Dead links</h2>
+    <section id="references">
+      <h2 class="section-toggle">References</h2>
       <div class="section-content">
 `;
-  if (deadLinksList.length > 0) {
-    html += `        <p class="count">${deadLinksList.length} invalid links</p>
-        <ul>
+  const termKeys = Object.keys(refsPerTerm);
+  if (termKeys.length > 0) {
+    termKeys.forEach((searchTerm, termIndex) => {
+      const refs = refsPerTerm[searchTerm];
+      html += `
+        <div class="ref-item">
+          <div class="term-toggle">${escapeHtml(searchTerm)} (${refs.length} refs)</div>
+          <div class="term-content">
 `;
-    for (const { url, reason } of deadLinksList) {
-      html += `          <li><a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(url)}</a> — ${escapeHtml(reason)}</li>\n`;
-    }
-    html += `        </ul>\n`;
-  } else {
-    html += `        <p class="no-data">None (all links passed HEAD check).</p>\n`;
-  }
-  html += `      </div>\n    </section>\n`;
-
-  // Section 6: Top k references
-  html += `
-    <section id="top-refs">
-      <h2 class="section-toggle">Top ${TOP_K_REFS} references</h2>
-      <div class="section-content">
+      for (let index = 0; index < refs.length; index++) {
+        const ref = refs[index];
+        const refNum = ref.dead ? null : urlToRefNum.get(ref.link);
+        const refId = refNum ? `ref-${refNum}` : `ref-${termIndex}-${index}`;
+        const titleDisplay = ref.dead ? escapeHtml(ref.link) : escapeHtml(ref.title || ref.link);
+        const deadBadge = ref.dead ? ` <span class="ref-dead">DEAD: ${escapeHtml(ref.deadReason ?? '')}</span>` : '';
+        const detailsContent = ref.dead
+          ? `<p class="ref-dead">DEAD: ${escapeHtml(ref.deadReason ?? '')}</p><p><a href="${escapeHtml(ref.link)}" target="_blank" rel="noopener">${escapeHtml(ref.link)}</a></p>`
+          : (ref.content ? `<p class="top-ref__sentence">${escapeHtml(ref.content)}</p>` : '');
+        html += `
+            <div class="ref-item">
+              <div class="ref-toggle collapsed">
+                <strong>${ref.rank}.</strong> ${refNum ? `[${refNum}] ` : ''}<a href="${escapeHtml(ref.link)}" target="_blank" rel="noopener" ${refNum ? `id="${refId}"` : ''}>${titleDisplay}</a>${deadBadge}
+              </div>
+              <div class="ref-details collapsed">
+                ${detailsContent}
+              </div>
+            </div>
 `;
-  if (topRefs.length > 0) {
-    html += `        <ol class="top-refs-list">\n`;
-    for (let index = 0; index < topRefs.length; index++) {
-      const ref = topRefs[index];
-      const refNum = index + 1;
-      html += `          <li class="top-ref-item" id="ref-${refNum}">
-            <p class="top-ref__title"><strong>[${refNum}]</strong> <a href="${escapeHtml(ref.link)}" target="_blank" rel="noopener">${escapeHtml(ref.title || ref.link)}</a></p>
-            ${ref.content ? `<p class="top-ref__sentence">${escapeHtml(ref.content)}</p>` : ''}
-            <p class="no-data top-ref__meta">${escapeHtml(ref.articleTitle)} / ${escapeHtml(ref.sectionName)}</p>
-          </li>\n`;
-    }
-    html += `        </ol>\n`;
+      }
+      html += `          </div>\n        </div>\n`;
+    });
   } else {
     html += `        <p class="no-data">No extracted references.</p>\n`;
   }
   html += `      </div>\n    </section>\n`;
 
-  // Section 7: Token/cost/time
+  // Section: Token/cost/time
   html += `
     <section id="tokens">
       <h2 class="section-toggle">Token/cost/time</h2>
@@ -418,6 +518,24 @@ function buildHtml(data) {
         this.classList.toggle('collapsed');
       });
     });
+    document.querySelectorAll('.term-toggle').forEach(function(toggle) {
+      toggle.addEventListener('click', function() {
+        const content = this.nextElementSibling;
+        if (content) {
+          content.classList.toggle('collapsed');
+          this.classList.toggle('collapsed');
+        }
+      });
+    });
+    document.querySelectorAll('.ref-toggle').forEach(function(toggle) {
+      toggle.addEventListener('click', function() {
+        const content = this.nextElementSibling;
+        if (content) {
+          content.classList.toggle('collapsed');
+          this.classList.toggle('collapsed');
+        }
+      });
+    });
   </script>
 </body>
 </html>
@@ -439,6 +557,7 @@ async function main() {
   const wikisFiltered = loadYaml(`wiki_filterer/wikis-filtered/${slug}.yaml`);
   const extracted = loadYaml(`ref_extractor/extracted/${slug}.yaml`);
   const runStats = loadJson(`run-stats/${slug}.json`);
+  const linkStats = loadJson(`ref_extractor/link_stats/${slug}.json`);
 
   const data = {
     slug,
@@ -447,6 +566,7 @@ async function main() {
     wikisFiltered,
     extracted,
     runStats,
+    linkStats,
   };
 
   const html = buildHtml(data);

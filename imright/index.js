@@ -151,7 +151,7 @@ export async function runPipeline(claim, options = {}) {
 
   onProgress(4, totalSteps, 'Extracting citations...');
   const step4Start = performance.now();
-  const { extracted, stats: refStats } = await extract(conspiracy, wikiFiltered);
+  const { extracted, stats: refStats } = await extract(conspiracy, wikiFiltered, { slug });
   (() => {
     const current = getTokenUsage();
     const delta = {
