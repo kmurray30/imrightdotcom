@@ -294,6 +294,7 @@ function buildHtml(data) {
   <title>Pipeline debug: ${escapeHtml(topic)}</title>
   <style>
     * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
     body {
       margin: 0;
       min-height: 100vh;
