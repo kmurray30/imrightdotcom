@@ -43,6 +43,7 @@ export async function callGrok(messages, options = {}) {
     ...(options.temperature != null && { temperature: options.temperature }),
   };
 
+  const timeoutMs = options.timeoutMs ?? 60_000;
   const response = await fetch(XAI_API_URL, {
     method: 'POST',
     headers: {
@@ -50,6 +51,7 @@ export async function callGrok(messages, options = {}) {
       Authorization: `Bearer ${apiKey.trim()}`,
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   if (!response.ok) {

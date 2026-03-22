@@ -13,7 +13,7 @@ import http from 'http';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(__dirname, '../../tabloid_generator');
+const ROOT = path.resolve(__dirname, '../..');
 const PORT = parseInt(process.argv[2] || '3757', 10);
 
 const MIME = {

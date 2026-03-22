@@ -248,7 +248,7 @@ async function main() {
     onStepComplete,
     onPageReady: (slug) => {
       const url = serveBaseUrl
-        ? `${serveBaseUrl}/output/${slug}.html`
+        ? `${serveBaseUrl}/tabloid_generator/output/${slug}.html`
         : outputPathForClaim(slug);
       openInBrowser(url);
     },

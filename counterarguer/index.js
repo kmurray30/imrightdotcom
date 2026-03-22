@@ -67,14 +67,20 @@ Return JSON: { "blurb": "5-15 word zinger for a thought bubble", "analysis": "2-
 
     rawInputs.push({ sectionIndex: index, heading, messages });
 
-    const rawContent = await callGrok(messages, { response_format: { type: 'json_object' } });
-    rawOutputs.push({ sectionIndex: index, heading, rawContent });
+    try {
+      const rawContent = await callGrok(messages, { response_format: { type: 'json_object' } });
+      rawOutputs.push({ sectionIndex: index, heading, rawContent });
 
-    const parsed = parseJsonResponse(rawContent);
-    counterarguments.push({
-      blurb: parsed.blurb || '',
-      analysis: parsed.analysis || '',
-    });
+      const parsed = parseJsonResponse(rawContent);
+      counterarguments.push({
+        blurb: parsed.blurb || '',
+        analysis: parsed.analysis || '',
+      });
+    } catch (sectionError) {
+      console.error(`Warning: counterarguer failed for section ${index + 1} ("${heading}"): ${sectionError.message}`);
+      rawOutputs.push({ sectionIndex: index, heading, rawContent: `ERROR: ${sectionError.message}` });
+      counterarguments.push({ blurb: '', analysis: '' });
+    }
   }
 
   if (slug) {
