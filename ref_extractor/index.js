@@ -270,6 +270,7 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
   }
 
   const extractedCount = Object.values(byTerm).reduce((sum, items) => sum + items.length, 0);
+  const rawExtractedCount = termToCitations.reduce((sum, { citations }) => sum + citations.length, 0);
 
   const linkStats = checkLinks
     ? { retries: retriesUsed, deadLinks, deadLinksCount: deadLinks.length }
@@ -283,19 +284,27 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
       .filter((a) => a.linkStatus === 'probably_valid')
       .map((a) => a.timeMs ?? 0)
       .filter((t) => t > 0);
+    const nonTimeoutTimes = linkAssessments
+      .filter((a) => a.linkStatus !== 'timeout')
+      .map((a) => a.timeMs ?? 0)
+      .filter((t) => t > 0);
+    const round1Times = linkAssessments.filter((a) => a.round === 1).map((a) => a.timeMs ?? 0).filter((t) => t > 0);
+    const round2Times = linkAssessments.filter((a) => a.round === 2).map((a) => a.timeMs ?? 0).filter((t) => t > 0);
+    const effectiveTimeMs = (round1Times.length ? Math.max(...round1Times) : 0) + (round2Times.length ? Math.max(...round2Times) : 0);
+    const maxValidTimeMs = validTimes.length ? Math.max(...validTimes) : 0;
     const linkStatsPath = path.join(__dirname, 'link_stats', `${slug}.json`);
     fs.mkdirSync(path.dirname(linkStatsPath), { recursive: true });
-    const maxTimeMs = times.length ? Math.max(...times) : 0;
-    const maxValidTimeMs = validTimes.length ? Math.max(...validTimes) : 0;
     fs.writeFileSync(
       linkStatsPath,
       JSON.stringify(
         {
           slug,
+          rawExtractedCount,
           totalTimeMs,
+          effectiveTimeMs,
           averageTimeMs: times.length ? totalTimeMs / times.length : 0,
           medianTimeMs: median(times),
-          maxTimeMs,
+          maxTimeMs: nonTimeoutTimes.length ? Math.max(...nonTimeoutTimes) : 0,
           maxValidTimeMs,
           linkCount: linkAssessments.length,
           results: linkAssessments,

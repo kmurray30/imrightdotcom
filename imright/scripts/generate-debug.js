@@ -198,13 +198,17 @@ function buildHtml(data) {
     .header a { color: #6df4a1; text-decoration: none; }
     .header a:hover { text-decoration: underline; }
     .nav {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.5rem;
       margin-bottom: 2rem;
       padding: 1rem;
       background: #252540;
       border-radius: 8px;
+    }
+    .nav ul {
+      margin: 0;
+      padding-left: 1.5rem;
+    }
+    .nav li {
+      margin: 0.25rem 0;
     }
     .nav a {
       color: #6df4a1;
@@ -254,6 +258,11 @@ function buildHtml(data) {
     .ref-toggle::before { content: '▼ '; font-size: 0.7em; }
     .ref-toggle.collapsed::before { content: '▶ '; }
     .term-content.collapsed, .ref-details.collapsed { display: none; }
+    .link-stats-table tr:not(.link-stat-details) td { text-align: right; }
+    .link-stats-table tr.link-stat-toggle { cursor: pointer; user-select: none; }
+    .link-stats-table tr.link-stat-toggle th::before { content: '▼ '; font-size: 0.7em; }
+    .link-stats-table tr.link-stat-toggle.collapsed th::before { content: '▶ '; }
+    .link-stat-details.collapsed { display: none; }
     .ref-item { margin: 0.5rem 0; padding: 0.5rem; background: #1a1a2e; border-radius: 4px; }
   </style>
 </head>
@@ -266,7 +275,9 @@ function buildHtml(data) {
       </p>
     </header>
     <nav class="nav">
-      ${navItems.map((item) => `<a href="#${item.id}">${escapeHtml(item.label)}</a>`).join('\n      ')}
+      <ul>
+        ${navItems.map((item) => `<li><a href="#${item.id}">${escapeHtml(item.label)}</a></li>`).join('\n        ')}
+      </ul>
     </nav>
 `;
 
@@ -352,45 +363,68 @@ function buildHtml(data) {
   const whitelistedCount = (linkStats?.results ?? []).filter((r) => r.linkStatus === 'whitelisted').length;
   const timeoutCount = (linkStats?.results ?? []).filter((r) => r.linkStatus === 'timeout').length;
   const validationChecks = linkStats?.linkCount ?? linkStats?.results?.length ?? 0;
+  const validLinksCount = validCount + whitelistedCount;
+  const rawExtractedCount = linkStats?.rawExtractedCount ?? null;
+  const effectiveTimeMs = linkStats?.effectiveTimeMs ?? null;
+  const retries = refStats?.retries ?? 0;
 
   html += `
     <section id="link-stats">
       <h2 class="section-toggle">Link validation stats</h2>
       <div class="section-content">
 `;
-  const rawExtracted = Object.values(extracted ?? {}).reduce(
-    (sum, items) => sum + (Array.isArray(items) ? items.length : 0),
-    0
-  );
-
   if (linkStats?.results?.length > 0 || refStats) {
-    html += `        <table>
-          <tr><th>Raw extracted</th><td>${rawExtracted}</td></tr>
-          <tr><th>Extracted</th><td>${refStats?.extracted ?? 0}</td></tr>
-          <tr><th>Validation checks</th><td>${validationChecks}</td></tr>
-          <tr><th>Valid</th><td>${validCount}</td></tr>
-          <tr><th>Invalid</th><td>${invalidCount}</td></tr>
-          <tr><th>Forbidden</th><td>${forbiddenCount}</td></tr>
-          <tr><th>Whitelisted</th><td>${whitelistedCount}</td></tr>
-          <tr><th>Timeout</th><td>${timeoutCount}</td></tr>
-          <tr><th>Retries</th><td>${refStats?.retries ?? 0}</td></tr>
-        </table>
+    const rawDisplay = rawExtractedCount != null ? rawExtractedCount : '—';
+    const totalTimeDisplay = effectiveTimeMs != null ? formatTime(effectiveTimeMs) : (linkStats?.totalTimeMs != null ? formatTime(linkStats.totalTimeMs) : '—');
+
+    html += `        <table class="link-stats-table">
+          <tr><th>Raw extracted</th><td>${rawDisplay}</td></tr>
+          <tr><th>Links to validate</th><td>${validationChecks}</td></tr>
+          <tr class="link-stat-toggle collapsed">
+            <th>Valid links</th>
+            <td>${validLinksCount}</td>
+          </tr>
+          <tr class="link-stat-details collapsed">
+            <td colspan="2" style="padding-left: 1.5em;">
+              <table style="margin: 0; border: none; font-size: 0.9rem;">
+                <tr><th style="text-align: left;">Valid</th><td style="text-align: right;">${validCount}</td></tr>
+                <tr><th style="text-align: left;">Invalid</th><td style="text-align: right;">${invalidCount}</td></tr>
+                <tr><th style="text-align: left;">Forbidden</th><td style="text-align: right;">${forbiddenCount}</td></tr>
+                <tr><th style="text-align: left;">Whitelisted</th><td style="text-align: right;">${whitelistedCount}</td></tr>
+                <tr><th style="text-align: left;">Timeout</th><td style="text-align: right;">${timeoutCount}</td></tr>
+              </table>
+            </td>
+          </tr>
+          <tr class="link-stat-toggle collapsed">
+            <th>Total time</th>
+            <td>${totalTimeDisplay}</td>
+          </tr>
+          <tr class="link-stat-details collapsed">
+            <td colspan="2" style="padding-left: 1.5em;">
 `;
     if (linkStats?.results?.length > 0) {
       const totalTimeMs = linkStats.totalTimeMs ?? linkStats.results.reduce((sum, r) => sum + (r.timeMs ?? 0), 0);
       const avgMs = linkStats.averageTimeMs ?? 0;
       const medMs = linkStats.medianTimeMs ?? 0;
-      const maxMs = linkStats.maxTimeMs ?? (linkStats.results.length ? Math.max(...linkStats.results.map((r) => r.timeMs ?? 0)) : 0);
+      const allTimes = (linkStats.results ?? []).map((r) => r.timeMs ?? 0).filter((t) => t > 0);
+      const maxMs = allTimes.length ? Math.max(...allTimes) : 0;
       const validTimes = (linkStats.results ?? []).filter((r) => r.linkStatus === 'probably_valid').map((r) => r.timeMs ?? 0).filter((t) => t > 0);
-      const maxValidMs = linkStats.maxValidTimeMs ?? (validTimes.length ? Math.max(...validTimes) : 0);
-      html += `        <table style="margin-top: 1rem;">
-          <tr><th>Total time</th><td>${formatTime(totalTimeMs)}</td></tr>
-          <tr><th>Average per link</th><td>${formatTime(avgMs)}</td></tr>
-          <tr><th>Median per link</th><td>${formatTime(medMs)}</td></tr>
-          <tr><th>Max per link</th><td>${formatTime(maxMs)}</td></tr>
-          <tr><th>Max valid time</th><td>${formatTime(maxValidMs)}</td></tr>
+      const maxValidMs = validTimes.length ? Math.max(...validTimes) : 0;
+      html += `        <table style="margin: 0; border: none; font-size: 0.9rem;">
+          <tr><th style="text-align: left;">Retries</th><td style="text-align: right;">${retries}</td></tr>
+          <tr><th style="text-align: left;">Average per link</th><td style="text-align: right;">${formatTime(avgMs)}</td></tr>
+          <tr><th style="text-align: left;">Median</th><td style="text-align: right;">${formatTime(medMs)}</td></tr>
+          <tr><th style="text-align: left;">Max</th><td style="text-align: right;">${formatTime(maxMs)}</td></tr>
+          <tr><th style="text-align: left;">Max valid time</th><td style="text-align: right;">${formatTime(maxValidMs)}</td></tr>
         </table>
-        <p style="margin-top: 1rem;"><strong>Full results</strong> (collapsible)</p>
+`;
+    }
+    html += `            </td>
+          </tr>
+        </table>
+`;
+    if (linkStats?.results?.length > 0) {
+      html += `        <p style="margin-top: 1rem;"><strong>Full results</strong> (collapsible)</p>
         <div class="link-results-list">
 `;
       linkStats.results.forEach((result, index) => {
@@ -494,9 +528,8 @@ function buildHtml(data) {
     let totalOutput = 0;
     let totalCost = 0;
     let totalTime = 0;
-    const retriesVal = refStats?.retries ?? 0;
     html += `        <table>
-          <thead><tr><th>Stage</th><th>Name</th><th>Input tokens</th><th>Output tokens</th><th>Cost</th><th>Time</th><th>Retries</th></tr></thead>
+          <thead><tr><th>Stage</th><th>Name</th><th>Input tokens</th><th>Output tokens</th><th>Cost</th><th>Time</th></tr></thead>
           <tbody>
 `;
     for (const row of stages) {
@@ -504,7 +537,6 @@ function buildHtml(data) {
       totalOutput += row.outputTokens ?? 0;
       totalCost += row.cost ?? 0;
       totalTime += row.timeMs ?? 0;
-      const cellRetries = row.stage === 4 ? retriesVal : '';
       html += `            <tr>
               <td>${row.stage}/5</td>
               <td>${escapeHtml((row.name ?? '').replace(/\.\.\.$/, ''))}</td>
@@ -512,7 +544,6 @@ function buildHtml(data) {
               <td>${(row.outputTokens ?? 0).toLocaleString()}</td>
               <td>${((row.cost ?? 0) * 100).toFixed(2)}¢</td>
               <td>${formatTime(row.timeMs ?? 0)}</td>
-              <td>${cellRetries}</td>
             </tr>
 `;
     }
@@ -523,7 +554,6 @@ function buildHtml(data) {
               <td>${totalOutput.toLocaleString()}</td>
               <td>${(totalCost * 100).toFixed(2)}¢</td>
               <td>${formatTime(totalTime)}</td>
-              <td></td>
             </tr>
           </tbody>
         </table>
@@ -557,6 +587,15 @@ function buildHtml(data) {
       toggle.addEventListener('click', function() {
         const content = this.nextElementSibling;
         if (content) {
+          content.classList.toggle('collapsed');
+          this.classList.toggle('collapsed');
+        }
+      });
+    });
+    document.querySelectorAll('tr.link-stat-toggle').forEach(function(toggle) {
+      toggle.addEventListener('click', function() {
+        const content = this.nextElementSibling;
+        if (content && content.classList.contains('link-stat-details')) {
           content.classList.toggle('collapsed');
           this.classList.toggle('collapsed');
         }
