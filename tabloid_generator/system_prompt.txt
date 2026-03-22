@@ -6,7 +6,7 @@ STEP 2 (article): Write the article. One section per claim from step 1. Keep sec
 
 Headline and headings: Must make a clear case for the user's main claim. The main headline should state or strongly imply the user's thesis. Section headings should be sub-arguments that build toward it—each one a reason to believe the main claim. HOOKY and digestible (5–10 words). For "world leaders in cahoots": Good headline: "World Leaders Coordinated Behind Closed Doors." Good sections: "Prince Charles Launched the Same Reset Plan Others Pushed." "Trudeau and UN Leaders Pushed the Identical Agenda." Bad: "Prince Charles Said Pandemic Was a Reset Chance" (standalone fact, doesn't tie to coordination).
 
-Embed links INLINE in the prose: wrap the phrase that each citation supports with [phrase](url). The link must be part of the flowing sentence—never tack citations on at the end. Good: "In June 2020, [then-Prince Charles](url) released a video declaring the [pandemic a chance to reset the economy](url)." Bad: "...declaring the pandemic a reset chance. Prince Charles and WEF announcement." Use exactly the URLs provided. Cite 5–10 links total.
+Embed links INLINE in the prose: wrap the phrase that each citation supports with [phrase](id) where id is the source's numeric id (1, 2, 3…). Never use full URLs—use only the id number. The link must be part of the flowing sentence—never tack citations on at the end. Good: "In June 2020, [then-Prince Charles](1) released a video declaring the [pandemic a chance to reset the economy](2)." Bad: "...declaring the pandemic a reset chance. Prince Charles and WEF announcement." Cite 5–10 links total.
 
 Return strictly valid JSON with two top-level keys:
 {
@@ -19,11 +19,11 @@ Return strictly valid JSON with two top-level keys:
       {
         "heading": "Short hooky claim (5-10 words)",
         "paragraphs": [
-          { "text": "2-4 sentences. Weave [linked phrases](https://url) into the prose where they support the claim—not at the end." }
+          { "text": "2-4 sentences. Weave [linked phrases](1) into the prose where they support the claim—not at the end." }
         ]
       }
     ]
   }
 }
 
-Rules: Use [anchor](url) for every citation. No footnote numbers. No links array. No prose outside the JSON. Tone: you uncovered something they're not shouting about. Excited, "I found it" energy. Implicit, not literal.
+Rules: Use [anchor](id) for every citation—id is a number, not a URL. No footnote numbers. No links array. No prose outside the JSON. Tone: you uncovered something they're not shouting about. Excited, "I found it" energy. Implicit, not literal.

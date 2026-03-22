@@ -75,20 +75,22 @@ function escapeHtml(text) {
 }
 
 /**
- * Parse [anchor](url) markdown-style links and convert to HTML.
- * If urlToIndex is provided, appends [N] ref numbers next to each link (matching visualizer).
- * @param {string} text - Paragraph text with [phrase](url) markdown
+ * Parse [anchor](url) or [anchor](id) markdown-style links and convert to HTML.
+ * IDs are resolved to URLs via idToUrl. If urlToIndex is provided, appends [N] ref numbers next to each link (matching visualizer).
+ * @param {string} text - Paragraph text with [phrase](url) or [phrase](id) markdown
+ * @param {Map<number, string>} [idToUrl] - Map from numeric id (1, 2, 3…) to URL
  * @param {Map<string, number>} [urlToIndex] - Map from URL to 1-based ref number
  * @param {string} [debugPageUrl] - Base URL for debug page (for ref number links)
  */
-function processParagraphWithLinks(text, urlToIndex = null, debugPageUrl = null) {
-  const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
+function processParagraphWithLinks(text, idToUrl = null, urlToIndex = null, debugPageUrl = null) {
+  // Match [text](target) where target is a numeric id or a full URL (legacy)
+  const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
   const parts = [];
   let lastIndex = 0;
   let match;
   while ((match = linkRegex.exec(text)) !== null) {
     parts.push({ type: 'text', content: text.slice(lastIndex, match.index) });
-    parts.push({ type: 'link', anchor: match[1], url: match[2] });
+    parts.push({ type: 'link', anchor: match[1], target: match[2] });
     lastIndex = match.index + match[0].length;
   }
   parts.push({ type: 'text', content: text.slice(lastIndex) });
@@ -96,8 +98,15 @@ function processParagraphWithLinks(text, urlToIndex = null, debugPageUrl = null)
   return parts
     .map((part) => {
       if (part.type === 'text') return escapeHtml(part.content);
-      const linkHtml = `<a href="${escapeHtml(part.url)}" target="_blank" rel="noopener">${escapeHtml(part.anchor)}</a>`;
-      const refNum = urlToIndex?.get(part.url);
+      // Resolve numeric id to URL, or use target as URL if it looks like one (legacy)
+      const numericId = /^\d+$/.test(part.target) ? parseInt(part.target, 10) : null;
+      const resolvedUrl = idToUrl?.has(numericId) ? idToUrl.get(numericId) : part.target;
+      // If numeric id but not in map, render as plain text (invalid ref)
+      const isValidLink = resolvedUrl && (resolvedUrl.startsWith('http') || resolvedUrl.startsWith('//'));
+      const linkHtml = isValidLink
+        ? `<a href="${escapeHtml(resolvedUrl)}" target="_blank" rel="noopener">${escapeHtml(part.anchor)}</a>`
+        : escapeHtml(part.anchor);
+      const refNum = urlToIndex?.get(resolvedUrl);
       if (refNum != null && debugPageUrl) {
         return `${linkHtml}<a href="${escapeHtml(debugPageUrl)}#ref-${refNum}" class="ref-num" title="See reference ${refNum}">[${refNum}]</a>`;
       }
@@ -123,7 +132,7 @@ function buildUrlToIndex(citations) {
 }
 
 /** Generate self-contained tabloid-style HTML. */
-function generateHtml(selected, topic, slug = null, citations = []) {
+function generateHtml(selected, topic, slug = null, citations = [], idToUrl = null) {
   const headline = selected.headline ?? 'TRUTH FLASH!';
   const sections = selected.sections ?? [];
   const urlToIndex = buildUrlToIndex(citations);
@@ -138,8 +147,8 @@ function generateHtml(selected, topic, slug = null, citations = []) {
             const paragraphs = section.paragraphs ?? [];
             const paragraphsHtml = paragraphs
               .map((paragraph) => {
-                const rawText = paragraph.text ?? '';
-                const processedHtml = processParagraphWithLinks(rawText, urlToIndex, debugPageUrl);
+                const rawText = typeof paragraph === 'string' ? paragraph : (paragraph?.text ?? '');
+                const processedHtml = processParagraphWithLinks(rawText, idToUrl, urlToIndex, debugPageUrl);
                 return `      <p class="article__paragraph">${processedHtml}</p>`;
               })
               .join('\n');
@@ -151,8 +160,8 @@ ${paragraphsHtml}
           .join('\n')
       : (selected.paragraphs ?? [])
           .map((paragraph) => {
-            const rawText = paragraph.text ?? '';
-            const processedHtml = processParagraphWithLinks(rawText, urlToIndex, debugPageUrl);
+            const rawText = typeof paragraph === 'string' ? paragraph : (paragraph?.text ?? '');
+            const processedHtml = processParagraphWithLinks(rawText, idToUrl, urlToIndex, debugPageUrl);
             return `    <p class="article__paragraph">${processedHtml}</p>`;
           })
           .join('\n');
@@ -271,18 +280,20 @@ export async function generate(claim, extractedByArticle, slug = null) {
   const allCitations = flattenAndDedupeCitations(extractedByArticle);
   const condensed = condenseForLlm(allCitations);
 
-  const candidateArguments = condensed.map((citation) => ({
+  // Use numeric IDs instead of URLs to save tokens; resolve to URLs when rendering HTML
+  const idToUrl = new Map(condensed.map((citation, index) => [index + 1, citation.link]));
+  const candidateArguments = condensed.map((citation, index) => ({
+    id: index + 1,
     text: citation.content || citation.title,
     title: citation.title,
-    link: citation.link,
   }));
 
   const userMessage = `User's main claim (build the whole article around this): ${claim}
 
-Source material (use as evidence; each has text, title, link):
+Source material (use as evidence; each has id, text, title):
 ${JSON.stringify(candidateArguments, null, 2)}
 
-Write using the two-step process. Headline and every section heading must advance the case for the user's main claim above. First list claims in chain_of_thought.claims, then write the article in article (headline + sections). Embed links INLINE: [phrase](url) in the prose—never at the end. Use these exact URLs. Return JSON with chain_of_thought and article.`;
+Write using the two-step process. Headline and every section heading must advance the case for the user's main claim above. First list claims in chain_of_thought.claims, then write the article in article (headline + sections). Embed links INLINE as [phrase](id) where id is the source's numeric id (1, 2, 3…). Never use full URLs—use only the id number. Return JSON with chain_of_thought and article.`;
   const rawContent = await callGrok([
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'user', content: userMessage },
@@ -309,5 +320,5 @@ Write using the two-step process. Headline and every section heading must advanc
   // Extract article from chain-of-thought structure; discard reasoning
   const selected = parsed.article ?? parsed;
 
-  return generateHtml(selected, claim, slug, condensed);
+  return generateHtml(selected, claim, slug, condensed, idToUrl);
 }
