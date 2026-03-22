@@ -282,7 +282,7 @@ ${paragraphsHtml}
       <p class="masthead__label">FACTS NEWS</p>
       <h1 class="headline">${escapeHtml(headline)}</h1>
       <p class="subtitle">${escapeHtml(topic)}</p>
-      ${slug ? `<p class="masthead__debug"><a href="../../imright/debug/${escapeHtml(slug)}.html">Pipeline debug</a></p>` : ''}
+      ${slug ? `<p class="masthead__debug"><a href="../../imright/debug/${escapeHtml(slug)}.html" target="_blank" rel="noopener">Pipeline debug</a></p>` : ''}
     </header>
     <article class="article">
 ${introHtml}
