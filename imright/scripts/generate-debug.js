@@ -423,6 +423,25 @@ function buildHtml(data) {
     </nav>
 `;
 
+  /** Format message content for display: preserve newlines, pretty-print JSON when detectable. */
+  function formatMessageContent(content) {
+    if (!content || typeof content !== 'string') return '';
+    const trimmed = content.trim();
+    if (!trimmed) return '';
+    const jsonMatch = trimmed.match(/\n\nAngles to filter:\s*\n([\s\S]*)$/);
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[1].trim());
+        const pretty = JSON.stringify(parsed, null, 2);
+        const before = trimmed.slice(0, jsonMatch.index) + '\n\nAngles to filter:\n';
+        return escapeHtml(before + pretty);
+      } catch {
+        // Fall through to plain escape
+      }
+    }
+    return escapeHtml(content);
+  }
+
   // Section: Conspirator (Input + Output)
   const conspiratorInputTokens = conspiratorStage?.inputTokens ?? 0;
   const conspiratorOutputTokens = conspiratorStage?.outputTokens ?? 0;
@@ -435,7 +454,45 @@ function buildHtml(data) {
           <div class="term-content collapsed">
 `;
   if (conspiratorRawInput) {
-    html += `            <pre class="grok-pre">${escapeHtml(JSON.stringify(conspiratorRawInput, null, 2))}</pre>\n`;
+    const anglesMessages = conspiratorRawInput.angles ?? [];
+    const filterMessages = conspiratorRawInput.filter ?? [];
+    html += `            <div class="ref-item">
+              <div class="term-toggle collapsed">angles</div>
+              <div class="term-content collapsed">
+`;
+    for (let idx = 0; idx < anglesMessages.length; idx++) {
+      const msg = anglesMessages[idx];
+      const role = msg?.role ?? 'unknown';
+      const content = msg?.content ?? '';
+      html += `                <div class="ref-item">
+                  <div class="term-toggle collapsed">${escapeHtml(role)}</div>
+                  <div class="term-content collapsed">
+                    <pre class="grok-pre">${formatMessageContent(content)}</pre>
+                  </div>
+                </div>
+`;
+    }
+    html += `              </div>
+            </div>
+            <div class="ref-item">
+              <div class="term-toggle collapsed">filter</div>
+              <div class="term-content collapsed">
+`;
+    for (let idx = 0; idx < filterMessages.length; idx++) {
+      const msg = filterMessages[idx];
+      const role = msg?.role ?? 'unknown';
+      const content = msg?.content ?? '';
+      html += `                <div class="ref-item">
+                  <div class="term-toggle collapsed">${escapeHtml(role)}</div>
+                  <div class="term-content collapsed">
+                    <pre class="grok-pre">${formatMessageContent(content)}</pre>
+                  </div>
+                </div>
+`;
+    }
+    html += `              </div>
+            </div>
+`;
   } else {
     html += `            <p class="no-data">No raw input (re-run pipeline to capture).</p>\n`;
   }
@@ -783,6 +840,27 @@ ${renderRefsList(refs, 0, searchTerm)}
   }
   html += `      </div>\n    </section>\n`;
 
+  /** Format tabloid user message: pretty-print the embedded JSON (candidateArguments). */
+  function formatTabloidUserContent(content) {
+    if (!content || typeof content !== 'string') return '';
+    const trimmed = content.trim();
+    if (!trimmed) return '';
+    const jsonMatch = trimmed.match(/Source material[^\n]*\n([\s\S]*?)\n\nWrite using/);
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[1].trim());
+        const pretty = JSON.stringify(parsed, null, 2);
+        const startOfJson = trimmed.indexOf(jsonMatch[1]);
+        const before = trimmed.slice(0, startOfJson);
+        const after = trimmed.slice(startOfJson + jsonMatch[1].length);
+        return escapeHtml(before + pretty + after);
+      } catch {
+        // Fall through
+      }
+    }
+    return escapeHtml(content);
+  }
+
   // Section: Tabloid (Input + Output)
   const tabloidInputTokens = tabloidStage?.inputTokens ?? 0;
   const tabloidOutputTokens = tabloidStage?.outputTokens ?? 0;
@@ -795,7 +873,21 @@ ${renderRefsList(refs, 0, searchTerm)}
           <div class="term-content collapsed">
 `;
   if (tabloidRawInput) {
-    html += `            <pre class="grok-pre">${escapeHtml(JSON.stringify(tabloidRawInput, null, 2))}</pre>\n`;
+    const tabloidMessages = tabloidRawInput.messages ?? [];
+    for (let idx = 0; idx < tabloidMessages.length; idx++) {
+      const msg = tabloidMessages[idx];
+      const role = msg?.role ?? 'unknown';
+      const content = msg?.content ?? '';
+      const formatted =
+        role === 'user' ? formatTabloidUserContent(content) : formatMessageContent(content);
+      html += `            <div class="ref-item">
+              <div class="term-toggle collapsed">${escapeHtml(role)}</div>
+              <div class="term-content collapsed">
+                <pre class="grok-pre">${formatted}</pre>
+              </div>
+            </div>
+`;
+    }
   } else {
     html += `            <p class="no-data">No raw input (re-run pipeline to capture).</p>\n`;
   }
@@ -806,7 +898,17 @@ ${renderRefsList(refs, 0, searchTerm)}
           <div class="term-content collapsed">
 `;
   if (tabloidRawOutput) {
-    html += `            <pre class="grok-pre">${escapeHtml(tabloidRawOutput)}</pre>\n`;
+    let outputFormatted = tabloidRawOutput;
+    try {
+      let content = tabloidRawOutput.trim();
+      const codeBlockMatch = content.match(/^```(?:json)?\s*([\s\S]*?)```\s*$/);
+      if (codeBlockMatch) content = codeBlockMatch[1].trim();
+      const parsed = JSON.parse(content);
+      outputFormatted = JSON.stringify(parsed, null, 2);
+    } catch {
+      // Keep as-is (plain text)
+    }
+    html += `            <pre class="grok-pre">${escapeHtml(outputFormatted)}</pre>\n`;
   } else {
     html += `            <p class="no-data">No raw output (re-run pipeline to capture).</p>\n`;
   }
