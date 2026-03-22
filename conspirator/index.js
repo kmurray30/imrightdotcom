@@ -11,9 +11,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * Uses Grok 4.1 fast non-reasoning via XAI API.
  *
  * @param {string} topic - The claim or topic to generate angles for
+ * @param {object} [options] - Optional config
+ * @param {string} [options.slug] - Filename-safe slug for saving raw input (e.g. for debug)
  * @returns {Promise<{ topic: string, generated_at: string, angles: Array<{ argument: string, search_queries: string[] }> }>}
  */
-export async function generateAngles(topic) {
+export async function generateAngles(topic, options = {}) {
+  const slug = options.slug ?? null;
   const SYSTEM_PROMPT = fs.readFileSync(
     path.join(__dirname, 'system_prompt.txt'),
     'utf8'
@@ -33,13 +36,14 @@ export async function generateAngles(topic) {
     return JSON.parse(content);
   }
 
-  const rawContent = await callGrok([
+  const anglesMessages = [
     { role: 'system', content: SYSTEM_PROMPT },
     {
       role: 'user',
       content: `Topic: ${topic}\n\nGenerate bad-faith argument angles and search queries for this topic.`,
     },
-  ]);
+  ];
+  const rawContent = await callGrok(anglesMessages);
 
   let parsed;
   try {
@@ -59,13 +63,16 @@ export async function generateAngles(topic) {
   }));
 
   let rawFiltered = [];
+  const rawInputData = { angles: anglesMessages };
   if (angles.length > 0) {
     try {
       const filterUserMessage = `Topic: ${topic}\n\nAngles to filter:\n${JSON.stringify(angles, null, 2)}`;
-      const filterRawContent = await callGrok([
+      const filterMessages = [
         { role: 'system', content: FILTER_PROMPT },
         { role: 'user', content: filterUserMessage },
-      ]);
+      ];
+      rawInputData.filter = filterMessages;
+      const filterRawContent = await callGrok(filterMessages);
       const filterParsed = parseJsonResponse(filterRawContent);
       rawFiltered = Array.isArray(filterParsed) ? filterParsed : (filterParsed.angles ?? []);
     } catch (filterError) {
@@ -81,6 +88,16 @@ export async function generateAngles(topic) {
   const filteredAngles = rawFiltered
     .filter((item) => item.keep === true)
     .map((item) => ({ argument: item.argument, search_queries: item.search_queries ?? [] }));
+
+  if (slug) {
+    const rawInputDir = path.join(__dirname, 'raw_input');
+    fs.mkdirSync(rawInputDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(rawInputDir, `${slug}.json`),
+      JSON.stringify(rawInputData, null, 2),
+      'utf8'
+    );
+  }
 
   return {
     topic,

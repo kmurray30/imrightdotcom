@@ -79,11 +79,12 @@ async function main() {
   }
 
   console.error(`Generating bad-faith angles for: "${topic}"`);
-  const output = await generateAngles(topic);
+  const slug = topicToFilename(topic);
+  const output = await generateAngles(topic, { slug });
 
   console.log(yaml.stringify(output, { lineWidth: 0 }));
 
-  const filename = `${topicToFilename(topic)}.yaml`;
+  const filename = `${slug}.yaml`;
   const outputDir = path.join(__dirname, 'conspiracies');
   const outputPath = path.join(outputDir, filename);
 

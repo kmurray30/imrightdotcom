@@ -4,6 +4,8 @@ env.js
 env.local
 .env.local
 conspirator/conspiracies/
+conspirator/raw_input/
+tabloid_generator/raw_input/
 wiki_searcher/wikis-fetched/
 wiki_filterer/wikis-filtered/
 ref_extractor/extracted/

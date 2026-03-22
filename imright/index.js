@@ -55,7 +55,7 @@ export async function runPipeline(claim, options = {}) {
 
   onProgress(1, totalSteps, 'Generating bad-faith angles...');
   const step1Start = performance.now();
-  const conspiracy = await generateAngles(claim);
+  const conspiracy = await generateAngles(claim, { slug });
   (() => {
     const current = getTokenUsage();
     const delta = {

@@ -45,6 +45,12 @@ function loadJson(relativePath) {
   return JSON.parse(fs.readFileSync(fullPath, 'utf8'));
 }
 
+function loadRawText(relativePath) {
+  const fullPath = path.join(PROJECT_ROOT, relativePath);
+  if (!fs.existsSync(fullPath)) return null;
+  return fs.readFileSync(fullPath, 'utf8');
+}
+
 function wikiUrl(title) {
   return WIKI_BASE + encodeURIComponent(title.replace(/ /g, '_'));
 }
@@ -160,6 +166,9 @@ function buildHtml(data) {
   });
 
   const linkStats = data.linkStats;
+  const conspiratorRawInput = data.conspiratorRawInput;
+  const tabloidRawInput = data.tabloidRawInput;
+  const tabloidRawOutput = data.tabloidRawOutput;
 
   const navItems = [
     { id: 'arguments', label: 'Arguments & search queries' },
@@ -169,6 +178,7 @@ function buildHtml(data) {
     { id: 'link-stats', label: 'Link validation stats' },
     { id: 'references', label: 'References' },
     { id: 'tokens', label: 'Token/cost/time' },
+    { id: 'grok-prompts', label: 'Grok prompts & output' },
   ];
 
   let html = `<!DOCTYPE html>
@@ -199,23 +209,35 @@ function buildHtml(data) {
     .header a:hover { text-decoration: underline; }
     .nav {
       margin-bottom: 2rem;
-      padding: 1rem;
-      background: #252540;
-      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+      background: linear-gradient(135deg, #252540 0%, #2d2d4a 100%);
+      border-radius: 12px;
+      border: 1px solid #3a3a5a;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
     }
-    .nav ul {
+    .nav > ul {
       margin: 0;
-      padding-left: 1.5rem;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 0.5rem;
     }
     .nav li {
-      margin: 0.25rem 0;
+      margin: 0;
     }
     .nav a {
+      display: block;
+      padding: 0.5rem 0.75rem;
       color: #6df4a1;
       text-decoration: none;
       font-size: 0.9rem;
+      border-radius: 6px;
+      transition: background 0.15s, color 0.15s;
     }
-    .nav a:hover { text-decoration: underline; }
+    .nav a:hover {
+      background: rgba(109, 244, 161, 0.1);
+      color: #7effb3;
+    }
     section {
       margin-bottom: 2.5rem;
       padding: 1.25rem;
@@ -264,6 +286,20 @@ function buildHtml(data) {
     .link-stats-table tr.link-stat-toggle.collapsed th::before { content: '▶ '; }
     .link-stat-details.collapsed { display: none; }
     .ref-item { margin: 0.5rem 0; padding: 0.5rem; background: #1a1a2e; border-radius: 4px; }
+    .grok-pre {
+      margin: 0;
+      padding: 1rem;
+      overflow-x: auto;
+      font-family: ui-monospace, "Cascadia Code", "Source Code Pro", monospace;
+      font-size: 0.8rem;
+      line-height: 1.4;
+      background: #0d0d14;
+      border-radius: 4px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 30rem;
+      overflow-y: auto;
+    }
   </style>
 </head>
 <body>
@@ -563,6 +599,51 @@ function buildHtml(data) {
   }
   html += `      </div>\n    </section>\n`;
 
+  // Section: Grok prompts & output (default collapsed)
+  html += `
+    <section id="grok-prompts">
+      <h2 class="section-toggle collapsed">Grok prompts & output</h2>
+      <div class="section-content collapsed">
+`;
+  const hasGrokData = conspiratorRawInput || tabloidRawInput || tabloidRawOutput;
+  if (hasGrokData) {
+    if (conspiratorRawInput) {
+      const conspiratorJson = JSON.stringify(conspiratorRawInput, null, 2);
+      html += `
+        <div class="ref-item">
+          <div class="term-toggle collapsed">Conspirator: raw prompt input</div>
+          <div class="term-content collapsed">
+            <pre class="grok-pre">${escapeHtml(conspiratorJson)}</pre>
+          </div>
+        </div>
+`;
+    }
+    if (tabloidRawInput) {
+      const tabloidJson = JSON.stringify(tabloidRawInput, null, 2);
+      html += `
+        <div class="ref-item">
+          <div class="term-toggle collapsed">Tabloid: raw prompt input</div>
+          <div class="term-content collapsed">
+            <pre class="grok-pre">${escapeHtml(tabloidJson)}</pre>
+          </div>
+        </div>
+`;
+    }
+    if (tabloidRawOutput) {
+      html += `
+        <div class="ref-item">
+          <div class="term-toggle collapsed">Tabloid: raw output</div>
+          <div class="term-content collapsed">
+            <pre class="grok-pre">${escapeHtml(tabloidRawOutput)}</pre>
+          </div>
+        </div>
+`;
+    }
+  } else {
+    html += `        <p class="no-data">No Grok prompts or output (re-run pipeline to capture).</p>\n`;
+  }
+  html += `      </div>\n    </section>\n`;
+
   html += `
   </div>
   <script id="debug-data" type="application/json">${JSON.stringify(data)}</script>
@@ -623,6 +704,9 @@ async function main() {
   const extracted = loadYaml(`ref_extractor/extracted/${slug}.yaml`);
   const runStats = loadJson(`run-stats/${slug}.json`);
   const linkStats = loadJson(`ref_extractor/link_stats/${slug}.json`);
+  const conspiratorRawInput = loadJson(`conspirator/raw_input/${slug}.json`);
+  const tabloidRawInput = loadJson(`tabloid_generator/raw_input/${slug}.json`);
+  const tabloidRawOutput = loadRawText(`tabloid_generator/output_raw/${slug}.txt`);
 
   const data = {
     slug,
@@ -632,6 +716,9 @@ async function main() {
     extracted,
     runStats,
     linkStats,
+    conspiratorRawInput,
+    tabloidRawInput,
+    tabloidRawOutput,
   };
 
   const html = buildHtml(data);

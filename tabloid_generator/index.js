@@ -319,10 +319,20 @@ Source material (use as evidence; each has id, text, title):
 ${JSON.stringify(candidateArguments, null, 2)}
 
 Write using the two-step process. Headline and every section heading must advance the case for the user's main claim above. First list claims in chain_of_thought.claims, then write the article in article (headline + sections + intro). Include intro LAST—a 2-4 sentence lead that hooks the reader and summarizes the case. Embed links INLINE as [phrase](id) where id is the source's numeric id (1, 2, 3…). Never use full URLs—use only the id number. Return JSON with chain_of_thought and article.`;
-  const rawContent = await callGrok([
+  const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'user', content: userMessage },
-  ]);
+  ];
+  if (slug) {
+    const rawInputDir = path.join(__dirname, 'raw_input');
+    fs.mkdirSync(rawInputDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(rawInputDir, `${slug}.json`),
+      JSON.stringify({ messages }, null, 2),
+      'utf8'
+    );
+  }
+  const rawContent = await callGrok(messages);
 
   // Write raw LLM output to output_raw/ for inspection before HTML generation
   if (slug) {
