@@ -32,7 +32,7 @@ function uniqueCitationKey(citation) {
 }
 
 /**
- * Check multiple URLs concurrently (no delay).
+ * Check multiple URLs concurrently (no delay). Whitelisted URLs skip HEAD (handled inside checkUrl).
  * Returns array of { url, linkStatus, issueType, detail, timeMs }.
  */
 async function checkUrlsConcurrent(urls, options) {
@@ -182,8 +182,10 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
       const results = await checkUrlsConcurrent(allUrlsRound1, linkCheckOptions);
       for (const result of results) {
         linkAssessments.push({ url: result.url, linkStatus: result.linkStatus, issueType: result.issueType, detail: result.detail, timeMs: result.timeMs, round: 1 });
-        validityCache.set(result.url, result.linkStatus !== LinkStatus.INVALID);
-        if (result.linkStatus === LinkStatus.INVALID) {
+        // Only PROBABLY_VALID and WHITELISTED are included in the final article; INVALID and FORBIDDEN are excluded
+        const isIncluded = result.linkStatus === LinkStatus.PROBABLY_VALID || result.linkStatus === LinkStatus.WHITELISTED;
+        validityCache.set(result.url, isIncluded);
+        if (!isIncluded) {
           const termRanks = urlToTermRanks.get(result.url) ?? [];
           for (const { searchTerm, rank } of termRanks) {
             deadLinks.push({ url: result.url, reason: result.detail || result.issueType, searchTerm, rank });
@@ -243,8 +245,9 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
       const results = await checkUrlsConcurrent(allUrlsRound2, linkCheckOptions);
       for (const result of results) {
         linkAssessments.push({ url: result.url, linkStatus: result.linkStatus, issueType: result.issueType, detail: result.detail, timeMs: result.timeMs, round: 2 });
-        validityCache.set(result.url, result.linkStatus !== LinkStatus.INVALID);
-        if (result.linkStatus === LinkStatus.INVALID) {
+        const isIncluded = result.linkStatus === LinkStatus.PROBABLY_VALID || result.linkStatus === LinkStatus.WHITELISTED;
+        validityCache.set(result.url, isIncluded);
+        if (!isIncluded) {
           const termRanks = round2UrlToTermRanks.get(result.url) ?? [];
           for (const { searchTerm, rank } of termRanks) {
             deadLinks.push({ url: result.url, reason: result.detail || result.issueType, searchTerm, rank });

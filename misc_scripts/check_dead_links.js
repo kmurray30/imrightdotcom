@@ -59,12 +59,17 @@ function main() {
     timeoutMs: timeoutSeconds * 1000,
     delayMs: delaySeconds * 1000,
   }).then((results) => {
-    const counts = { [LinkStatus.INVALID]: 0, [LinkStatus.PROBABLY_VALID]: 0, [LinkStatus.UNKNOWN]: 0 };
+    const counts = {
+      [LinkStatus.INVALID]: 0,
+      [LinkStatus.PROBABLY_VALID]: 0,
+      [LinkStatus.FORBIDDEN]: 0,
+      [LinkStatus.WHITELISTED]: 0,
+    };
     let hasProblem = false;
 
     for (const { url, linkStatus, issueType, detail } of results) {
       counts[linkStatus]++;
-      if (linkStatus !== LinkStatus.PROBABLY_VALID) hasProblem = true;
+      if (linkStatus !== LinkStatus.PROBABLY_VALID && linkStatus !== LinkStatus.WHITELISTED) hasProblem = true;
 
       const statusStr = linkStatus.toUpperCase();
       const issueStr = issueType ? ` [${issueType}]` : '';
@@ -75,7 +80,8 @@ function main() {
     console.log();
     console.log(
       `Summary: ${results.length} checked — INVALID: ${counts[LinkStatus.INVALID]}, ` +
-        `PROBABLY_VALID: ${counts[LinkStatus.PROBABLY_VALID]}, UNKNOWN: ${counts[LinkStatus.UNKNOWN]}`
+        `PROBABLY_VALID: ${counts[LinkStatus.PROBABLY_VALID]}, FORBIDDEN: ${counts[LinkStatus.FORBIDDEN] || 0}, ` +
+        `WHITELISTED: ${counts[LinkStatus.WHITELISTED] || 0}`
     );
 
     process.exit(hasProblem ? 1 : 0);

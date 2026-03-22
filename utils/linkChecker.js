@@ -6,18 +6,23 @@
  */
 
 import { URL } from 'url';
+import { isLinkWhitelisted } from './linkWhitelist.js';
 
 /** @readonly */
 export const LinkStatus = Object.freeze({
   INVALID: 'invalid',
   PROBABLY_VALID: 'probably_valid',
-  UNKNOWN: 'unknown',
+  FORBIDDEN: 'forbidden',
+  WHITELISTED: 'whitelisted',
 });
+
+export { isLinkWhitelisted } from './linkWhitelist.js';
 
 /** @readonly */
 export const IssueType = Object.freeze({
   HTTP_404: 'http_404',
   HTTP_410: 'http_410',
+  HTTP_401: 'http_401',
   HTTP_403: 'http_403',
   HTTP_405: 'http_405',
   HTTP_429: 'http_429',
@@ -90,6 +95,10 @@ function humanUnreachableReason(error) {
  * @returns {Promise<{ linkStatus: string, issueType: string | null, detail: string }>}
  */
 export async function checkUrl(url, options = {}) {
+  if (isLinkWhitelisted(url)) {
+    return { linkStatus: LinkStatus.WHITELISTED, issueType: null, detail: '' };
+  }
+
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -110,9 +119,11 @@ export async function checkUrl(url, options = {}) {
     if (statusCode < 200 || statusCode >= 300) {
       if (statusCode === 404) return { linkStatus: LinkStatus.INVALID, issueType: IssueType.HTTP_404, detail };
       if (statusCode === 410) return { linkStatus: LinkStatus.INVALID, issueType: IssueType.HTTP_410, detail };
-      if (statusCode === 405) return { linkStatus: LinkStatus.UNKNOWN, issueType: IssueType.HTTP_405, detail };
-      if (statusCode === 403) return { linkStatus: LinkStatus.UNKNOWN, issueType: IssueType.HTTP_403, detail };
-      if (statusCode === 429) return { linkStatus: LinkStatus.UNKNOWN, issueType: IssueType.HTTP_429, detail };
+      if (statusCode === 401) return { linkStatus: LinkStatus.FORBIDDEN, issueType: IssueType.HTTP_401, detail };
+      if (statusCode === 403) return { linkStatus: LinkStatus.FORBIDDEN, issueType: IssueType.HTTP_403, detail };
+      // 405, 429, connection timeout, and other non-401/403 unknowns → INVALID
+      if (statusCode === 405) return { linkStatus: LinkStatus.INVALID, issueType: IssueType.HTTP_405, detail };
+      if (statusCode === 429) return { linkStatus: LinkStatus.INVALID, issueType: IssueType.HTTP_429, detail };
       if (statusCode >= 400 && statusCode < 500) return { linkStatus: LinkStatus.INVALID, issueType: IssueType.HTTP_4XX, detail };
       return { linkStatus: LinkStatus.INVALID, issueType: IssueType.HTTP_5XX, detail };
     }
@@ -138,7 +149,15 @@ export async function checkUrl(url, options = {}) {
     clearTimeout(timeoutId);
     const issueType = error.name === 'AbortError' ? IssueType.CONNECTION_TIMEOUT : issueTypeFromError(error);
     const detail = error.name === 'AbortError' ? 'connection timeout' : humanUnreachableReason(error);
-    const linkStatus = issueType === IssueType.CONNECTION_FAILED ? LinkStatus.INVALID : LinkStatus.UNKNOWN;
+    // Connection timeout, connection failed, DNS failed, etc. → INVALID. Only 401/403 stay FORBIDDEN (handled above).
+    const linkStatus =
+      issueType === IssueType.CONNECTION_TIMEOUT ||
+      issueType === IssueType.CONNECTION_FAILED ||
+      issueType === IssueType.DNS_FAILED ||
+      issueType === IssueType.CONNECTION_REFUSED ||
+      issueType === IssueType.SSL_ERROR
+        ? LinkStatus.INVALID
+        : LinkStatus.FORBIDDEN;
     return { linkStatus, issueType, detail };
   }
 }

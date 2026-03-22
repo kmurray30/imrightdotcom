@@ -7,5 +7,8 @@ conspirator/conspiracies/
 wiki_searcher/wikis-fetched/
 wiki_filterer/wikis-filtered/
 ref_extractor/extracted/
+ref_extractor/link_stats/
 tabloid_generator/output/
+run-stats/
+misc_scripts/link_validation_output/
 imright/debug/

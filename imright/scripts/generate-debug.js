@@ -245,7 +245,8 @@ function buildHtml(data) {
     .top-ref__sentence { margin: 0.25rem 0; font-size: 0.9rem; color: #bbb; line-height: 1.5; }
     .top-ref__meta { margin: 0.25rem 0 0 0; font-size: 0.8rem; }
     .ref-dead { color: #e63946; }
-    .ref-unknown { color: #f4a261; }
+    .ref-forbidden { color: #f4a261; }
+    .ref-whitelisted { color: #9b59b6; }
     .term-toggle, .ref-toggle { cursor: pointer; user-select: none; }
     .term-toggle::before { content: '▼ '; font-size: 0.7em; }
     .term-toggle.collapsed::before { content: '▶ '; }
@@ -344,7 +345,10 @@ function buildHtml(data) {
   // Section: Link validation stats (merged with ref counts, above References)
   const validCount = (linkStats?.results ?? []).filter((r) => r.linkStatus === 'probably_valid').length;
   const invalidCount = (linkStats?.results ?? []).filter((r) => r.linkStatus === 'invalid').length;
-  const unknownCount = (linkStats?.results ?? []).filter((r) => r.linkStatus === 'unknown').length;
+  const forbiddenCount = (linkStats?.results ?? []).filter(
+    (r) => r.linkStatus === 'forbidden' || r.linkStatus === 'unknown'
+  ).length;
+  const whitelistedCount = (linkStats?.results ?? []).filter((r) => r.linkStatus === 'whitelisted').length;
   const validationChecks = linkStats?.linkCount ?? linkStats?.results?.length ?? 0;
 
   html += `
@@ -364,7 +368,8 @@ function buildHtml(data) {
           <tr><th>Validation checks</th><td>${validationChecks}</td></tr>
           <tr><th>Valid</th><td>${validCount}</td></tr>
           <tr><th>Invalid</th><td>${invalidCount}</td></tr>
-          <tr><th>Unknown</th><td>${unknownCount}</td></tr>
+          <tr><th>Forbidden</th><td>${forbiddenCount}</td></tr>
+          <tr><th>Whitelisted</th><td>${whitelistedCount}</td></tr>
           <tr><th>Retries</th><td>${refStats?.retries ?? 0}</td></tr>
         </table>
 `;
@@ -386,8 +391,22 @@ function buildHtml(data) {
         <div class="link-results-list">
 `;
       linkStats.results.forEach((result, index) => {
-        const statusClass = result.linkStatus === 'invalid' ? 'ref-dead' : result.linkStatus === 'probably_valid' ? '' : 'ref-unknown';
-        const statusLabel = result.linkStatus === 'invalid' ? 'INVALID' : result.linkStatus === 'probably_valid' ? 'OK' : 'UNKNOWN';
+        const statusClass =
+          result.linkStatus === 'invalid'
+            ? 'ref-dead'
+            : result.linkStatus === 'probably_valid'
+              ? ''
+              : result.linkStatus === 'whitelisted'
+                ? 'ref-whitelisted'
+                : 'ref-forbidden';
+        const statusLabel =
+          result.linkStatus === 'invalid'
+            ? 'INVALID'
+            : result.linkStatus === 'probably_valid'
+              ? 'OK'
+              : result.linkStatus === 'whitelisted'
+                ? 'WHITELISTED'
+                : 'FORBIDDEN';
         html += `
           <div class="ref-item">
             <div class="ref-toggle collapsed">
