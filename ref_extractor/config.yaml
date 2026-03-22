@@ -15,12 +15,13 @@ exclude_url_patterns:
   - pqasb.pqarchiver.com
   - archive.org
   - web.archive.org
-  - nytimes.com/archives/
+  # - nytimes.com/archives/
   - scribd.com
   - jstor.org
   - link.springer.com
   - proquest.com
   - ebscohost.com
+  - facebook.com
 
 # Top matches to keep per search term (query and argument each get this many)
 top_matches_per_term: 6
@@ -31,5 +32,7 @@ min_term_length: 5
 
 # HEAD-check each link; drop citations with invalid links (404, redirect-to-home, etc.)
 check_links: true
+# Timeout per link in ms; give up after this (returns TIMEOUT status)
+link_check_timeout_ms: 10000
 # Number of retry rounds (each checks next k links for failed terms)
 link_check_retries: 1

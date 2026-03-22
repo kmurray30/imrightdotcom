@@ -246,6 +246,7 @@ function buildHtml(data) {
     .top-ref__meta { margin: 0.25rem 0 0 0; font-size: 0.8rem; }
     .ref-dead { color: #e63946; }
     .ref-forbidden { color: #f4a261; }
+    .ref-timeout { color: #e9c46a; }
     .ref-whitelisted { color: #9b59b6; }
     .term-toggle, .ref-toggle { cursor: pointer; user-select: none; }
     .term-toggle::before { content: '▼ '; font-size: 0.7em; }
@@ -349,6 +350,7 @@ function buildHtml(data) {
     (r) => r.linkStatus === 'forbidden' || r.linkStatus === 'unknown'
   ).length;
   const whitelistedCount = (linkStats?.results ?? []).filter((r) => r.linkStatus === 'whitelisted').length;
+  const timeoutCount = (linkStats?.results ?? []).filter((r) => r.linkStatus === 'timeout').length;
   const validationChecks = linkStats?.linkCount ?? linkStats?.results?.length ?? 0;
 
   html += `
@@ -370,6 +372,7 @@ function buildHtml(data) {
           <tr><th>Invalid</th><td>${invalidCount}</td></tr>
           <tr><th>Forbidden</th><td>${forbiddenCount}</td></tr>
           <tr><th>Whitelisted</th><td>${whitelistedCount}</td></tr>
+          <tr><th>Timeout</th><td>${timeoutCount}</td></tr>
           <tr><th>Retries</th><td>${refStats?.retries ?? 0}</td></tr>
         </table>
 `;
@@ -398,7 +401,9 @@ function buildHtml(data) {
               ? ''
               : result.linkStatus === 'whitelisted'
                 ? 'ref-whitelisted'
-                : 'ref-forbidden';
+                : result.linkStatus === 'timeout'
+                  ? 'ref-timeout'
+                  : 'ref-forbidden';
         const statusLabel =
           result.linkStatus === 'invalid'
             ? 'INVALID'
@@ -406,7 +411,9 @@ function buildHtml(data) {
               ? 'OK'
               : result.linkStatus === 'whitelisted'
                 ? 'WHITELISTED'
-                : 'FORBIDDEN';
+                : result.linkStatus === 'timeout'
+                  ? 'TIMEOUT'
+                  : 'FORBIDDEN';
         html += `
           <div class="ref-item">
             <div class="ref-toggle collapsed">

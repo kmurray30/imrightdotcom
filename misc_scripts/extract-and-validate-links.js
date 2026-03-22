@@ -11,6 +11,7 @@
  *        node misc_scripts/extract-and-validate-links.js --limit 100   # only check first N URLs (for testing)
  *        node misc_scripts/extract-and-validate-links.js --low-pass 5  # only check links with >= 5 occurrences
  *        node misc_scripts/extract-and-validate-links.js --full-url    # check one full link per base URL instead of origin (e.g. nytimes.com/article)
+ *        node misc_scripts/extract-and-validate-links.js --timeout 5000  # per-URL timeout in ms (default 5000)
  */
 
 import fs from 'fs';
@@ -100,6 +101,7 @@ function main() {
   let limit = null;
   let lowPassMin = null;
   let useFullUrl = false;
+  let timeoutMs = 5000;
 
   for (let index = 0; index < args.length; index++) {
     if (args[index] === '--concurrency' && args[index + 1]) {
@@ -112,6 +114,8 @@ function main() {
       lowPassMin = parseInt(args[++index], 10);
     } else if (args[index] === '--full-url') {
       useFullUrl = true;
+    } else if (args[index] === '--timeout' && args[index + 1]) {
+      timeoutMs = parseInt(args[++index], 10);
     }
   }
 
@@ -224,16 +228,17 @@ function main() {
     concurrency,
     async (baseUrl) => {
       const checkTarget = urlToCheck(baseUrl);
-      const result = await checkUrl(checkTarget);
+      const result = await checkUrl(checkTarget, { timeoutMs });
       return { baseUrl, ...result };
     },
     (completed, total) => updateProgressBar(completed, total)
   ).then((results) => {
     process.stderr.write('\n');
-    // 5. Categorize into valid, invalid, forbidden; whitelisted are separate (no HEAD done)
+    // 5. Categorize into valid, invalid, forbidden, timeout; whitelisted are separate (no HEAD done)
     const valid = [];
     const invalid = [];
     const forbidden = [];
+    const timeout = [];
     const whitelisted = whitelistedBaseUrls.map((baseUrl) => ({
       baseUrl,
       count: baseUrlToCount.get(baseUrl),
@@ -247,6 +252,8 @@ function main() {
         valid.push(entry);
       } else if (record.linkStatus === LinkStatus.INVALID) {
         invalid.push({ ...entry, issueType: record.issueType ?? 'unknown', detail: record.detail ?? '' });
+      } else if (record.linkStatus === LinkStatus.TIMEOUT) {
+        timeout.push({ ...entry, issueType: record.issueType ?? 'connection_timeout', detail: record.detail ?? '' });
       } else {
         // FORBIDDEN: include exact error type (401/403)
         forbidden.push({
@@ -262,6 +269,7 @@ function main() {
     valid.sort(byCountDesc);
     invalid.sort(byCountDesc);
     forbidden.sort(byCountDesc);
+    timeout.sort(byCountDesc);
     whitelisted.sort(byCountDesc);
 
     // 7. Ensure output directory exists
@@ -289,6 +297,11 @@ function main() {
       (entry) => `${entry.count}\t${entry.baseUrl}\t${entry.issueType} ${entry.detail}`.trim()
     );
     writeLines(
+      path.join(outputDir, 'timeout_links.txt'),
+      timeout,
+      (entry) => `${entry.count}\t${entry.baseUrl}\t${entry.issueType} ${entry.detail}`.trim()
+    );
+    writeLines(
       path.join(outputDir, 'whitelisted_links.txt'),
       whitelisted,
       (entry) => `${entry.count}\t${entry.baseUrl}`
@@ -299,6 +312,7 @@ function main() {
     console.log(`  valid_links.txt:     ${valid.length} (descending by frequency)`);
     console.log(`  invalid_links.txt:   ${invalid.length} (descending by frequency)`);
     console.log(`  forbidden_links.txt: ${forbidden.length} (descending by frequency, with exact error type)`);
+    console.log(`  timeout_links.txt:   ${timeout.length} (descending by frequency)`);
     console.log(`  whitelisted_links.txt: ${whitelisted.length} (skipped HEAD check)`);
   }).catch((error) => {
     console.error('Error during link validation:', error);

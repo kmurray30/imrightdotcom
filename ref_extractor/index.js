@@ -82,6 +82,7 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
   const checkLinks = options.check_links ?? config.check_links ?? true;
   const minRefsPerTerm = options.min_refs_per_term ?? config.min_refs_per_term ?? 2;
   const linkCheckRetries = options.link_check_retries ?? config.link_check_retries ?? 1;
+  const linkCheckTimeoutMs = options.link_check_timeout_ms ?? config.link_check_timeout_ms ?? 5000;
   const slug = options.slug ?? null;
 
   const pages = wikiFilteredData?.pages ?? [];
@@ -91,7 +92,7 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
   const pagesByTitle = new Map(pages.map((page) => [page.title, page]));
 
   const extractOptions = { citationTypes, excludeUrlPatterns, minTermLength };
-  const linkCheckOptions = { timeoutMs: 18000 };
+  const linkCheckOptions = { timeoutMs: linkCheckTimeoutMs };
 
   const deadLinks = [];
   let retriesUsed = 0;
