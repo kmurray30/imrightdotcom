@@ -134,9 +134,24 @@ function buildUrlToIndex(citations) {
 /** Generate self-contained tabloid-style HTML. */
 function generateHtml(selected, topic, slug = null, citations = [], idToUrl = null) {
   const headline = selected.headline ?? 'TRUTH FLASH!';
+  const intro = selected.intro;
   const sections = selected.sections ?? [];
   const urlToIndex = buildUrlToIndex(citations);
   const debugPageUrl = slug ? `../../imright/debug/${slug}.html` : null;
+
+  // Intro is written last by Grok (for context) but rendered first in the article
+  const introHtml = intro
+    ? (() => {
+        const introParagraphs = Array.isArray(intro) ? intro : [intro];
+        return introParagraphs
+          .map((paragraph) => {
+            const rawText = typeof paragraph === 'string' ? paragraph : (paragraph?.text ?? '');
+            const processedHtml = processParagraphWithLinks(rawText, idToUrl, urlToIndex, debugPageUrl);
+            return `    <p class="article__intro">${processedHtml}</p>`;
+          })
+          .join('\n');
+      })()
+    : '';
 
   // Support legacy format (paragraphs only) for backward compatibility
   const sectionsHtml =
@@ -221,6 +236,13 @@ ${paragraphsHtml}
     }
     .masthead__debug a:hover { text-decoration: underline; }
     .article { margin: 2rem 0; }
+    .article__intro {
+      font-size: 1.1rem;
+      margin: 0 0 1.5rem 0;
+      text-align: justify;
+      color: #ddd;
+    }
+    .article__intro:last-of-type { margin-bottom: 2rem; }
     .article__paragraph {
       margin: 0 0 1.25rem 0;
       text-align: justify;
@@ -238,11 +260,13 @@ ${paragraphsHtml}
       margin: 0 0 1rem 0;
       line-height: 1.3;
     }
-    .article__paragraph a {
+    .article__paragraph a,
+    .article__intro a {
       color: #6df4a1;
       text-decoration: none;
     }
-    .article__paragraph a:hover { text-decoration: underline; }
+    .article__paragraph a:hover,
+    .article__intro a:hover { text-decoration: underline; }
     .ref-num {
       font-size: 0.75em;
       color: #888;
@@ -261,6 +285,7 @@ ${paragraphsHtml}
       ${slug ? `<p class="masthead__debug"><a href="../../imright/debug/${escapeHtml(slug)}.html">Pipeline debug</a></p>` : ''}
     </header>
     <article class="article">
+${introHtml}
 ${sectionsHtml}
     </article>
   </div>
@@ -293,7 +318,7 @@ export async function generate(claim, extractedByArticle, slug = null) {
 Source material (use as evidence; each has id, text, title):
 ${JSON.stringify(candidateArguments, null, 2)}
 
-Write using the two-step process. Headline and every section heading must advance the case for the user's main claim above. First list claims in chain_of_thought.claims, then write the article in article (headline + sections). Embed links INLINE as [phrase](id) where id is the source's numeric id (1, 2, 3…). Never use full URLs—use only the id number. Return JSON with chain_of_thought and article.`;
+Write using the two-step process. Headline and every section heading must advance the case for the user's main claim above. First list claims in chain_of_thought.claims, then write the article in article (headline + sections + intro). Include intro LAST—a 2-4 sentence lead that hooks the reader and summarizes the case. Embed links INLINE as [phrase](id) where id is the source's numeric id (1, 2, 3…). Never use full URLs—use only the id number. Return JSON with chain_of_thought and article.`;
   const rawContent = await callGrok([
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'user', content: userMessage },

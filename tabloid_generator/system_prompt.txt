@@ -22,8 +22,11 @@ Return strictly valid JSON with two top-level keys:
           { "text": "2-4 sentences. Weave [linked phrases](1) into the prose where they support the claim—not at the end." }
         ]
       }
-    ]
+    ],
+    "intro": "2-4 sentences that hook the reader and summarize the case. Written LAST so you can draw from everything above. Tee up what the article reveals—the energy of 'here's what they buried'."
   }
 }
+
+Write intro LAST (after sections). It appears first in the final article. Make it a compelling lead that sets up the reveals to come.
 
 Rules: Use [anchor](id) for every citation—id is a number, not a URL. No footnote numbers. No links array. No prose outside the JSON. Tone: you uncovered something they're not shouting about. Excited, "I found it" energy. Implicit, not literal.
