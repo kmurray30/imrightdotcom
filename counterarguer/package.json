@@ -1,0 +1,6 @@
+{
+  "name": "counterarguer",
+  "private": true,
+  "type": "module",
+  "description": "Generates scathing counterarguments for tabloid article sections via Grok"
+}

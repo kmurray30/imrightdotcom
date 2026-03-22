@@ -289,6 +289,8 @@ function buildHtml(data) {
   const conspiratorRawOutput = data.conspiratorRawOutput;
   const tabloidRawInput = data.tabloidRawInput;
   const tabloidRawOutput = data.tabloidRawOutput;
+  const counterarguerRawInput = data.counterarguerRawInput;
+  const counterarguerRawOutput = data.counterarguerRawOutput;
 
   const validCount = (linkStats?.results ?? []).filter((r) => r.linkStatus === 'probably_valid').length;
   const whitelistedCount = (linkStats?.results ?? []).filter((r) => r.linkStatus === 'whitelisted').length;
@@ -317,6 +319,10 @@ function buildHtml(data) {
     {
       id: 'tabloid',
       label: `Tabloid (${tabloidSectionCount} sections, ${tabloidLinkCount} links)`,
+    },
+    {
+      id: 'counterarguer',
+      label: `Counterarguer (Bunky) ${counterarguerRawInput?.sections?.length ?? 0} sections`,
     },
     { id: 'stats', label: 'Stats' },
   ];
@@ -1238,6 +1244,41 @@ ${renderRefsList(refs, 0, searchTerm)}
     </section>
 `;
 
+  // Section: Counterarguer (Bunky input + output)
+  const counterarguerStage = stages.find((s) => s.stage === 7);
+  const counterarguerInputTokens = counterarguerStage?.inputTokens ?? 0;
+  const counterarguerOutputTokens = counterarguerStage?.outputTokens ?? 0;
+  const counterarguerSectionCount = counterarguerRawInput?.sections?.length ?? 0;
+  html += `
+    <section id="counterarguer">
+      <h2 class="section-toggle collapsed">Counterarguer (Bunky) (${counterarguerSectionCount} sections)</h2>
+      <div class="section-content collapsed">
+        <div class="ref-item">
+          <div class="term-toggle collapsed">Input (${counterarguerInputTokens} tokens)</div>
+          <div class="term-content collapsed">
+`;
+  if (counterarguerRawInput) {
+    html += `            <pre class="grok-pre">${escapeHtml(JSON.stringify(counterarguerRawInput, null, 2))}</pre>\n`;
+  } else {
+    html += `            <p class="no-data">No raw input (re-run pipeline to capture).</p>\n`;
+  }
+  html += `          </div>
+        </div>
+        <div class="ref-item">
+          <div class="term-toggle collapsed">Output (${counterarguerOutputTokens} tokens)</div>
+          <div class="term-content collapsed">
+`;
+  if (counterarguerRawOutput) {
+    html += `            <pre class="grok-pre">${escapeHtml(counterarguerRawOutput)}</pre>\n`;
+  } else {
+    html += `            <p class="no-data">No raw output (re-run pipeline to capture).</p>\n`;
+  }
+  html += `          </div>
+        </div>
+      </div>
+    </section>
+`;
+
   html += `
   </div>
   <script id="debug-data" type="application/json">${JSON.stringify(data)}</script>
@@ -1302,6 +1343,8 @@ async function main() {
   const conspiratorRawOutput = loadRawText(`conspirator/raw_output/${slug}.txt`);
   const tabloidRawInput = loadJson(`tabloid_generator/raw_input/${slug}.json`);
   const tabloidRawOutput = loadRawText(`tabloid_generator/output_raw/${slug}.txt`);
+  const counterarguerRawInput = loadJson(`counterarguer/input/${slug}.json`);
+  const counterarguerRawOutput = loadRawText(`counterarguer/output/${slug}.txt`);
 
   const data = {
     slug,
@@ -1315,6 +1358,8 @@ async function main() {
     conspiratorRawOutput,
     tabloidRawInput,
     tabloidRawOutput,
+    counterarguerRawInput,
+    counterarguerRawOutput,
   };
 
   const html = buildHtml(data);
@@ -1323,7 +1368,10 @@ async function main() {
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   fs.writeFileSync(outputPath, html, 'utf8');
 
-  console.log(`Wrote ${outputPath}`);
+  // Pipeline passes IMRIGHT_SILENT_DEBUG=1 and prints paths at end; standalone prints here
+  if (!process.env.IMRIGHT_SILENT_DEBUG) {
+    console.log(`Wrote ${outputPath}`);
+  }
 }
 
 main().catch((error) => {

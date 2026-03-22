@@ -200,8 +200,21 @@ export async function fetchAndDownloadImages(article, slug, projectRoot) {
   return imagePaths;
 }
 
+/** Get Bunky image as data URL for self-contained HTML (avoids file:// path issues). */
+function getBunkyDataUrl(projectRoot) {
+  const root = projectRoot || path.resolve(__dirname, '..');
+  const bunkyPath = fs.existsSync(path.join(root, 'assets', 'bunky.png'))
+    ? path.join(root, 'assets', 'bunky.png')
+    : path.join(root, 'bunky.png');
+  if (fs.existsSync(bunkyPath)) {
+    const buf = fs.readFileSync(bunkyPath);
+    return 'data:image/png;base64,' + buf.toString('base64');
+  }
+  return 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><ellipse cx="24" cy="32" rx="14" ry="8" fill="%23654321"/><ellipse cx="24" cy="26" rx="12" ry="10" fill="%238B6914"/><ellipse cx="20" cy="22" rx="3" ry="2" fill="%23333"/><ellipse cx="28" cy="22" rx="3" ry="2" fill="%23333"/></svg>');
+}
+
 /** Generate self-contained tabloid-style HTML. */
-function generateHtml(selected, topic, slug = null, citations = [], idToUrl = null, imagePaths = null) {
+function generateHtml(selected, topic, slug = null, citations = [], idToUrl = null, imagePaths = null, bunkyDataUrl = null) {
   const headline = selected.headline ?? 'TRUTH FLASH!';
   const intro = selected.intro;
   const conclusion = selected.conclusion;
@@ -227,7 +240,12 @@ ${paragraphsHtml}
       })()
     : '';
 
-  // Support legacy format (paragraphs only) for backward compatibility
+  const hasBunky = slug && sections.length > 0;
+  const resolvedBunkyUrl = bunkyDataUrl || getBunkyDataUrl();
+
+  // Sections — when Bunky is active, embed a callout inside each section.
+  // The callout is position:absolute so it floats outside the article card to the right,
+  // perfectly aligned with its section, no JS positioning needed.
   const sectionsHtml =
     sections.length > 0
       ? sections
@@ -241,9 +259,15 @@ ${paragraphsHtml}
                 return `      <p class="article__paragraph">${processedHtml}</p>`;
               })
               .join('\n');
-            return `    <section class="article__section">
+            const bunkyCalloutHtml = hasBunky
+              ? `\n      <div class="bunky-callout" data-section-index="${sectionIndex}">
+        <img class="bunky-callout__img" src="${resolvedBunkyUrl}" alt="Bunky" title="Bunky the BS Detector">
+        <div class="article__bunky-bubble article__bunky-bubble--thinking" data-section-index="${sectionIndex}" role="button" tabindex="0">...</div>
+      </div>`
+              : '';
+            return `    <section class="article__section" data-section-index="${sectionIndex}">
     <h2 class="article__heading">${escapeHtml(heading)}</h2>
-${paragraphsHtml}
+${paragraphsHtml}${bunkyCalloutHtml}
     </section>`;
           })
           .join('\n')
@@ -314,11 +338,8 @@ ${paragraphsHtml}
       text-decoration: none;
     }
     .site-header__logo:hover { color: #c4291c; }
-    .container {
-      max-width: 680px;
-      margin: 0 auto;
-      padding: 2rem 1.25rem 3rem;
-    }
+    .container { max-width: 680px; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+    .container--with-bunky { max-width: 900px; }
     .article-hero {
       margin-bottom: 2rem;
     }
@@ -352,7 +373,9 @@ ${paragraphsHtml}
       padding: 2rem 1.75rem;
       box-shadow: 0 2px 8px rgba(0,0,0,0.06);
       margin-bottom: 2rem;
+      overflow: visible;
     }
+    .article--has-bunky { margin-right: 180px; }
     .article__intro-section {
       margin-bottom: 2rem;
       padding-bottom: 1.5rem;
@@ -366,9 +389,26 @@ ${paragraphsHtml}
     }
     .article__intro:last-of-type { margin-bottom: 0; }
     .article__section {
+      position: relative;
       margin-bottom: 2rem;
       padding-bottom: 2rem;
       border-bottom: 1px solid #e5e5e7;
+    }
+    .bunky-callout {
+      position: absolute;
+      right: 0;
+      top: 0;
+      transform: translateX(calc(100% + 1.25rem));
+      width: 140px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .bunky-callout__img {
+      width: 48px;
+      height: 48px;
+      object-fit: contain;
     }
     .article__section:last-of-type { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
     .article__heading {
@@ -427,6 +467,74 @@ ${paragraphsHtml}
     .article__section-image {
       margin: 0 0 1rem 0;
     }
+    .article__bunky-bubble {
+      max-width: 140px;
+      padding: 0.5rem 0.75rem;
+      background: #fff9e6;
+      border: 2px solid #e6d9a8;
+      border-radius: 12px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: background 0.2s, border-color 0.2s;
+      text-align: center;
+    }
+    .article__bunky-bubble:hover {
+      background: #fff3cc;
+      border-color: #d4c76a;
+    }
+    .article__bunky-bubble[data-has-analysis="true"] { cursor: pointer; }
+    .article__bunky-bubble--thinking {
+      animation: bunky-thinking 1.5s ease-in-out infinite;
+    }
+    @keyframes bunky-thinking {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.7; transform: scale(1.05); }
+    }
+    .bunky-panel {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: 380px;
+      max-width: 40vw;
+      height: 100vh;
+      background: #fff;
+      box-shadow: -4px 0 24px rgba(0,0,0,0.12);
+      z-index: 1000;
+      transform: translateX(100%);
+      transition: transform 0.25s ease-out;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .bunky-panel.is-open { transform: translateX(0); }
+    .bunky-panel__header {
+      flex-shrink: 0;
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid #e5e5e7;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .bunky-panel__title { font-size: 0.95rem; font-weight: 600; margin: 0; color: #1d1d1f; }
+    .bunky-panel__close {
+      background: none;
+      border: none;
+      font-size: 1.5rem;
+      line-height: 1;
+      cursor: pointer;
+      color: #8e8e93;
+      padding: 0.25rem;
+    }
+    .bunky-panel__close:hover { color: #1d1d1f; }
+    .bunky-panel__analysis {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1rem 1.25rem;
+      font-size: 0.9rem;
+      line-height: 1.65;
+      color: #424245;
+      white-space: pre-wrap;
+    }
   </style>
 </head>
 <body>
@@ -436,12 +544,12 @@ ${paragraphsHtml}
       ${slug ? `<span class="site-header__debug"><a href="../../imright/debug/${escapeHtml(slug)}.html" target="_blank" rel="noopener">Debug</a></span>` : ''}
     </div>
   </header>
-  <div class="container">
+  <div class="container${hasBunky ? ' container--with-bunky' : ''}">
     <div class="article-hero">
       <p class="article-hero__topic">${escapeHtml(topic)}</p>
       <h1 class="headline">${escapeHtml(headline)}</h1>
     </div>
-    <article class="article">
+    <article class="article${hasBunky ? ' article--has-bunky' : ''}">
 ${(() => {
   const heroFilename = imageMap.get('hero');
   return heroFilename && slug
@@ -452,6 +560,81 @@ ${sectionsHtml}
 ${conclusionHtml}
     </article>
   </div>
+  <div class="bunky-panel" id="bunkyPanel" aria-hidden="true">
+    <div class="bunky-panel__header">
+      <p class="bunky-panel__title">Bunky says:</p>
+      <button class="bunky-panel__close" type="button" aria-label="Close">&times;</button>
+    </div>
+    <div class="bunky-panel__analysis" id="bunkyPanelAnalysis"></div>
+  </div>
+  <!-- BUNKY_COUNTERARGS_PLACEHOLDER -->
+  <script>
+(function() {
+  var slug = ${slug ? JSON.stringify(slug) : 'null'};
+  if (!slug) return;
+  function applyCounterargs(data) {
+    if (!data || !Array.isArray(data.counterarguments)) return;
+    var list = data.counterarguments;
+    document.querySelectorAll(".article__bunky-bubble").forEach(function(bubble) {
+      var idx = parseInt(bubble.getAttribute("data-section-index"), 10);
+      if (idx < 0 || idx >= list.length) return;
+      var item = list[idx];
+      if (!item || !item.blurb) return;
+      bubble.textContent = item.blurb;
+      bubble.classList.remove("article__bunky-bubble--thinking");
+      bubble.setAttribute("data-has-analysis", item.analysis ? "true" : "false");
+      bubble._analysis = item.analysis || "";
+    });
+  }
+  function tryApply(data) {
+    if (data && Array.isArray(data.counterarguments) && data.counterarguments.length > 0) {
+      applyCounterargs(data);
+      return true;
+    }
+    return false;
+  }
+  if (window.__BUNKY_COUNTERARGS && tryApply(window.__BUNKY_COUNTERARGS)) {
+    // Embedded at build time, done
+  } else {
+    var counterargsUrl = "../counterarguments/" + slug + ".json";
+    var pollAttempts = 0;
+    var maxPollAttempts = 150; // ~5 min at 2s
+    function poll() {
+      pollAttempts++;
+      fetch(counterargsUrl).then(function(r) { return r.ok ? r.json() : null; }).then(function(data) {
+        if (tryApply(data)) return;
+        if (pollAttempts < maxPollAttempts) setTimeout(poll, 2000);
+      }).catch(function() {
+        if (pollAttempts < maxPollAttempts) setTimeout(poll, 2000);
+      });
+    }
+    poll();
+  }
+
+  var panel = document.getElementById("bunkyPanel");
+  var analysisEl = document.getElementById("bunkyPanelAnalysis");
+  var closeBtn = panel && panel.querySelector(".bunky-panel__close");
+  document.addEventListener("click", function(e) {
+    var bubble = e.target.closest('.article__bunky-bubble[data-has-analysis="true"]');
+    if (bubble && bubble._analysis) {
+      analysisEl.textContent = bubble._analysis;
+      panel.classList.add("is-open");
+      panel.setAttribute("aria-hidden", "false");
+    }
+  });
+  if (closeBtn) closeBtn.addEventListener("click", function() {
+    panel.classList.remove("is-open");
+    panel.setAttribute("aria-hidden", "true");
+  });
+  document.addEventListener("keydown", function(e) {
+    if (e.key === "Escape" && panel && panel.classList.contains("is-open")) {
+      panel.classList.remove("is-open");
+      panel.setAttribute("aria-hidden", "true");
+    }
+  });
+
+})();
+  </script>
 </body>
 </html>`;
 }
@@ -522,7 +705,8 @@ ${JSON.stringify(candidateArguments, null, 2)}`;
 export async function renderWithImages(articleResult, slug, projectRoot) {
   const { article, condensed, idToUrl, topic } = articleResult;
   const imagePaths = await fetchAndDownloadImages(article, slug, projectRoot);
-  return generateHtml(article, topic, slug, condensed, idToUrl, imagePaths);
+  const bunkyDataUrl = (slug && (article?.sections ?? []).length > 0) ? getBunkyDataUrl(projectRoot) : null;
+  return generateHtml(article, topic, slug, condensed, idToUrl, imagePaths, bunkyDataUrl);
 }
 
 /**
@@ -608,5 +792,6 @@ export async function regenerateFromRaw(slug, projectRoot) {
       ? await fetchAndDownloadImages(selected, slug, projectRoot)
       : new Map();
 
-  return generateHtml(selected, topic, slug, condensed, idToUrl, imagePaths);
+  const bunkyDataUrl = (selected?.sections ?? []).length > 0 ? getBunkyDataUrl(projectRoot) : null;
+  return generateHtml(selected, topic, slug, condensed, idToUrl, imagePaths, bunkyDataUrl);
 }

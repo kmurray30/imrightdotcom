@@ -12,6 +12,7 @@ import {
   renderWithImages,
   regenerateFromRaw,
 } from '../tabloid_generator/index.js';
+import { generateCounterarguments } from '../counterarguer/index.js';
 import { slugify } from './utils.js';
 import {
   getTokenUsage,
@@ -44,13 +45,19 @@ function saveToDisk(filePath, content, format) {
  * @param {object} [options] - Optional config
  * @param {function} [options.onProgress] - Callback (stepIndex, totalSteps, message) for progress updates
  * @param {function} [options.onStepComplete] - Callback (stepIndex, totalSteps, message, delta) after each step; delta = { inputTokens, outputTokens, totalCost, timeMs } for that step
+ * @param {function} [options.onPageReady] - Callback (slug) when HTML is written and page can be opened (after step 6, before step 7)
  * @returns {Promise<{ conspiracy, wikiFetched, wikiFiltered, extracted, html, slug }>}
  */
 export async function runPipeline(claim, options = {}) {
   const onProgress = options.onProgress ?? (() => {});
   const onStepComplete = options.onStepComplete ?? (() => {});
-  const totalSteps = 6;
+  const onPageReady = options.onPageReady ?? (() => {});
+  const totalSteps = 7;
   const slug = slugify(claim);
+
+  // Remove stale counterarguments so the page doesn't load old results while step 7 runs
+  const staleCounterargs = path.join(PROJECT_ROOT, 'tabloid_generator', 'counterarguments', `${slug}.json`);
+  fs.rmSync(staleCounterargs, { force: true });
 
   resetTokenUsage();
   let previousUsage = getTokenUsage();
@@ -233,11 +240,12 @@ export async function runPipeline(claim, options = {}) {
       timeMs,
     });
   })();
-  saveToDisk(
-    path.join(PROJECT_ROOT, 'tabloid_generator', 'output', `${slug}.html`),
-    html,
-    'html'
-  );
+  const htmlPath = path.join(PROJECT_ROOT, 'tabloid_generator', 'output', `${slug}.html`);
+  fs.mkdirSync(path.dirname(htmlPath), { recursive: true });
+  fs.writeFileSync(htmlPath, html, 'utf8');
+
+  // Page is ready; open browser now so user can read while step 7 runs
+  onPageReady(slug);
 
   // Write run-stats synchronously so the debug generator can read it
   const runStatsPath = path.join(PROJECT_ROOT, 'run-stats', `${slug}.json`);
@@ -261,15 +269,90 @@ export async function runPipeline(claim, options = {}) {
     'utf8'
   );
 
-  // Auto-run the debug page generator
+  // Step 7: counterarguments. Await so totals are complete before CLI prints.
+  const sections = articleResult?.article?.sections ?? [];
+  if (sections.length > 0) {
+    const step7Start = performance.now();
+    const step7PreviousUsage = getTokenUsage();
+    onProgress(7, totalSteps, 'Generating counterarguments...');
+
+    try {
+      const { counterarguments } = await generateCounterarguments(
+        articleResult.article,
+        articleResult.topic,
+        slug
+      );
+      const current = getTokenUsage();
+      const delta = {
+        inputTokens: current.inputTokens - step7PreviousUsage.inputTokens,
+        outputTokens: current.outputTokens - step7PreviousUsage.outputTokens,
+      };
+      const deltaCosts = computeCost(delta);
+      const timeMs = performance.now() - step7Start;
+      const stageRow = {
+        stage: 7,
+        name: 'Generating counterarguments...',
+        inputTokens: delta.inputTokens,
+        outputTokens: delta.outputTokens,
+        cost: deltaCosts.totalCost,
+        timeMs,
+      };
+
+      const counterargsDir = path.join(PROJECT_ROOT, 'tabloid_generator', 'counterarguments');
+      fs.mkdirSync(counterargsDir, { recursive: true });
+      const counterargsPayload = { slug, counterarguments, generated_at: new Date().toISOString() };
+      fs.writeFileSync(
+        path.join(counterargsDir, `${slug}.json`),
+        JSON.stringify(counterargsPayload, null, 2),
+        'utf8'
+      );
+
+      const htmlPath = path.join(PROJECT_ROOT, 'tabloid_generator', 'output', `${slug}.html`);
+      if (fs.existsSync(htmlPath)) {
+        let htmlContent = fs.readFileSync(htmlPath, 'utf8');
+        const placeholder = '<!-- BUNKY_COUNTERARGS_PLACEHOLDER -->';
+        const scriptContent = 'window.__BUNKY_COUNTERARGS = ' +
+          JSON.stringify(counterargsPayload).replace(/<\/script>/gi, '<\\/script>') +
+          ';';
+        const injection = '<script>' + scriptContent + '</script>\n  ';
+        if (htmlContent.includes(placeholder)) {
+          htmlContent = htmlContent.replace(placeholder, injection);
+          fs.writeFileSync(htmlPath, htmlContent, 'utf8');
+        }
+      }
+
+      const runStats = JSON.parse(fs.readFileSync(runStatsPath, 'utf8'));
+      runStats.stages = runStats.stages ?? [];
+      runStats.stages.push(stageRow);
+      fs.writeFileSync(runStatsPath, JSON.stringify(runStats, null, 2), 'utf8');
+
+      onStepComplete(7, totalSteps, 'Generating counterarguments...', {
+        ...delta,
+        totalCost: deltaCosts.totalCost,
+        timeMs,
+      });
+    } catch (err) {
+      console.error('Counterarguments failed:', err.message);
+      const timeMs = performance.now() - step7Start;
+      onStepComplete(7, totalSteps, 'Generating counterarguments...', {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalCost: 0,
+        timeMs,
+        error: err.message,
+      });
+    }
+  }
+
+  // Generate debug page once at the end (after table is complete)
   try {
     execSync(`node imright/scripts/generate-debug.js ${slug}`, {
       cwd: PROJECT_ROOT,
-      stdio: 'inherit',
+      stdio: 'pipe',
+      env: { ...process.env, IMRIGHT_SILENT_DEBUG: '1' },
     });
-  } catch (generateError) {
-    // Non-fatal: pipeline succeeded, debug page may be missing some data
-    console.error(`Warning: could not generate debug page: ${generateError.message}`);
+  } catch (debugErr) {
+    console.error(`Warning: could not generate debug page: ${debugErr.message}`);
   }
 
   const usage = getTokenUsage();
@@ -306,6 +389,26 @@ export async function regenerateHtmlOnly(slug, options = {}) {
   const outputPath = path.join(PROJECT_ROOT, 'tabloid_generator', 'output', `${slug}.html`);
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   fs.writeFileSync(outputPath, html, 'utf8');
+
+  // Inject counterarguments if they exist (works with file://)
+  const counterargsPath = path.join(PROJECT_ROOT, 'tabloid_generator', 'counterarguments', `${slug}.json`);
+  if (fs.existsSync(counterargsPath)) {
+    try {
+      const counterargsPayload = JSON.parse(fs.readFileSync(counterargsPath, 'utf8'));
+      const placeholder = '<!-- BUNKY_COUNTERARGS_PLACEHOLDER -->';
+      const scriptContent = 'window.__BUNKY_COUNTERARGS = ' +
+        JSON.stringify(counterargsPayload).replace(/<\/script>/gi, '<\\/script>') +
+        ';';
+      const injection = '<script>' + scriptContent + '</script>\n  ';
+      let htmlWithArgs = fs.readFileSync(outputPath, 'utf8');
+      if (htmlWithArgs.includes(placeholder)) {
+        htmlWithArgs = htmlWithArgs.replace(placeholder, injection);
+        fs.writeFileSync(outputPath, htmlWithArgs, 'utf8');
+      }
+    } catch (injectErr) {
+      // Non-fatal
+    }
+  }
 
   try {
     execSync(`node imright/scripts/generate-debug.js ${slug}`, {

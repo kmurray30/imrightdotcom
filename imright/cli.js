@@ -17,20 +17,22 @@
 
 import fs from 'fs';
 import path from 'path';
-import { exec } from 'child_process';
+import { exec, execSync, spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { runPipeline, regenerateHtmlOnly } from './index.js';
 import { slugify } from './utils.js';
 
-/** Open file in default browser (macOS: open, Windows: start, Linux: xdg-open). */
-function openInBrowser(filePath) {
-  const absolutePath = path.resolve(filePath);
+/** Open file or URL in default browser (macOS: open, Windows: start, Linux: xdg-open). */
+function openInBrowser(filePathOrUrl) {
+  const target = filePathOrUrl.startsWith('http')
+    ? filePathOrUrl
+    : path.resolve(filePathOrUrl);
   const command =
     process.platform === 'darwin'
-      ? `open "${absolutePath}"`
+      ? `open "${target}"`
       : process.platform === 'win32'
-        ? `start "" "${absolutePath}"`
-        : `xdg-open "${absolutePath}"`;
+        ? `start "" "${target}"`
+        : `xdg-open "${target}"`;
   exec(command, (err) => {
     if (err) console.error('Could not open in browser:', err.message);
   });
@@ -137,9 +139,12 @@ async function main() {
     return '|' + formatted.join('|') + '|';
   };
 
+  // Track if we have a pending "..." row on screen (same line, no newline) so we can overwrite it
+  let hasPendingRow = false;
+
   const onProgress = (step, total, message) => {
-    if (!isTty) return; // Non-TTY: only print full rows in onStepComplete
-    if (rows.length >= step) return; // Already past this step
+    if (!isTty) return;
+    if (rows.length >= step) return;
     const stageStr = `${step}/${total}`;
     const nameStr = message.slice(0, widths[1]);
 
@@ -150,9 +155,9 @@ async function main() {
     }
 
     const pending = '...';
-    console.error(
-      dataRow([stageStr, nameStr, pending, pending, pending, pending, pending], [2, 3, 4, 5, 6])
-    );
+    const pendingRow = dataRow([stageStr, nameStr, pending, pending, pending, pending, pending], [2, 3, 4, 5, 6]);
+    process.stderr.write(pendingRow);
+    hasPendingRow = true;
   };
 
   const onStepComplete = (step, total, message, delta) => {
@@ -184,7 +189,12 @@ async function main() {
     );
 
     if (isTty) {
-      process.stderr.write(CURSOR_UP + CLEAR_LINE + CARRIAGE_RETURN + fullRow + '\n');
+      if (hasPendingRow) {
+        hasPendingRow = false;
+        process.stderr.write(CARRIAGE_RETURN + CLEAR_LINE + fullRow + '\n');
+      } else {
+        process.stderr.write(CURSOR_UP + CLEAR_LINE + CARRIAGE_RETURN + fullRow + '\n');
+      }
     } else {
       if (rows.length === 1) {
         console.error(borderRow());
@@ -195,9 +205,56 @@ async function main() {
     }
   };
 
-  const result = await runPipeline(claim, { onProgress, onStepComplete });
+  const SERVE_PORT = 3757;
+  const outputPathForClaim = (slug) =>
+    path.join(PROJECT_ROOT, 'tabloid_generator', 'output', `${slug}.html`);
 
-  const outputPath = path.join(PROJECT_ROOT, 'tabloid_generator', 'output', `${result.slug}.html`);
+  // Kill any leftover server on our port
+  try { execSync(`lsof -ti:${SERVE_PORT} | xargs kill 2>/dev/null`, { stdio: 'ignore' }); } catch {}
+
+  // Start HTTP server and wait for it to be ready (reads URL from stdout).
+  // Once we have the URL we destroy the pipes so they don't keep the parent alive.
+  const serveBaseUrl = await new Promise((resolve) => {
+    const child = spawn(
+      'node',
+      ['imright/scripts/serve-output.js', String(SERVE_PORT)],
+      { cwd: PROJECT_ROOT, stdio: ['ignore', 'pipe', 'pipe'], detached: true }
+    );
+    child.unref();
+
+    const detachPipes = () => {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+    };
+
+    const timeout = setTimeout(() => {
+      console.error('Warning: HTTP server failed to start, falling back to file://');
+      detachPipes();
+      resolve(null);
+    }, 3000);
+    child.stdout.on('data', (chunk) => {
+      const url = chunk.toString().trim();
+      if (url.startsWith('http')) {
+        clearTimeout(timeout);
+        detachPipes();
+        resolve(url);
+      }
+    });
+    child.on('error', () => { clearTimeout(timeout); detachPipes(); resolve(null); });
+  });
+
+  const result = await runPipeline(claim, {
+    onProgress,
+    onStepComplete,
+    onPageReady: (slug) => {
+      const url = serveBaseUrl
+        ? `${serveBaseUrl}/output/${slug}.html`
+        : outputPathForClaim(slug);
+      openInBrowser(url);
+    },
+  });
+
+  const outputPath = outputPathForClaim(result.slug);
 
   const totalInput = rows.reduce((sum, row) => sum + row.inputTokens, 0);
   const totalOutput = rows.reduce((sum, row) => sum + row.outputTokens, 0);
@@ -212,9 +269,9 @@ async function main() {
   );
   console.error(borderRow());
 
-  console.error(`\nDone. Output: tabloid_generator/output/${result.slug}.html`);
-
-  openInBrowser(outputPath);
+  console.error(`\nDone.`);
+  console.error(`Output: tabloid_generator/output/${result.slug}.html`);
+  console.error(`Debug: imright/debug/${result.slug}.html`);
 }
 
 main().catch((error) => {
