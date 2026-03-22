@@ -4,8 +4,13 @@
  *
  * Usage: node imright/cli.js "<claim>"
  *   or:  echo "<claim>" | node imright/cli.js
+ *   or:  node imright/cli.js "<claim>" --regenerate   # Skip pipeline, just rebuild HTML + debug
  *
- * Requires: XAI_API_KEY in environment (or env.local in project root)
+ * Options:
+ *   --regenerate, -r   Only regenerate final HTML and debug HTML from existing data (no Grok calls).
+ *                      Requires output_raw and extracted to exist for the slug.
+ *
+ * Requires: XAI_API_KEY in environment (or env.local in project root) for full pipeline
  * Outputs: conspirator/conspiracies/, wiki_searcher/wikis-fetched/, wiki_filterer/wikis-filtered/,
  *          ref_extractor/extracted/, tabloid_generator/output/
  */
@@ -14,7 +19,8 @@ import fs from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
 import { fileURLToPath } from 'url';
-import { runPipeline } from './index.js';
+import { runPipeline, regenerateHtmlOnly } from './index.js';
+import { slugify } from './utils.js';
 
 /** Open file in default browser (macOS: open, Windows: start, Linux: xdg-open). */
 function openInBrowser(filePath) {
@@ -56,10 +62,25 @@ function loadEnv() {
 
 loadEnv();
 
-async function getClaimFromArgs() {
-  const args = process.argv.slice(2);
-  if (args.length > 0) {
-    return args.join(' ');
+function parseArgs() {
+  const raw = process.argv.slice(2);
+  const flags = { regenerate: false };
+  const nonFlags = [];
+
+  for (const arg of raw) {
+    if (arg === '--regenerate' || arg === '-r') {
+      flags.regenerate = true;
+    } else {
+      nonFlags.push(arg);
+    }
+  }
+
+  return { flags, rest: nonFlags };
+}
+
+async function getClaimFromArgs(restArgs) {
+  if (restArgs.length > 0) {
+    return restArgs.join(' ');
   }
   if (!process.stdin.isTTY) {
     return new Promise((resolve, reject) => {
@@ -74,11 +95,29 @@ async function getClaimFromArgs() {
 }
 
 async function main() {
-  const claim = await getClaimFromArgs();
+  const { flags, rest } = parseArgs();
+  const claim = await getClaimFromArgs(rest);
   if (!claim) {
     console.error('Usage: node imright/cli.js "<claim>"');
     console.error('   or: echo "<claim>" | node imright/cli.js');
+    console.error('   or: node imright/cli.js "<claim>" --regenerate  (regenerate HTML only, skip pipeline)');
     process.exit(1);
+  }
+
+  const slug = slugify(claim);
+
+  if (flags.regenerate) {
+    try {
+      const result = await regenerateHtmlOnly(slug);
+      const outputPath = path.join(PROJECT_ROOT, 'tabloid_generator', 'output', `${result.slug}.html`);
+      console.error(`Regenerated: tabloid_generator/output/${result.slug}.html`);
+      console.error(`Debug page: imright/debug/${result.slug}.html`);
+      openInBrowser(outputPath);
+    } catch (error) {
+      console.error('Error:', error.message);
+      process.exit(1);
+    }
+    return;
   }
 
   const rows = [];

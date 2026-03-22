@@ -7,7 +7,7 @@ import { generateAngles } from '../conspirator/index.js';
 import { fetchWiki } from '../wiki_searcher/index.js';
 import { filterWiki } from '../wiki_filterer/index.js';
 import { extract } from '../ref_extractor/index.js';
-import { generate } from '../tabloid_generator/index.js';
+import { generate, regenerateFromRaw } from '../tabloid_generator/index.js';
 import { slugify } from './utils.js';
 import {
   getTokenUsage,
@@ -265,4 +265,34 @@ export async function runPipeline(claim, options = {}) {
       totalCost: costs.totalCost,
     },
   };
+}
+
+/**
+ * Regenerate only the final HTML and debug HTML from existing pipeline data.
+ * Skips conspirator, wiki, extraction, and tabloid LLM—no Grok calls.
+ *
+ * @param {string} slug - Filename-safe slug (e.g. vaccines-cause-autism)
+ * @param {object} [options] - Optional config
+ * @returns {Promise<{ slug, html }>}
+ */
+export async function regenerateHtmlOnly(slug, options = {}) {
+  const html = regenerateFromRaw(slug, PROJECT_ROOT);
+
+  const outputPath = path.join(PROJECT_ROOT, 'tabloid_generator', 'output', `${slug}.html`);
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  fs.writeFileSync(outputPath, html, 'utf8');
+
+  try {
+    execSync(`node imright/scripts/generate-debug.js ${slug}`, {
+      cwd: PROJECT_ROOT,
+      stdio: options.silent ? 'pipe' : 'inherit',
+    });
+  } catch (generateError) {
+    if (!options.silent) {
+      console.error(`Warning: could not generate debug page: ${generateError.message}`);
+    }
+    // Non-fatal: tabloid HTML was written successfully
+  }
+
+  return { slug, html };
 }

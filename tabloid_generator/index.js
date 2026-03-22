@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import yaml from 'yaml';
 import { callGrok } from '../utils/grok.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -383,4 +384,70 @@ Write using the two-step process. Headline and every section heading must advanc
   const selected = parsed.article ?? parsed;
 
   return generateHtml(selected, claim, slug, condensed, idToUrl);
+}
+
+/**
+ * Regenerate HTML from existing output_raw and extracted data (no Grok call).
+ * Use when pipeline data exists and you only need to refresh the rendered output.
+ *
+ * @param {string} slug - Filename-safe slug (e.g. vaccines-cause-autism)
+ * @param {string} projectRoot - Absolute path to project root
+ * @returns {string} - HTML string
+ * @throws {Error} - If output_raw or extracted files are missing
+ */
+export function regenerateFromRaw(slug, projectRoot) {
+  const outputRawPath = path.join(__dirname, 'output_raw', `${slug}.txt`);
+  const extractedPath = path.join(projectRoot, 'ref_extractor', 'extracted', `${slug}.yaml`);
+
+  if (!fs.existsSync(outputRawPath)) {
+    throw new Error(`Missing output_raw: ${outputRawPath}. Run the full pipeline first.`);
+  }
+  if (!fs.existsSync(extractedPath)) {
+    throw new Error(`Missing extracted: ${extractedPath}. Run the full pipeline first.`);
+  }
+
+  const rawContent = fs.readFileSync(outputRawPath, 'utf8');
+  const extracted = (() => {
+    try {
+      return yaml.parse(fs.readFileSync(extractedPath, 'utf8'));
+    } catch (parseError) {
+      throw new Error(`Failed to parse extracted YAML: ${parseError.message}`);
+    }
+  })();
+
+  const allCitations = flattenAndDedupeCitations(extracted);
+  const condensed = condenseForLlm(allCitations);
+  const idToUrl = new Map(condensed.map((citation, index) => [index + 1, citation.link]));
+
+  let parsed;
+  try {
+    parsed = parseJsonResponse(rawContent);
+  } catch (parseError) {
+    throw new Error(`Failed to parse JSON from output_raw: ${parseError.message}`);
+  }
+
+  const selected = parsed.article ?? parsed;
+  if (!selected) throw new Error('No article in output_raw JSON.');
+
+  // Topic from conspiracy or wiki_filtered, fallback to slug-with-spaces
+  let topic = slug.replace(/-/g, ' ');
+  const conspiracyPath = path.join(projectRoot, 'conspirator', 'conspiracies', `${slug}.yaml`);
+  const wikiFilteredPath = path.join(projectRoot, 'wiki_filterer', 'wikis-filtered', `${slug}.yaml`);
+  if (fs.existsSync(conspiracyPath)) {
+    try {
+      const conspiracy = yaml.parse(fs.readFileSync(conspiracyPath, 'utf8'));
+      if (conspiracy?.topic) topic = conspiracy.topic;
+    } catch {
+      // Ignore
+    }
+  } else if (fs.existsSync(wikiFilteredPath)) {
+    try {
+      const wiki = yaml.parse(fs.readFileSync(wikiFilteredPath, 'utf8'));
+      if (wiki?.query) topic = wiki.query;
+    } catch {
+      // Ignore
+    }
+  }
+
+  return generateHtml(selected, topic, slug, condensed, idToUrl);
 }
