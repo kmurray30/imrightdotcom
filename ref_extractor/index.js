@@ -167,12 +167,14 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
   }
 
   const urlToTermRanks = new Map();
+  const urlToCitation = new Map();
   for (const { searchTerm, batch } of round1Candidates) {
     batch.forEach((c, index) => {
       if (c.link) {
         const list = urlToTermRanks.get(c.link) ?? [];
         list.push({ searchTerm, rank: index + 1 });
         urlToTermRanks.set(c.link, list);
+        if (!urlToCitation.has(c.link)) urlToCitation.set(c.link, c);
       }
     });
   }
@@ -183,13 +185,20 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
       const results = await checkUrlsConcurrent(allUrlsRound1, linkCheckOptions);
       for (const result of results) {
         linkAssessments.push({ url: result.url, linkStatus: result.linkStatus, issueType: result.issueType, detail: result.detail, timeMs: result.timeMs, round: 1 });
-        // Only PROBABLY_VALID and WHITELISTED are included in the final article; INVALID and FORBIDDEN are excluded
         const isIncluded = result.linkStatus === LinkStatus.PROBABLY_VALID || result.linkStatus === LinkStatus.WHITELISTED;
         validityCache.set(result.url, isIncluded);
         if (!isIncluded) {
+          const citation = urlToCitation.get(result.url);
           const termRanks = urlToTermRanks.get(result.url) ?? [];
           for (const { searchTerm, rank } of termRanks) {
-            deadLinks.push({ url: result.url, reason: result.detail || result.issueType, searchTerm, rank });
+            deadLinks.push({
+              url: result.url,
+              reason: result.detail || result.issueType,
+              searchTerm,
+              rank,
+              title: citation?.title ?? result.url,
+              content: citation?.content ?? '',
+            });
           }
         }
       }
@@ -241,6 +250,12 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
       round2Candidates.push({ searchTerm, citations, batch });
     }
 
+    const round2UrlToCitation = new Map();
+    for (const { batch } of round2Candidates) {
+      for (const c of batch) {
+        if (c.link && !round2UrlToCitation.has(c.link)) round2UrlToCitation.set(c.link, c);
+      }
+    }
     const allUrlsRound2 = [...new Set(round2Candidates.flatMap(({ batch }) => batch.map((c) => c.link).filter(Boolean)))];
     if (allUrlsRound2.length > 0) {
       const results = await checkUrlsConcurrent(allUrlsRound2, linkCheckOptions);
@@ -249,9 +264,17 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
         const isIncluded = result.linkStatus === LinkStatus.PROBABLY_VALID || result.linkStatus === LinkStatus.WHITELISTED;
         validityCache.set(result.url, isIncluded);
         if (!isIncluded) {
+          const citation = round2UrlToCitation.get(result.url);
           const termRanks = round2UrlToTermRanks.get(result.url) ?? [];
           for (const { searchTerm, rank } of termRanks) {
-            deadLinks.push({ url: result.url, reason: result.detail || result.issueType, searchTerm, rank });
+            deadLinks.push({
+              url: result.url,
+              reason: result.detail || result.issueType,
+              searchTerm,
+              rank,
+              title: citation?.title ?? result.url,
+              content: citation?.content ?? '',
+            });
           }
         }
       }

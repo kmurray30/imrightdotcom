@@ -94,6 +94,76 @@ function flattenExtracted(extracted) {
   return citations;
 }
 
+/** Extract used ref IDs from text containing [phrase](id) markdown. */
+function extractUsedRefIdsFromText(text) {
+  if (!text || typeof text !== 'string') return [];
+  const ids = [];
+  const regex = /\[[^\]]*\]\((\d+)\)/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    ids.push(parseInt(match[1], 10));
+  }
+  return ids;
+}
+
+/** Parse tabloid raw output to get article structure and used ref IDs. */
+function parseTabloidArticle(rawOutput) {
+  if (!rawOutput || typeof rawOutput !== 'string') return null;
+  let content = rawOutput.trim();
+  const codeBlockMatch = content.match(/^```(?:json)?\s*([\s\S]*?)```\s*$/);
+  if (codeBlockMatch) content = codeBlockMatch[1].trim();
+  let parsed;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return null;
+  }
+  const article = parsed?.article ?? parsed;
+  if (!article) return null;
+
+  const allUsedRefIds = new Set();
+
+  const extractFromParagraph = (paragraph) => {
+    const rawText = typeof paragraph === 'string' ? paragraph : paragraph?.text ?? '';
+    for (const id of extractUsedRefIdsFromText(rawText)) {
+      allUsedRefIds.add(id);
+    }
+  };
+
+  const intro = article.intro;
+  const introUsedRefIds = [];
+  if (intro) {
+    const introParagraphs = Array.isArray(intro) ? intro : [intro];
+    for (const paragraph of introParagraphs) {
+      const rawText = typeof paragraph === 'string' ? paragraph : paragraph?.text ?? '';
+      for (const id of extractUsedRefIdsFromText(rawText)) {
+        introUsedRefIds.push(id);
+        allUsedRefIds.add(id);
+      }
+    }
+  }
+
+  const sections = (article.sections ?? []).map((section) => {
+    const heading = section.heading ?? '';
+    const usedRefIds = [];
+    for (const paragraph of section.paragraphs ?? []) {
+      for (const id of extractUsedRefIdsFromText(
+        typeof paragraph === 'string' ? paragraph : paragraph?.text ?? ''
+      )) {
+        usedRefIds.push(id);
+        allUsedRefIds.add(id);
+      }
+    }
+    return { heading, usedRefIds };
+  });
+
+  return {
+    sections,
+    introUsedRefIds,
+    allUsedRefIds: Array.from(allUsedRefIds),
+  };
+}
+
 /** Get deduped article titles from search_query_article_titles. */
 function dedupedArticles(searchQueryArticleTitles) {
   const seen = new Set();
@@ -119,9 +189,18 @@ function buildHtml(data) {
 
   const topic = conspiracy?.topic ?? wikisFetched?.query ?? wikisFiltered?.query ?? data.slug;
   const angles = conspiracy?.angles ?? [];
+  const tabloidArticle = parseTabloidArticle(data.tabloidRawOutput);
+  const usedRefIdsSet = new Set(tabloidArticle?.allUsedRefIds ?? []);
+  const conspiratorArgCount = angles.length;
+  const conspiratorSearchTermCount = [
+    ...new Set(angles.flatMap((a) => a.search_queries ?? [])),
+  ].length;
+  const tabloidSectionCount = tabloidArticle?.sections?.length ?? 0;
+  const tabloidLinkCount = usedRefIdsSet.size;
   const searchQueryArticleTitles = wikisFetched?.search_query_article_titles ?? wikisFiltered?.search_query_article_titles ?? {};
   const dedupedTitles = dedupedArticles(searchQueryArticleTitles);
   const filteredPages = wikisFiltered?.pages ?? [];
+  const filteredTitlesSet = new Set((wikisFiltered?.pages ?? []).map((p) => p?.title).filter(Boolean));
   const stages = runStats?.stages ?? [];
   const refStats = runStats?.refStats;
   const deadLinksList = refStats?.deadLinks ?? [];
@@ -139,7 +218,7 @@ function buildHtml(data) {
       }));
       const deadForTerm = deadLinksList.filter((d) => d.searchTerm === searchTerm);
       for (const d of deadForTerm) {
-        refs.push({ link: d.url, title: d.url, content: '', rank: d.rank ?? 999, dead: true, deadReason: d.reason });
+        refs.push({ link: d.url, title: d.title ?? d.url, content: d.content ?? '', rank: d.rank ?? 999, dead: true, deadReason: d.reason });
       }
       refs.sort((a, b) => a.rank - b.rank);
       byTerm[searchTerm] = refs;
@@ -148,8 +227,8 @@ function buildHtml(data) {
     if (orphanDead.length > 0) {
       byTerm['Dead links (term unknown)'] = orphanDead.map((d, i) => ({
         link: d.url,
-        title: d.url,
-        content: '',
+        title: d.title ?? d.url,
+        content: d.content ?? '',
         rank: i + 1,
         dead: true,
         deadReason: d.reason,
@@ -165,20 +244,45 @@ function buildHtml(data) {
     if (ref.link && !urlToRefNum.has(ref.link)) urlToRefNum.set(ref.link, index + 1);
   });
 
+  /** Build refNum -> citation for used-ref lookup (1-based). */
+  const refNumToCitation = new Map();
+  allValidRefs.slice(0, TOP_K_REFS).forEach((ref, index) => {
+    refNumToCitation.set(index + 1, ref);
+  });
+
   const linkStats = data.linkStats;
   const conspiratorRawInput = data.conspiratorRawInput;
   const tabloidRawInput = data.tabloidRawInput;
   const tabloidRawOutput = data.tabloidRawOutput;
 
+  const validCount = (linkStats?.results ?? []).filter((r) => r.linkStatus === 'probably_valid').length;
+  const whitelistedCount = (linkStats?.results ?? []).filter((r) => r.linkStatus === 'whitelisted').length;
+  const validationChecks = linkStats?.linkCount ?? linkStats?.results?.length ?? 0;
+  const validLinksCount = validCount + whitelistedCount;
+  const rawExtractedCount = linkStats?.rawExtractedCount ?? null;
+
+  const conspiratorStage = stages.find((s) => s.stage === 1);
+  const tabloidStage = stages.find((s) => s.stage === 5);
+
   const navItems = [
-    { id: 'arguments', label: 'Arguments & search queries' },
-    { id: 'articles-per-query', label: 'Articles per search term' },
-    { id: 'deduped', label: 'Deduped articles' },
-    { id: 'filtered', label: 'After quick filter' },
-    { id: 'link-stats', label: 'Link validation stats' },
-    { id: 'references', label: 'References' },
-    { id: 'tokens', label: 'Token/cost/time' },
-    { id: 'grok-prompts', label: 'Grok prompts & output' },
+    {
+      id: 'conspirator',
+      label: `Conspirator (${conspiratorArgCount} arguments, ${conspiratorSearchTermCount} search terms)`,
+    },
+    {
+      id: 'articles-found',
+      label: `Articles found (${dedupedTitles.length} unique, ${filteredTitlesSet.size} kept)`,
+    },
+    {
+      id: 'link-validation',
+      label: `Link validation (${rawExtractedCount ?? '—'} total, ${validationChecks} checked, ${validLinksCount} valid)`,
+    },
+    { id: 'references', label: `References (${validLinksCount})` },
+    {
+      id: 'tabloid',
+      label: `Tabloid (${tabloidSectionCount} sections, ${tabloidLinkCount} links)`,
+    },
+    { id: 'stats', label: 'Stats' },
   ];
 
   let html = `<!DOCTYPE html>
@@ -271,7 +375,9 @@ function buildHtml(data) {
     .top-ref__sentence { margin: 0.25rem 0; font-size: 0.9rem; color: #bbb; line-height: 1.5; }
     .top-ref__meta { margin: 0.25rem 0 0 0; font-size: 0.8rem; }
     .ref-dead { color: #e63946; }
+    .ref-used { color: #6df4a1; font-size: 0.85em; }
     .ref-forbidden { color: #f4a261; }
+    .article-kept { color: #6df4a1; }
     .ref-timeout { color: #e9c46a; }
     .ref-whitelisted { color: #9b59b6; }
     .term-toggle, .ref-toggle { cursor: pointer; user-select: none; }
@@ -317,96 +423,111 @@ function buildHtml(data) {
     </nav>
 `;
 
-  // Section 1: Arguments & search queries
+  // Section: Conspirator (Input + Output)
+  const conspiratorInputTokens = conspiratorStage?.inputTokens ?? 0;
+  const conspiratorOutputTokens = conspiratorStage?.outputTokens ?? 0;
   html += `
-    <section id="arguments">
-      <h2 class="section-toggle">Arguments & search queries</h2>
+    <section id="conspirator">
+      <h2 class="section-toggle">Conspirator (${conspiratorArgCount} arguments, ${conspiratorSearchTermCount} search terms)</h2>
       <div class="section-content">
+        <div class="ref-item">
+          <div class="term-toggle collapsed">Input (${conspiratorInputTokens} tokens)</div>
+          <div class="term-content collapsed">
+`;
+  if (conspiratorRawInput) {
+    html += `            <pre class="grok-pre">${escapeHtml(JSON.stringify(conspiratorRawInput, null, 2))}</pre>\n`;
+  } else {
+    html += `            <p class="no-data">No raw input (re-run pipeline to capture).</p>\n`;
+  }
+  html += `          </div>
+        </div>
+        <div class="ref-item">
+          <div class="term-toggle">Output (${conspiratorOutputTokens} tokens)</div>
+          <div class="term-content">
 `;
   if (angles.length > 0) {
     for (const angle of angles) {
-      html += `        <p><strong>${escapeHtml(angle.argument ?? '')}</strong></p>\n`;
+      html += `            <p><strong>${escapeHtml(angle.argument ?? '')}</strong></p>\n`;
       const queries = angle.search_queries ?? [];
       if (queries.length > 0) {
-        html += `        <ul>\n`;
+        html += `            <ul>\n`;
         for (const query of queries) {
-          html += `          <li>${escapeHtml(query)}</li>\n`;
+          html += `              <li>${escapeHtml(query)}</li>\n`;
         }
-        html += `        </ul>\n`;
+        html += `            </ul>\n`;
       }
     }
   } else {
-    html += `        <p class="no-data">No conspiracy data available.</p>\n`;
+    html += `            <p class="no-data">No conspiracy data available.</p>\n`;
   }
-  html += `      </div>\n    </section>\n`;
+  html += `          </div>
+        </div>
+      </div>
+    </section>
+`;
 
-  // Section 2: Articles per search term
+  // Section: Articles found (per term + full deduped list)
+  const titleToQueries = new Map();
+  for (const [query, titles] of Object.entries(searchQueryArticleTitles)) {
+    for (const title of titles ?? []) {
+      if (!titleToQueries.has(title)) titleToQueries.set(title, []);
+      titleToQueries.get(title).push(query);
+    }
+  }
   html += `
-    <section id="articles-per-query">
-      <h2 class="section-toggle">Articles per search term</h2>
-      <div class="section-content">
+    <section id="articles-found">
+      <h2 class="section-toggle collapsed">Articles found (${dedupedTitles.length} unique, ${filteredTitlesSet.size} kept)</h2>
+      <div class="section-content collapsed">
+        <div class="ref-item">
+          <div class="term-toggle">Listed per search term</div>
+          <div class="term-content">
 `;
   const queryEntries = Object.entries(searchQueryArticleTitles);
   if (queryEntries.length > 0) {
     for (const [query, titles] of queryEntries) {
-      html += `        <p><strong>${escapeHtml(query)}</strong> (${titles.length})</p>\n        <ul>\n`;
-      for (const title of titles) {
-        html += `          <li><a href="${escapeHtml(wikiUrl(title))}" target="_blank" rel="noopener">${escapeHtml(title)}</a></li>\n`;
+      html += `            <p><strong>${escapeHtml(query)}</strong> (${(titles ?? []).length})</p>\n            <ul>\n`;
+      for (const title of titles ?? []) {
+        html += `              <li><a href="${escapeHtml(wikiUrl(title))}" target="_blank" rel="noopener">${escapeHtml(title)}</a></li>\n`;
       }
-      html += `        </ul>\n`;
+      html += `            </ul>\n`;
     }
   } else {
-    html += `        <p class="no-data">No search query data available.</p>\n`;
+    html += `            <p class="no-data">No search query data available.</p>\n`;
   }
-  html += `      </div>\n    </section>\n`;
-
-  // Section 3: Deduped articles
-  html += `
-    <section id="deduped">
-      <h2 class="section-toggle">Deduped articles</h2>
-      <div class="section-content">
-        <p class="count">${dedupedTitles.length} unique articles</p>
-        <ul>
+  html += `          </div>
+        </div>
+        <div class="ref-item">
+          <div class="term-toggle collapsed">Full list</div>
+          <div class="term-content collapsed">
+            <p class="count">${dedupedTitles.length} unique articles, ${filteredTitlesSet.size} kept</p>
+            <ul class="deduped-list">
 `;
-  for (const title of dedupedTitles.slice(0, 50)) {
-    html += `          <li><a href="${escapeHtml(wikiUrl(title))}" target="_blank" rel="noopener">${escapeHtml(title)}</a></li>\n`;
+  for (const title of dedupedTitles) {
+    const queries = titleToQueries.get(title) ?? [];
+    const termsLabel = queries.length > 0 ? ` [${queries.map((q) => escapeHtml(q)).join(', ')}]` : '';
+    const filteredOut = !filteredTitlesSet.has(title);
+    const statusLabel = filteredOut ? ' <span class="ref-dead">filtered out</span>' : ' <span class="article-kept">kept</span>';
+    html += `              <li><a href="${escapeHtml(wikiUrl(title))}" target="_blank" rel="noopener">${escapeHtml(title)}</a>${termsLabel}${statusLabel}</li>\n`;
   }
-  if (dedupedTitles.length > 50) {
-    html += `          <li class="no-data">... and ${dedupedTitles.length - 50} more</li>\n`;
-  }
-  html += `        </ul>\n      </div>\n    </section>\n`;
-
-  // Section 4: After quick filter
-  html += `
-    <section id="filtered">
-      <h2 class="section-toggle">After quick filter</h2>
-      <div class="section-content">
-        <p class="count">${filteredPages.length} pages</p>
-        <ul>
+  html += `            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
 `;
-  for (const page of filteredPages) {
-    const title = page.title ?? 'Unknown';
-    html += `          <li><a href="${escapeHtml(wikiUrl(title))}" target="_blank" rel="noopener">${escapeHtml(title)}</a></li>\n`;
-  }
-  html += `        </ul>\n      </div>\n    </section>\n`;
 
   // Section: Link validation stats (merged with ref counts, above References)
-  const validCount = (linkStats?.results ?? []).filter((r) => r.linkStatus === 'probably_valid').length;
   const invalidCount = (linkStats?.results ?? []).filter((r) => r.linkStatus === 'invalid').length;
   const forbiddenCount = (linkStats?.results ?? []).filter(
     (r) => r.linkStatus === 'forbidden' || r.linkStatus === 'unknown'
   ).length;
-  const whitelistedCount = (linkStats?.results ?? []).filter((r) => r.linkStatus === 'whitelisted').length;
   const timeoutCount = (linkStats?.results ?? []).filter((r) => r.linkStatus === 'timeout').length;
-  const validationChecks = linkStats?.linkCount ?? linkStats?.results?.length ?? 0;
-  const validLinksCount = validCount + whitelistedCount;
-  const rawExtractedCount = linkStats?.rawExtractedCount ?? null;
   const effectiveTimeMs = linkStats?.effectiveTimeMs ?? null;
   const retries = refStats?.retries ?? 0;
 
   html += `
-    <section id="link-stats">
-      <h2 class="section-toggle">Link validation stats</h2>
+    <section id="link-validation">
+      <h2 class="section-toggle">Link validation (${rawExtractedCount ?? '—'} total, ${validationChecks} checked, ${validLinksCount} valid)</h2>
       <div class="section-content">
 `;
   if (linkStats?.results?.length > 0 || refStats) {
@@ -460,8 +581,10 @@ function buildHtml(data) {
         </table>
 `;
     if (linkStats?.results?.length > 0) {
-      html += `        <p style="margin-top: 1rem;"><strong>Full results</strong> (collapsible)</p>
-        <div class="link-results-list">
+      html += `        <div class="ref-item" style="margin-top: 1rem;">
+          <div class="term-toggle collapsed">Full results</div>
+          <div class="term-content collapsed">
+            <div class="link-results-list">
 `;
       linkStats.results.forEach((result, index) => {
         const statusClass =
@@ -503,7 +626,9 @@ function buildHtml(data) {
           </div>
 `;
       });
-      html += `        </div>
+      html += `            </div>
+          </div>
+        </div>
 `;
     }
   } else {
@@ -511,52 +636,111 @@ function buildHtml(data) {
   }
   html += `      </div>\n    </section>\n`;
 
-  // Section: References (per term, valid + dead in rank order, all collapsible)
+  // Section: References (argument -> search term -> ref)
   html += `
     <section id="references">
-      <h2 class="section-toggle">References</h2>
+      <h2 class="section-toggle">References (${validLinksCount})</h2>
       <div class="section-content">
 `;
-  const termKeys = Object.keys(refsPerTerm);
-  if (termKeys.length > 0) {
-    termKeys.forEach((searchTerm, termIndex) => {
-      const refs = refsPerTerm[searchTerm];
-      html += `
-        <div class="ref-item">
-          <div class="term-toggle">${escapeHtml(searchTerm)} (${refs.length} refs)</div>
-          <div class="term-content">
-`;
-      for (let index = 0; index < refs.length; index++) {
-        const ref = refs[index];
-        const refNum = ref.dead ? null : urlToRefNum.get(ref.link);
-        const refId = refNum ? `ref-${refNum}` : `ref-${termIndex}-${index}`;
-        const titleDisplay = ref.dead ? escapeHtml(ref.link) : escapeHtml(ref.title || ref.link);
-        const deadBadge = ref.dead ? ` <span class="ref-dead">DEAD: ${escapeHtml(ref.deadReason ?? '')}</span>` : '';
-        const detailsContent = ref.dead
-          ? `<p class="ref-dead">DEAD: ${escapeHtml(ref.deadReason ?? '')}</p><p><a href="${escapeHtml(ref.link)}" target="_blank" rel="noopener">${escapeHtml(ref.link)}</a></p>`
-          : (ref.content ? `<p class="top-ref__sentence">${escapeHtml(ref.content)}</p>` : '');
-        html += `
+  const searchTermsShown = new Set();
+
+  function renderRefsList(refs, termIndex, termKey) {
+    let refsHtml = '';
+    for (let index = 0; index < refs.length; index++) {
+      const ref = refs[index];
+      const refNum = ref.dead ? null : urlToRefNum.get(ref.link);
+      const refId = refNum ? `ref-${refNum}` : `ref-${termKey}-${termIndex}-${index}`;
+      const titleDisplay = ref.dead ? escapeHtml(ref.link) : escapeHtml(ref.title || ref.link);
+      const deadBadge = ref.dead ? ` <span class="ref-dead">DEAD: ${escapeHtml(ref.deadReason ?? '')}</span>` : '';
+      const usedBadge =
+        refNum != null && usedRefIdsSet.has(refNum)
+          ? ' <span class="ref-used">USED</span>'
+          : '';
+      const detailsContent = ref.content ? `<p class="top-ref__sentence">${escapeHtml(ref.content)}</p>` : '<p class="no-data">No excerpt.</p>';
+      refsHtml += `
             <div class="ref-item">
               <div class="ref-toggle collapsed">
-                <strong>${ref.rank}.</strong> ${refNum ? `[${refNum}] ` : ''}<a href="${escapeHtml(ref.link)}" target="_blank" rel="noopener" ${refNum ? `id="${refId}"` : ''}>${titleDisplay}</a>${deadBadge}
+                <strong>${ref.rank}.</strong> ${refNum ? `[${refNum}] ` : ''}<a href="${escapeHtml(ref.link)}" target="_blank" rel="noopener" ${refNum ? `id="${refId}"` : ''}>${titleDisplay}</a>${deadBadge}${usedBadge}
               </div>
               <div class="ref-details collapsed">
                 ${detailsContent}
               </div>
             </div>
 `;
+    }
+    return refsHtml;
+  }
+
+  if (angles.length > 0 || Object.keys(refsPerTerm).length > 0) {
+    for (const angle of angles) {
+      const argument = angle.argument ?? '';
+      const searchQueries = angle.search_queries ?? [];
+      let argTotalRefs = 0;
+      let argValidRefs = 0;
+      let argUsedRefs = 0;
+      for (const query of searchQueries) {
+        const refs = refsPerTerm[query] ?? [];
+        argTotalRefs += refs.length;
+        argValidRefs += refs.filter((r) => !r.dead).length;
+        argUsedRefs += refs.filter(
+          (r) => !r.dead && usedRefIdsSet.has(urlToRefNum.get(r.link))
+        ).length;
+        searchTermsShown.add(query);
       }
-      html += `          </div>\n        </div>\n`;
-    });
+      if (argTotalRefs === 0) continue;
+      const argRefsLabel = argTotalRefs === 1 ? 'ref' : 'refs';
+      html += `
+        <div class="ref-item">
+          <div class="term-toggle collapsed">${escapeHtml(argument)} (${argTotalRefs} ${argRefsLabel}, ${argValidRefs} valid, ${argUsedRefs} used)</div>
+          <div class="term-content collapsed">
+`;
+      for (const searchTerm of searchQueries) {
+        const refs = refsPerTerm[searchTerm] ?? [];
+        if (refs.length === 0) continue;
+        const validRefCount = refs.filter((r) => !r.dead).length;
+        const usedRefCount = refs.filter(
+          (r) => !r.dead && usedRefIdsSet.has(urlToRefNum.get(r.link))
+        ).length;
+        const refsLabel = refs.length === 1 ? 'ref' : 'refs';
+        html += `
+          <div class="ref-item">
+            <div class="term-toggle collapsed">${escapeHtml(searchTerm)} (${refs.length} ${refsLabel}, ${validRefCount} valid, ${usedRefCount} used)</div>
+            <div class="term-content collapsed">
+${renderRefsList(refs, searchQueries.indexOf(searchTerm), searchTerm)}
+          </div>
+        </div>
+`;
+      }
+      html += `        </div>\n      </div>\n`;
+    }
+
+    // Orphan terms not in any angle (e.g. Dead links (term unknown))
+    const orphanTerms = Object.keys(refsPerTerm).filter((key) => !searchTermsShown.has(key));
+    for (const searchTerm of orphanTerms) {
+      const refs = refsPerTerm[searchTerm];
+      const validRefCount = refs.filter((r) => !r.dead).length;
+      const usedRefCount = refs.filter(
+        (r) => !r.dead && usedRefIdsSet.has(urlToRefNum.get(r.link))
+      ).length;
+      const refsLabel = refs.length === 1 ? 'ref' : 'refs';
+      html += `
+        <div class="ref-item">
+          <div class="term-toggle collapsed">${escapeHtml(searchTerm)} (${refs.length} ${refsLabel}, ${validRefCount} valid, ${usedRefCount} used)</div>
+          <div class="term-content collapsed">
+${renderRefsList(refs, 0, searchTerm)}
+          </div>
+        </div>
+`;
+    }
   } else {
     html += `        <p class="no-data">No extracted references.</p>\n`;
   }
   html += `      </div>\n    </section>\n`;
 
-  // Section: Token/cost/time
+  // Section: Stats (Token/cost/time)
   html += `
-    <section id="tokens">
-      <h2 class="section-toggle">Token/cost/time</h2>
+    <section id="stats">
+      <h2 class="section-toggle">Stats</h2>
       <div class="section-content">
 `;
   if (stages.length > 0) {
@@ -599,50 +783,115 @@ function buildHtml(data) {
   }
   html += `      </div>\n    </section>\n`;
 
-  // Section: Grok prompts & output (default collapsed)
+  // Section: Tabloid (Input + Output)
+  const tabloidInputTokens = tabloidStage?.inputTokens ?? 0;
+  const tabloidOutputTokens = tabloidStage?.outputTokens ?? 0;
   html += `
-    <section id="grok-prompts">
-      <h2 class="section-toggle collapsed">Grok prompts & output</h2>
-      <div class="section-content collapsed">
-`;
-  const hasGrokData = conspiratorRawInput || tabloidRawInput || tabloidRawOutput;
-  if (hasGrokData) {
-    if (conspiratorRawInput) {
-      const conspiratorJson = JSON.stringify(conspiratorRawInput, null, 2);
-      html += `
+    <section id="tabloid">
+      <h2 class="section-toggle">Tabloid (${tabloidSectionCount} sections, ${tabloidLinkCount} links)</h2>
+      <div class="section-content">
         <div class="ref-item">
-          <div class="term-toggle collapsed">Conspirator: raw prompt input</div>
+          <div class="term-toggle collapsed">Input (${tabloidInputTokens} tokens)</div>
           <div class="term-content collapsed">
-            <pre class="grok-pre">${escapeHtml(conspiratorJson)}</pre>
-          </div>
-        </div>
 `;
-    }
-    if (tabloidRawInput) {
-      const tabloidJson = JSON.stringify(tabloidRawInput, null, 2);
-      html += `
-        <div class="ref-item">
-          <div class="term-toggle collapsed">Tabloid: raw prompt input</div>
-          <div class="term-content collapsed">
-            <pre class="grok-pre">${escapeHtml(tabloidJson)}</pre>
-          </div>
-        </div>
-`;
-    }
-    if (tabloidRawOutput) {
-      html += `
-        <div class="ref-item">
-          <div class="term-toggle collapsed">Tabloid: raw output</div>
-          <div class="term-content collapsed">
-            <pre class="grok-pre">${escapeHtml(tabloidRawOutput)}</pre>
-          </div>
-        </div>
-`;
-    }
+  if (tabloidRawInput) {
+    html += `            <pre class="grok-pre">${escapeHtml(JSON.stringify(tabloidRawInput, null, 2))}</pre>\n`;
   } else {
-    html += `        <p class="no-data">No Grok prompts or output (re-run pipeline to capture).</p>\n`;
+    html += `            <p class="no-data">No raw input (re-run pipeline to capture).</p>\n`;
   }
-  html += `      </div>\n    </section>\n`;
+  html += `          </div>
+        </div>
+        <div class="ref-item">
+          <div class="term-toggle collapsed">Output (${tabloidOutputTokens} tokens)</div>
+          <div class="term-content collapsed">
+`;
+  if (tabloidRawOutput) {
+    html += `            <pre class="grok-pre">${escapeHtml(tabloidRawOutput)}</pre>\n`;
+  } else {
+    html += `            <p class="no-data">No raw output (re-run pipeline to capture).</p>\n`;
+  }
+  html += `          </div>
+        </div>
+`;
+
+  // Tabloid Overview: each section + refs used
+  html += `        <div class="ref-item">
+          <div class="term-toggle collapsed">Overview</div>
+          <div class="term-content collapsed">
+`;
+  const hasOverview =
+    (tabloidArticle?.introUsedRefIds?.length > 0) ||
+    (tabloidArticle?.sections?.length > 0);
+  if (hasOverview) {
+    if (tabloidArticle?.introUsedRefIds?.length > 0) {
+      const introRefIds = [...new Set(tabloidArticle.introUsedRefIds)];
+      const introRefsLabel = introRefIds.length === 1 ? 'ref' : 'refs';
+      html += `            <div class="ref-item">
+              <div class="term-toggle collapsed">Intro (${introRefIds.length} ${introRefsLabel})</div>
+              <div class="term-content collapsed">
+`;
+      for (const refNum of introRefIds) {
+        const citation = refNumToCitation.get(refNum);
+        const titleDisplay = citation
+          ? escapeHtml(citation.title || citation.link)
+          : `Ref ${refNum}`;
+        const detailsContent = citation?.content
+          ? `<p class="top-ref__sentence">${escapeHtml(citation.content)}</p>`
+          : '<p class="no-data">No excerpt.</p>';
+        const refId = `overview-ref-${refNum}`;
+        html += `                <div class="ref-item">
+                  <div class="ref-toggle collapsed">
+                    <strong>[${refNum}]</strong> <a href="${citation ? escapeHtml(citation.link) : '#'}" target="_blank" rel="noopener">${titleDisplay}</a>
+                  </div>
+                  <div class="ref-details collapsed">
+                    ${detailsContent}
+                  </div>
+                </div>
+`;
+      }
+      html += `              </div>
+            </div>
+`;
+    }
+    for (const section of tabloidArticle?.sections ?? []) {
+      const usedRefIds = [...new Set(section.usedRefIds ?? [])];
+      const refsLabel = usedRefIds.length === 1 ? 'ref' : 'refs';
+      html += `            <div class="ref-item">
+              <div class="term-toggle collapsed">${escapeHtml(section.heading)} (${usedRefIds.length} ${refsLabel})</div>
+              <div class="term-content collapsed">
+`;
+      for (const refNum of usedRefIds) {
+        const citation = refNumToCitation.get(refNum);
+        const titleDisplay = citation
+          ? escapeHtml(citation.title || citation.link)
+          : `Ref ${refNum}`;
+        const detailsContent = citation?.content
+          ? `<p class="top-ref__sentence">${escapeHtml(citation.content)}</p>`
+          : '<p class="no-data">No excerpt.</p>';
+        const refId = `ref-${refNum}`;
+        html += `                <div class="ref-item">
+                  <div class="ref-toggle collapsed">
+                    <strong>[${refNum}]</strong> <a href="${citation ? escapeHtml(citation.link) : '#'}" target="_blank" rel="noopener" id="${refId}">${titleDisplay}</a>
+                  </div>
+                  <div class="ref-details collapsed">
+                    ${detailsContent}
+                  </div>
+                </div>
+`;
+      }
+      html += `              </div>
+            </div>
+`;
+    }
+  }
+  if (!hasOverview) {
+    html += `            <p class="no-data">No article structure (parse output_raw to see sections).</p>\n`;
+  }
+  html += `          </div>
+        </div>
+      </div>
+    </section>
+`;
 
   html += `
   </div>
