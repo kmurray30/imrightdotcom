@@ -178,8 +178,8 @@ function parseTabloidArticle(rawOutput) {
   };
 }
 
-/** Parse conspirator filter raw output: all arguments with keep + search_queries. */
-function parseConspiratorFilterOutput(rawOutput) {
+/** Parse conspirator raw output: angles (argument + search_queries). When keep is absent, treat as kept. */
+function parseConspiratorOutput(rawOutput) {
   if (!rawOutput || typeof rawOutput !== 'string') return null;
   let content = rawOutput.trim();
   const codeBlockMatch = content.match(/^```(?:json)?\s*([\s\S]*?)```\s*$/);
@@ -190,7 +190,7 @@ function parseConspiratorFilterOutput(rawOutput) {
     return arr.map((item) => ({
       argument: item.argument ?? '',
       search_queries: item.search_queries ?? [],
-      keep: item.keep === true,
+      keep: item.keep !== false,
       filtering_thought: item.filtering_thought ?? null,
     }));
   } catch {
@@ -515,7 +515,7 @@ function buildHtml(data) {
 `;
 
   // Section: Overview (two-pane waterfall)
-  const overviewArgs = parseConspiratorFilterOutput(conspiratorRawOutput) ?? angles.map((a) => ({
+  const overviewArgs = parseConspiratorOutput(conspiratorRawOutput) ?? angles.map((a) => ({
     argument: a.argument ?? '',
     search_queries: a.search_queries ?? [],
     keep: true,
@@ -663,31 +663,12 @@ function buildHtml(data) {
 `;
   if (conspiratorRawInput) {
     const anglesMessages = conspiratorRawInput.angles ?? [];
-    const filterMessages = conspiratorRawInput.filter ?? [];
     html += `            <div class="ref-item">
               <div class="term-toggle collapsed">angles</div>
               <div class="term-content collapsed">
 `;
     for (let idx = 0; idx < anglesMessages.length; idx++) {
       const msg = anglesMessages[idx];
-      const role = msg?.role ?? 'unknown';
-      const content = msg?.content ?? '';
-      html += `                <div class="ref-item">
-                  <div class="term-toggle collapsed">${escapeHtml(role)}</div>
-                  <div class="term-content collapsed">
-                    <pre class="grok-pre">${formatMessageContent(content)}</pre>
-                  </div>
-                </div>
-`;
-    }
-    html += `              </div>
-            </div>
-            <div class="ref-item">
-              <div class="term-toggle collapsed">filter</div>
-              <div class="term-content collapsed">
-`;
-    for (let idx = 0; idx < filterMessages.length; idx++) {
-      const msg = filterMessages[idx];
       const role = msg?.role ?? 'unknown';
       const content = msg?.content ?? '';
       html += `                <div class="ref-item">

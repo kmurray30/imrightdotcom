@@ -22,11 +22,6 @@ export async function generateAngles(topic, options = {}) {
     'utf8'
   ).trim();
 
-  const FILTER_PROMPT = fs.readFileSync(
-    path.join(__dirname, 'filter_prompt.txt'),
-    'utf8'
-  ).trim();
-
   function parseJsonResponse(rawContent) {
     let content = rawContent.trim();
     const codeBlockMatch = content.match(/^```(?:json)?\s*([\s\S]*?)```\s*$/);
@@ -62,48 +57,19 @@ export async function generateAngles(topic, options = {}) {
     search_queries: angle.search_queries ?? [],
   }));
 
-  let rawFiltered = [];
-  const rawInputData = { angles: anglesMessages };
-  if (angles.length > 0) {
-    try {
-      const filterUserMessage = `Topic: ${topic}\n\nAngles to filter:\n${JSON.stringify(angles, null, 2)}`;
-      const filterMessages = [
-        { role: 'system', content: FILTER_PROMPT },
-        { role: 'user', content: filterUserMessage },
-      ];
-      rawInputData.filter = filterMessages;
-      const filterRawContent = await callGrok(filterMessages);
-      if (slug) {
-        const rawOutputDir = path.join(__dirname, 'raw_output');
-        fs.mkdirSync(rawOutputDir, { recursive: true });
-        fs.writeFileSync(
-          path.join(rawOutputDir, `${slug}.txt`),
-          filterRawContent,
-          'utf8'
-        );
-      }
-      const filterParsed = parseJsonResponse(filterRawContent);
-      rawFiltered = Array.isArray(filterParsed) ? filterParsed : (filterParsed.angles ?? []);
-    } catch (filterError) {
-      rawFiltered = angles.map((angle) => ({
-        argument: angle.argument,
-        search_queries: angle.search_queries ?? [],
-        filtering_thought: null,
-        keep: true,
-      }));
-    }
-  }
-
-  const filteredAngles = rawFiltered
-    .filter((item) => item.keep === true)
-    .map((item) => ({ argument: item.argument, search_queries: item.search_queries ?? [] }));
-
   if (slug) {
+    const rawOutputDir = path.join(__dirname, 'raw_output');
+    fs.mkdirSync(rawOutputDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(rawOutputDir, `${slug}.txt`),
+      rawContent,
+      'utf8'
+    );
     const rawInputDir = path.join(__dirname, 'raw_input');
     fs.mkdirSync(rawInputDir, { recursive: true });
     fs.writeFileSync(
       path.join(rawInputDir, `${slug}.json`),
-      JSON.stringify(rawInputData, null, 2),
+      JSON.stringify({ angles: anglesMessages }, null, 2),
       'utf8'
     );
   }
@@ -111,6 +77,6 @@ export async function generateAngles(topic, options = {}) {
   return {
     topic,
     generated_at: new Date().toISOString(),
-    angles: filteredAngles,
+    angles,
   };
 }
