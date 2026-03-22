@@ -1,0 +1,8 @@
+{
+  "name": "misc-scripts",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "yaml": "^2.8.2"
+  }
+}

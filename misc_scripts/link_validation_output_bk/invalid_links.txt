@@ -1,0 +1,101 @@
+521	https://www.reuters.com	http_4xx HTTP 401 HTTP Forbidden
+177	https://www.wsj.com	http_4xx HTTP 401 HTTP Forbidden
+164	https://www.cnbc.com	connection_failed connection failed
+118	http://www.bilderbergmeetings.org	redirect_to_home redirects to site home (page likely gone): https://www.bilderbergmeetings.org/
+107	http://www.cancer.gov	redirect_to_home redirects to site home (page likely gone): https://www.cancer.gov/
+82	https://doi.org	redirect_to_home redirects to site home (page likely gone): https://www.doi.org/
+78	http://pwtorch.com	redirect_to_home redirects to site home (page likely gone): https://www.pwtorch.com/
+66	http://emedicine.medscape.com	redirect_to_home redirects to site home (page likely gone): https://emedicine.medscape.com/
+58	https://www.nature.com	redirect_to_home redirects to site home (page likely gone): https://www.nature.com/?error=cookies_not_supported&code=02145f45-b741-4fd3-ae2b-ee14f9a2fc11
+44	http://www.cnn.com	redirect_to_home redirects to site home (page likely gone): https://www.cnn.com/
+40	https://animallaw.info	redirect_to_home redirects to site home (page likely gone): https://www.animallaw.info/
+33	http://www.cancer.org	redirect_to_home redirects to site home (page likely gone): https://www.cancer.org/
+31	http://eur-lex.europa.eu	redirect_to_home redirects to site home (page likely gone): https://eur-lex.europa.eu/
+30	https://tvline.com	redirect_to_home redirects to site home (page likely gone): https://www.tvline.com/
+30	https://www.gameinformer.com	redirect_to_home redirects to site home (page likely gone): https://gameinformer.com/
+28	http://www.merck.com	redirect_to_home redirects to site home (page likely gone): https://www.merck.com/
+28	http://www.scientificamerican.com	redirect_to_home redirects to site home (page likely gone): https://www.scientificamerican.com/
+26	http://www.cbc.ca	redirect_to_home redirects to site home (page likely gone): https://www.cbc.ca/
+26	http://portal.mah.harvard.edu	connection_failed connection failed
+25	https://link.springer.com	redirect_to_home redirects to site home (page likely gone): https://link.springer.com/?error=cookies_not_supported&code=ec350383-59d9-4b80-bd94-b534465ab3a7
+25	http://www.time.com	redirect_to_home redirects to site home (page likely gone): https://time.com/
+25	http://www.eurogamer.net	redirect_to_home redirects to site home (page likely gone): https://www.eurogamer.net/
+24	http://dx.doi.org	redirect_to_home redirects to site home (page likely gone): https://dx.doi.org/
+23	http://www.abc.net.au	redirect_to_home redirects to site home (page likely gone): https://www.abc.net.au/
+23	http://needtoknow.nas.edu	connection_failed connection failed
+22	https://assets.publishing.service.gov.uk	http_404 HTTP 404 Not Found
+22	http://www.niaid.nih.gov	redirect_to_home redirects to site home (page likely gone): https://www.niaid.nih.gov/
+20	http://fortune.com	redirect_to_home redirects to site home (page likely gone): https://fortune.com/
+20	http://www.nydailynews.com	redirect_to_home redirects to site home (page likely gone): https://www.nydailynews.com/
+20	http://tvbythenumbers.zap2it.com	connection_failed connection failed
+19	http://www.south-pole.com	redirect_to_home redirects to site home (page likely gone): https://www.south-pole.com/
+18	https://www.msn.com	http_404 HTTP 404 Not Found
+18	http://www.mayoclinic.org	redirect_to_home redirects to site home (page likely gone): https://www.mayoclinic.org/
+18	https://wwwnc.cdc.gov	redirect_to_home redirects to site home (page likely gone): https://www.cdc.gov/
+18	http://www.studypoint.com	redirect_to_home redirects to site home (page likely gone): https://www.studypoint.com/
+17	http://www.highbeam.com	redirect_to_home redirects to site home (page likely gone): https://www.highbeam.com/
+17	http://www.polygon.com	redirect_to_home redirects to site home (page likely gone): https://www.polygon.com/
+17	http://www.mtv.com	redirect_to_home redirects to site home (page likely gone): https://www.mtv.com/
+16	http://www.nature.com	redirect_to_home redirects to site home (page likely gone): https://www.nature.com/?error=cookies_not_supported&code=d0919413-adec-430d-ad7d-aecb4b1d6223
+16	http://www.wwe.com	redirect_to_home redirects to site home (page likely gone): https://www.wwe.com/
+16	http://www.tufts.edu	redirect_to_home redirects to site home (page likely gone): https://www.tufts.edu/
+16	http://0-search.ebscohost.com.libus.csd.mu.edu	connection_failed connection failed
+16	https://e-cigarettes.surgeongeneral.gov	connection_failed connection failed
+16	http://anthro.palomar.edu	connection_failed connection failed
+15	http://www.popularmechanics.com	redirect_to_home redirects to site home (page likely gone): https://www.popularmechanics.com/
+15	http://www.businessinsider.com	redirect_to_home redirects to site home (page likely gone): https://www.businessinsider.com/
+15	http://china.usc.edu	redirect_to_home redirects to site home (page likely gone): https://china.usc.edu/
+15	http://unfccc.int	connection_failed connection failed
+15	http://www.thedailybeast.com	redirect_to_home redirects to site home (page likely gone): https://www.thedailybeast.com/
+15	http://www.webmd.com	redirect_to_home redirects to site home (page likely gone): https://www.webmd.com/
+15	https://www.questia.com	connection_failed connection failed
+15	http://www.ets.org	redirect_to_home redirects to site home (page likely gone): https://www.ets.org/
+14	http://www.slate.com	redirect_to_home redirects to site home (page likely gone): https://slate.com/
+14	http://www.merriam-webster.com	redirect_to_home redirects to site home (page likely gone): https://www.merriam-webster.com/
+14	http://www.europeanreview.org	redirect_to_home redirects to site home (page likely gone): https://www.europeanreview.org/
+14	http://www.bluetooth.com	redirect_to_home redirects to site home (page likely gone): https://www.bluetooth.com/
+13	https://www.passblue.com	redirect_to_home redirects to site home (page likely gone): https://passblue.com/
+13	https://suresnes-mag.fr	connection_failed connection failed
+13	http://www.wrestleview.com	redirect_to_home redirects to site home (page likely gone): https://www.wrestleview.com/
+13	http://www.fifeweb.org	redirect_to_home redirects to site home (page likely gone): https://fifeweb.org/
+13	http://www.escholarship.org	redirect_to_home redirects to site home (page likely gone): https://www.escholarship.org/
+13	http://www.foodstandards.gov.au	redirect_to_home redirects to site home (page likely gone): https://www.foodstandards.gov.au/
+13	http://star.cde.ca.gov	connection_failed connection failed
+12	http://www.medscape.com	redirect_to_home redirects to site home (page likely gone): https://www.medscape.com/
+12	http://www.ign.com	redirect_to_home redirects to site home (page likely gone): https://www.ign.com/
+12	http://www.aljazeera.com	redirect_to_home redirects to site home (page likely gone): https://www.aljazeera.com/
+12	http://www.post-gazette.com	redirect_to_home redirects to site home (page likely gone): https://www.post-gazette.com/
+12	https://www.slate.com	redirect_to_home redirects to site home (page likely gone): https://slate.com/
+12	http://www.bit-blot.com	http_5xx HTTP 500 Internal Server Error
+12	https://nei.nih.gov	redirect_to_home redirects to site home (page likely gone): https://www.nei.nih.gov/
+12	http://nces.ed.gov	redirect_to_home redirects to site home (page likely gone): https://nces.ed.gov/
+11	http://www.newsweek.com	redirect_to_home redirects to site home (page likely gone): https://www.newsweek.com/
+11	http://m-learning.zju.edu.cn	connection_failed connection failed
+11	https://www.marketwatch.com	http_4xx HTTP 401 HTTP Forbidden
+11	https://www.barrons.com	http_4xx HTTP 401 HTTP Forbidden
+11	https://financialtribune.com	http_5xx HTTP 504 Gateway Time-out
+11	http://www.al-monitor.com	redirect_to_home redirects to site home (page likely gone): https://www.al-monitor.com/
+11	https://content.time.com	http_404 HTTP 404 Not Found
+11	http://www.stuff.co.nz	redirect_to_home redirects to site home (page likely gone): https://www.stuff.co.nz/
+11	http://www.roadrunnerrecords.com	redirect_to_home redirects to site home (page likely gone): https://www.roadrunnerrecords.com/
+11	https://www.womenshealth.gov	redirect_to_home redirects to site home (page likely gone): https://womenshealth.gov/
+11	http://www.americanscientist.org	connection_failed connection failed
+11	http://speakingofresearch.com	redirect_to_home redirects to site home (page likely gone): https://speakingofresearch.com/
+11	https://phonedb.net	connection_failed connection failed
+10	http://www.abta.org	redirect_to_home redirects to site home (page likely gone): https://www.abta.org/
+10	http://www.nhs.uk	redirect_to_home redirects to site home (page likely gone): https://www.nhs.uk/
+10	http://link.springer.com	redirect_to_home redirects to site home (page likely gone): https://link.springer.com/?error=cookies_not_supported&code=01d2af8c-92be-4fee-b4ad-c10570153786
+10	http://www.accessdata.fda.gov	http_5xx HTTP 503 Service Unavailable
+10	http://nymag.com	redirect_to_home redirects to site home (page likely gone): https://nymag.com/
+10	http://www.legislation.gov.au	redirect_to_home redirects to site home (page likely gone): https://www.legislation.gov.au/
+10	http://www.mcw.edu	redirect_to_home redirects to site home (page likely gone): https://www.mcw.edu/
+10	http://www.un.org	redirect_to_home redirects to site home (page likely gone): https://www.un.org/
+10	http://www.nber.org	redirect_to_home redirects to site home (page likely gone): https://www.nber.org/
+10	https://www.federalregister.gov	redirect_to_home redirects to site home (page likely gone): https://unblock.federalregister.gov/
+10	https://api.parliament.uk	http_404 HTTP 404 Not Found
+10	http://www.espn.com	redirect_to_home redirects to site home (page likely gone): https://www.espn.com/
+10	https://0-academic-oup-com.libus.csd.mu.edu	connection_failed connection failed
+10	http://findarticles.com	redirect_to_home redirects to site home (page likely gone): https://www.findarticles.com/
+10	http://www.tas-cas.org	redirect_to_home redirects to site home (page likely gone): https://www.tas-cas.org/
+10	http://www.dw.com	redirect_to_home redirects to site home (page likely gone): https://www.dw.com/
+10	http://www.snl.no	redirect_to_home redirects to site home (page likely gone): https://snl.no/
