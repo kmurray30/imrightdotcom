@@ -354,6 +354,45 @@ function buildHtml(data) {
     .header .subtitle { color: #aaa; font-size: 0.9rem; }
     .header a { color: #6df4a1; text-decoration: none; }
     .header a:hover { text-decoration: underline; }
+    .process-blurb {
+      margin: 0 0 2rem 0;
+      padding: 1.25rem 1.5rem;
+      background: linear-gradient(135deg, #252540 0%, #2d2d4a 100%);
+      border-left: 3px solid #6df4a1;
+      border-radius: 8px;
+      color: #cfd0d8;
+      font-size: 0.92rem;
+      line-height: 1.6;
+    }
+    .process-blurb p { margin: 0 0 0.5rem 0; }
+    .process-blurb p:last-child { margin-bottom: 0; }
+    .process-blurb ol {
+      margin: 0.5rem 0 0.5rem 1.25rem;
+      padding: 0;
+    }
+    .process-blurb li { margin: 0.2rem 0; }
+    .section-blurb {
+      margin: 0 0 1rem 0;
+      padding: 0.65rem 0.9rem;
+      background: #1a1a2e;
+      border-left: 2px solid #6df4a1;
+      border-radius: 4px;
+      color: #c0c0cc;
+      font-size: 0.85rem;
+      line-height: 1.5;
+    }
+    .debug-footer {
+      margin-top: 2.5rem;
+      padding: 1.25rem 0;
+      border-top: 1px solid #3a3a5a;
+      text-align: center;
+      color: #7a7a8a;
+      font-size: 0.8rem;
+    }
+    .debug-footer p { margin: 0 0 0.35rem 0; }
+    .debug-footer p:last-child { margin-bottom: 0; }
+    .debug-footer a { color: #6df4a1; text-decoration: none; }
+    .debug-footer a:hover { text-decoration: underline; }
     .nav {
       margin-bottom: 2rem;
       padding: 1.25rem 1.5rem;
@@ -513,6 +552,19 @@ function buildHtml(data) {
         <a href="../../tabloid_generator/output/${escapeHtml(data.slug)}.html">← Back to article</a>
       </p>
     </header>
+    <div class="process-blurb">
+      <p><strong>How the article got made.</strong> This page shows every stage of the imright pipeline for the claim above. The pipeline turns a one-line conspiracy into a fully-cited tabloid article by mining Wikipedia and letting Grok stitch the pieces together:</p>
+      <ol>
+        <li><strong>Conspirator</strong> brainstorms bad-faith angles supporting the claim and generates Wikipedia search queries for each.</li>
+        <li><strong>Wiki searcher</strong> runs every query against Wikipedia and collects candidate article titles.</li>
+        <li><strong>Wiki filterer</strong> keeps only the pages that could plausibly back the narrative and drops the rest.</li>
+        <li><strong>Ref extractor</strong> pulls sentences with citation links from the kept pages and validates that each outbound link actually resolves.</li>
+        <li><strong>Tabloid generator</strong> asks Grok to write a tabloid-style article grounded in those verified citations.</li>
+        <li><strong>Pixabay images</strong> are fetched for the hero and each section, then the HTML is assembled.</li>
+        <li><strong>Counterarguer (Bunky)</strong> reads the finished article and writes a per-section rebuttal so you can see what's being left out.</li>
+      </ol>
+      <p>Each section below exposes the raw inputs and outputs at that stage.</p>
+    </div>
     <nav class="nav">
       <ul>
         ${navItems.map((item) => `<li><a href="#${item.id}">${escapeHtml(item.label)}</a></li>`).join('\n        ')}
@@ -531,6 +583,7 @@ function buildHtml(data) {
     <section id="${overviewSectionId}">
       <h2 class="section-toggle">Overview</h2>
       <div class="section-content">
+        <p class="section-blurb">Side-by-side waterfall: on the left, every argument the Conspirator proposed with the Wikipedia search terms it generated and the references those terms turned up. On the right, the final tabloid article broken into intro / sections / conclusion with the references it actually ended up citing. Hover a reference to see its excerpt.</p>
         <div class="overview-panes" id="overview-panes">
           <div class="overview-pane" id="overview-left">
             <h3>Original arguments</h3>
@@ -663,6 +716,7 @@ function buildHtml(data) {
     <section id="conspirator">
       <h2 class="section-toggle">Conspirator (${conspiratorArgCount} arguments, ${conspiratorSearchTermCount} search terms)</h2>
       <div class="section-content">
+        <p class="section-blurb">Stage 1. Grok takes the claim and brainstorms several bad-faith arguments that would defend it, then emits a set of Wikipedia search queries per argument for the next stage to run. Includes the raw prompt, raw response, and the parsed argument tree.</p>
         <div class="ref-item">
           <div class="term-toggle collapsed">Input (${conspiratorInputTokens} tokens)</div>
           <div class="term-content collapsed">
@@ -751,6 +805,7 @@ function buildHtml(data) {
     <section id="articles-found">
       <h2 class="section-toggle collapsed">Articles found (${dedupedTitles.length} unique, ${filteredTitlesSet.size} kept)</h2>
       <div class="section-content collapsed">
+        <p class="section-blurb">Stages 2 and 3. Every Wikipedia article that came back from the Conspirator's search queries, grouped by which query surfaced it. Pages the Wiki filterer judged irrelevant are marked "filtered out"; the rest move on to citation extraction.</p>
         <div class="ref-item">
           <div class="term-toggle">Listed per search term</div>
           <div class="term-content">
@@ -802,6 +857,7 @@ function buildHtml(data) {
     <section id="link-validation">
       <h2 class="section-toggle">Link validation (${rawExtractedCount ?? '—'} total, ${validationChecks} checked, ${validLinksCount} valid)</h2>
       <div class="section-content">
+        <p class="section-blurb">Part of stage 4. Every outbound citation link the Ref extractor pulled off a Wikipedia page is HEAD-checked (with a whitelist for known-good domains). Dead, forbidden, or timed-out links are dropped before Grok ever sees them, so the tabloid won't cite anything that 404s.</p>
 `;
   if (linkStats?.results?.length > 0 || refStats) {
     const rawDisplay = rawExtractedCount != null ? rawExtractedCount : '—';
@@ -914,6 +970,7 @@ function buildHtml(data) {
     <section id="references">
       <h2 class="section-toggle">References (${validLinksCount})</h2>
       <div class="section-content">
+        <p class="section-blurb">Rest of stage 4. The surviving citations, grouped by argument and then by search term. Each entry shows the sentence excerpt the Ref extractor pulled from Wikipedia; items tagged "USED" are ones the tabloid article actually linked to.</p>
 `;
   const searchTermsShown = new Set();
 
@@ -1015,6 +1072,7 @@ ${renderRefsList(refs, 0, searchTerm)}
     <section id="stats">
       <h2 class="section-toggle">Stats</h2>
       <div class="section-content">
+        <p class="section-blurb">Per-stage token consumption, Grok API cost, and wall-clock time. Useful for spotting which stage is dragging or which one burned the most tokens on a given run.</p>
 `;
   if (stages.length > 0) {
     let totalInput = 0;
@@ -1084,6 +1142,7 @@ ${renderRefsList(refs, 0, searchTerm)}
     <section id="tabloid">
       <h2 class="section-toggle">Tabloid (${tabloidSectionCount} sections, ${tabloidLinkCount} links)</h2>
       <div class="section-content">
+        <p class="section-blurb">Stage 5. Grok is handed every validated citation (with id, title, and excerpt) and asked to write an intro, body sections, and a conclusion, linking to the supplied sources by id. This section shows the exact prompt sent, the raw JSON article back, and a per-section breakdown of which references ended up in the final piece.</p>
         <div class="ref-item">
           <div class="term-toggle collapsed">Input (${tabloidInputTokens} tokens)</div>
           <div class="term-content collapsed">
@@ -1253,6 +1312,7 @@ ${renderRefsList(refs, 0, searchTerm)}
     <section id="counterarguer">
       <h2 class="section-toggle collapsed">Counterarguer (Bunky) (${counterarguerSectionCount} sections)</h2>
       <div class="section-content collapsed">
+        <p class="section-blurb">Stage 7. After the tabloid is written, Bunky reads each section and drafts a short rebuttal blurb plus a longer critical analysis. Those blurbs are streamed back into the live article as the little yellow speech bubbles in the margin. This section shows Bunky's raw input and output.</p>
         <div class="ref-item">
           <div class="term-toggle collapsed">Input (${counterarguerInputTokens} tokens)</div>
           <div class="term-content collapsed">
@@ -1280,6 +1340,10 @@ ${renderRefsList(refs, 0, searchTerm)}
 `;
 
   html += `
+    <footer class="debug-footer">
+      <p><a href="../../tabloid_generator/output/${escapeHtml(data.slug)}.html">← Back to the article</a> &middot; <a href="/">Home</a></p>
+      <p>IMRIGHT pipeline debug &middot; all data here was generated locally for the run above.</p>
+    </footer>
   </div>
   <script id="debug-data" type="application/json">${JSON.stringify(data)}</script>
   <script>

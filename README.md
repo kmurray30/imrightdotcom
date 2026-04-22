@@ -1,13 +1,35 @@
 We're live! Check us out at https://imright.io
 
-## Pipeline (run all at once)
+## Setup
 
 ```bash
-node imright/cli.js "<claim>"
-# or: echo "<claim>" | node imright/cli.js
+npm install
 ```
 
 Requires `XAI_API_KEY` in env or `env.local`/`.env` in project root.
+
+## Run the site (landing page + pipeline)
+
+```bash
+npm run dev
+# then open http://127.0.0.1:3758
+```
+
+Serves the workspace-root `index.html` landing page, accepts claims via `POST /api/run`, and streams per-stage progress over SSE (`GET /api/stream/:runId`). It drives the same `runPipeline` the CLI uses (see `imright/index.js`), so there is no pipeline logic duplication. When the tabloid HTML is ready (after stage 6) the browser redirects to `/tabloid_generator/output/<slug>.html`; stage 7 (counterarguments) finishes in the background and streams into the article via Bunky.
+
+## Pipeline (run all at once from the CLI)
+
+```bash
+npm run cli -- "<claim>"
+# or: node imright/cli.js "<claim>"
+# or: echo "<claim>" | node imright/cli.js
+```
+
+## Other scripts
+
+- `npm run start` — alias for `npm run dev`
+- `npm run debug -- <slug>` — regenerate a pipeline debug page
+- `npm run serve-output -- [port]` — static file server for previously-generated tabloid output
 
 ## Modules (standalone)
 

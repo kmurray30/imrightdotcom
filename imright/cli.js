@@ -21,6 +21,7 @@ import { exec, execSync, spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { runPipeline, regenerateHtmlOnly } from './index.js';
 import { slugify } from './utils.js';
+import { loadEnv } from './load-env.js';
 
 /** Open file or URL in default browser (macOS: open, Windows: start, Linux: xdg-open). */
 function openInBrowser(filePathOrUrl) {
@@ -40,27 +41,6 @@ function openInBrowser(filePathOrUrl) {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..');
-
-function loadEnv() {
-  for (const filename of ['env.local', '.env']) {
-    const envPath = path.join(PROJECT_ROOT, filename);
-    if (fs.existsSync(envPath)) {
-      const content = fs.readFileSync(envPath, 'utf8');
-      for (const line of content.split('\n')) {
-        const trimmed = line.trim();
-        if (trimmed && !trimmed.startsWith('#')) {
-          const eqIndex = trimmed.indexOf('=');
-          if (eqIndex > 0) {
-            const key = trimmed.slice(0, eqIndex).trim();
-            const value = trimmed.slice(eqIndex + 1).trim();
-            if (!process.env[key]) process.env[key] = value;
-          }
-        }
-      }
-      break;
-    }
-  }
-}
 
 loadEnv();
 

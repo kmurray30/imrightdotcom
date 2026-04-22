@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>imright.io &mdash; Prove your conspiracy right</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      font-family: "Source Sans 3", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: radial-gradient(ellipse at top, #f5f6fa 0%, #e9ebf3 60%, #dfe2ee 100%);
+      color: #1c1c1c;
+      line-height: 1.6;
+      font-size: 17px;
+      display: flex;
+      flex-direction: column;
+    }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .landing {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 48px 20px;
+    }
+
+    .landing-card {
+      width: 100%;
+      max-width: 620px;
+      background: #ffffff;
+      border-radius: 14px;
+      padding: 40px 36px;
+      box-shadow:
+        0 2px 4px rgba(0, 0, 0, 0.1),
+        0 24px 48px rgba(15, 42, 68, 0.08);
+      border: 1px solid rgba(0, 0, 0, 0.06);
+      position: relative;
+    }
+
+    .landing-card__brand-row {
+      position: relative;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin-bottom: 24px;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+    }
+
+    .brand__name {
+      font-size: 1.75rem;
+      letter-spacing: -0.02em;
+      color: #1c1c1c;
+    }
+
+    .brand__emoji {
+      font-size: 1.6rem;
+      line-height: 1;
+    }
+
+    .info-toggle {
+      position: absolute;
+      right: 0;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: none;
+      background: rgba(15, 42, 68, 0.12);
+      color: #0f2a44;
+      font-size: 1.15rem;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      transition: background 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .info-toggle:hover,
+    .info-toggle:focus-visible {
+      background: rgba(15, 42, 68, 0.22);
+      box-shadow: 0 4px 12px rgba(15, 42, 68, 0.18);
+      transform: translateY(-50%) scale(1.04);
+      outline: none;
+    }
+
+    .tagline {
+      text-align: center;
+      color: #6e6e73;
+      font-size: 0.95rem;
+      margin: 0 0 24px 0;
+    }
+
+    .belief-form {
+      display: grid;
+      gap: 8px;
+    }
+    .belief-form__label {
+      color: #6e6e73;
+      font-size: 0.75rem;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+    .belief-form__controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .belief-form__input {
+      flex: 1;
+      min-width: 240px;
+      padding: 12px 14px;
+      border-radius: 6px;
+      border: 1px solid #d1d1d6;
+      background: #ffffff;
+      color: #1c1c1c;
+      font-size: 1rem;
+      font-family: inherit;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    .belief-form__input::placeholder { color: #a0a0a5; }
+    .belief-form__input:focus {
+      outline: none;
+      border-color: #ee3322;
+      box-shadow: 0 0 0 3px rgba(238, 51, 34, 0.15);
+    }
+    .belief-form__input:disabled {
+      background: #f5f5f7;
+      color: #a0a0a5;
+    }
+    .belief-form__button {
+      padding: 12px 20px;
+      border-radius: 6px;
+      border: none;
+      background: #ee3322;
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.2s ease, transform 0.1s ease;
+    }
+    .belief-form__button:hover { background: #c4291c; }
+    .belief-form__button:active { transform: translateY(1px); }
+    .belief-form__button:disabled {
+      background: #d1d1d6;
+      cursor: not-allowed;
+    }
+
+    .progress {
+      margin-top: 20px;
+      padding: 16px 18px;
+      border-radius: 10px;
+      background: #fff9e6;
+      border: 1px solid #e6d9a8;
+      display: none;
+    }
+    .progress.is-visible { display: block; }
+    .progress__header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    .progress__spinner {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: 2px solid rgba(238, 51, 34, 0.25);
+      border-top-color: #ee3322;
+      animation: progress-spin 0.8s linear infinite;
+    }
+    @keyframes progress-spin {
+      to { transform: rotate(360deg); }
+    }
+    .progress__step {
+      font-weight: 600;
+      color: #1c1c1c;
+      font-size: 0.95rem;
+    }
+    .progress__flavor {
+      margin: 0;
+      color: #6e6e73;
+      font-size: 0.85rem;
+      font-style: italic;
+    }
+    .progress__dots {
+      display: flex;
+      gap: 6px;
+      margin-top: 12px;
+    }
+    .progress__dot {
+      flex: 1;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(238, 51, 34, 0.15);
+      transition: background 0.3s ease;
+    }
+    .progress__dot.is-active { background: #ee3322; }
+    .progress__dot.is-done { background: rgba(238, 51, 34, 0.55); }
+
+    .error {
+      margin-top: 16px;
+      padding: 12px 14px;
+      border-radius: 8px;
+      background: #fdecea;
+      border: 1px solid #f5c2c0;
+      color: #b3261e;
+      font-size: 0.9rem;
+      display: none;
+    }
+    .error.is-visible { display: block; }
+
+    .info-blurb {
+      margin-top: 24px;
+      padding: 20px 22px;
+      border-radius: 12px;
+      background: #f5f5f7;
+      border: 1px solid #e5e5e7;
+      display: none;
+    }
+    .info-blurb.is-open { display: block; }
+    .info-blurb__header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .info-blurb__avatar {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: #fff;
+      border: 1px solid #e5e5e7;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.1rem;
+    }
+    .info-blurb__name { font-size: 0.95rem; margin: 0; font-weight: 700; }
+    .info-blurb__timestamp { margin: 0; font-size: 0.8rem; color: #8e8e93; }
+    .info-blurb__content p { margin: 0 0 10px 0; color: #424245; font-size: 0.95rem; }
+    .info-blurb__content p:last-child { margin-bottom: 0; }
+    .info-blurb__content ol {
+      margin: 0 0 10px 1.25rem;
+      padding: 0;
+      color: #424245;
+      font-size: 0.95rem;
+    }
+    .info-blurb__content li { margin-bottom: 4px; }
+
+    .footer {
+      padding: 20px;
+      text-align: center;
+      color: #8e8e93;
+      font-size: 0.8rem;
+      border-top: 1px solid rgba(0, 0, 0, 0.06);
+      background: rgba(255, 255, 255, 0.4);
+    }
+    .footer a { color: #6e6e73; text-decoration: none; }
+    .footer a:hover { color: #1c1c1c; text-decoration: underline; }
+    .footer p { margin: 0 0 6px 0; }
+    .footer p:last-child { margin-bottom: 0; }
+  </style>
+</head>
+<body>
+  <main class="landing">
+    <div class="landing-card">
+      <div class="landing-card__brand-row">
+        <div class="brand">
+          <span class="brand__name">imright.io</span>
+          <span class="brand__emoji" aria-hidden="true">😎👍</span>
+        </div>
+        <button
+          class="info-toggle"
+          id="infoToggle"
+          type="button"
+          aria-label="Toggle info about imright.io"
+          aria-expanded="false"
+          aria-controls="infoBlurb"
+        >
+          <span aria-hidden="true">?</span>
+        </button>
+      </div>
+
+      <p class="tagline">State your conspiracy. We'll scour Wikipedia until it becomes gospel.</p>
+
+      <form class="belief-form" id="beliefForm">
+        <label class="belief-form__label" for="beliefInput">State your belief</label>
+        <div class="belief-form__controls">
+          <input
+            id="beliefInput"
+            class="belief-form__input"
+            type="text"
+            name="belief"
+            placeholder="e.g. EV's destroy the grid"
+            autocomplete="off"
+            required
+          >
+          <button type="submit" class="belief-form__button" id="submitButton">Prove me right!</button>
+        </div>
+      </form>
+
+      <div class="progress" id="progress" aria-live="polite">
+        <div class="progress__header">
+          <div class="progress__spinner" aria-hidden="true"></div>
+          <div>
+            <div class="progress__step" id="progressStep">Warming up the echo chamber...</div>
+            <p class="progress__flavor" id="progressFlavor">Cherry-picking evidence...</p>
+          </div>
+        </div>
+        <div class="progress__dots" id="progressDots" aria-hidden="true"></div>
+      </div>
+
+      <div class="error" id="errorMessage" role="alert"></div>
+
+      <div class="info-blurb" id="infoBlurb" aria-hidden="true" aria-labelledby="infoBlurbHeading">
+        <div class="info-blurb__header">
+          <div class="info-blurb__avatar" aria-hidden="true">ℹ️</div>
+          <div>
+            <p class="info-blurb__name" id="infoBlurbHeading">imright.io</p>
+            <p class="info-blurb__timestamp">just now &middot; Public post</p>
+          </div>
+        </div>
+        <div class="info-blurb__content">
+          <p><strong>We all have beliefs we're convinced are true.</strong> This app just does explicitly exactly what all of us already do unconsciously: it finds ONLY information that confirms what you already think.</p>
+          <p><strong>How it works:</strong></p>
+          <ol>
+            <li>Enter any belief or conspiracy you hold</li>
+            <li>We dream up the angriest-possible angles to defend it</li>
+            <li>We scrape Wikipedia for every article that could plausibly support them</li>
+            <li>We filter out the pages that don't fit the narrative</li>
+            <li>We extract citations and validate every link</li>
+            <li>We write you a tabloid article you can email to your relatives</li>
+          </ol>
+          <p><strong>Why does this exist?</strong> To demonstrate how easy it is to find "evidence" for any argument when you only ever look one way.</p>
+          <p>Ready to be validated? Enter your belief above. 👆</p>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <p>Disclaimer: This prototype intentionally cherry-picks information to demonstrate confirmation bias.</p>
+    <p>imright.io &mdash; the internet agrees with you, probably</p>
+  </footer>
+
+  <script>
+    const beliefForm = document.getElementById('beliefForm');
+    const beliefInput = document.getElementById('beliefInput');
+    const submitButton = document.getElementById('submitButton');
+    const progressElement = document.getElementById('progress');
+    const progressStepElement = document.getElementById('progressStep');
+    const progressFlavorElement = document.getElementById('progressFlavor');
+    const progressDotsElement = document.getElementById('progressDots');
+    const errorElement = document.getElementById('errorMessage');
+    const infoToggle = document.getElementById('infoToggle');
+    const infoBlurb = document.getElementById('infoBlurb');
+
+    const FLAVOR_MESSAGES = [
+      "Cherry-picking evidence...",
+      "Exposing the conspiracy...",
+      "Saying what everyone is thinking...",
+      "Ignoring context...",
+      "Finding the perfect headline...",
+      "Confirming your suspicions...",
+      "Filtering out dissent...",
+      "Hot-gluing correlations to causation...",
+      "Putting the CITE in incitement...",
+    ];
+    // Stages the user sees on the landing page (1..VISIBLE_STAGES). Step 7
+    // (counterarguments) intentionally omitted — by then the article page
+    // is on screen and counterargs stream in there via Bunky.
+    const VISIBLE_STAGES = 6;
+
+    let flavorIntervalId = null;
+    function startFlavorRotation() {
+      let index = 0;
+      progressFlavorElement.textContent = FLAVOR_MESSAGES[0];
+      flavorIntervalId = setInterval(() => {
+        index = (index + 1) % FLAVOR_MESSAGES.length;
+        progressFlavorElement.textContent = FLAVOR_MESSAGES[index];
+      }, 2400);
+    }
+    function stopFlavorRotation() {
+      if (flavorIntervalId) {
+        clearInterval(flavorIntervalId);
+        flavorIntervalId = null;
+      }
+    }
+
+    function renderDots(currentStep) {
+      progressDotsElement.innerHTML = '';
+      for (let index = 1; index <= VISIBLE_STAGES; index++) {
+        const dotElement = document.createElement('div');
+        dotElement.className = 'progress__dot';
+        if (index < currentStep) dotElement.classList.add('is-done');
+        else if (index === currentStep) dotElement.classList.add('is-active');
+        progressDotsElement.appendChild(dotElement);
+      }
+    }
+
+    function showError(message) {
+      errorElement.textContent = message;
+      errorElement.classList.add('is-visible');
+    }
+    function clearError() {
+      errorElement.textContent = '';
+      errorElement.classList.remove('is-visible');
+    }
+
+    function setFormDisabled(isDisabled) {
+      beliefInput.disabled = isDisabled;
+      submitButton.disabled = isDisabled;
+      submitButton.textContent = isDisabled ? 'Proving...' : 'Prove me right!';
+    }
+
+    function setInfoBlurbOpen(isOpen) {
+      infoBlurb.classList.toggle('is-open', isOpen);
+      infoBlurb.setAttribute('aria-hidden', String(!isOpen));
+      infoToggle.setAttribute('aria-expanded', String(isOpen));
+    }
+
+    infoToggle.addEventListener('click', () => {
+      const willOpen = !infoBlurb.classList.contains('is-open');
+      setInfoBlurbOpen(willOpen);
+    });
+
+    function handleStreamEvent(event) {
+      if (event.type === 'progress') {
+        if (event.step > VISIBLE_STAGES) return;
+        progressStepElement.textContent = `Step ${event.step} of ${VISIBLE_STAGES}: ${event.name}`;
+        renderDots(event.step);
+      } else if (event.type === 'stepComplete') {
+        if (event.step >= VISIBLE_STAGES) {
+          renderDots(VISIBLE_STAGES + 1);
+        }
+      } else if (event.type === 'ready') {
+        stopFlavorRotation();
+        progressStepElement.textContent = 'Done. Opening your definitive proof...';
+        progressFlavorElement.textContent = '';
+        window.location.href = event.url;
+      } else if (event.type === 'error') {
+        stopFlavorRotation();
+        showError(event.message || 'Pipeline failed.');
+        setFormDisabled(false);
+        progressElement.classList.remove('is-visible');
+      }
+    }
+
+    beliefForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const belief = beliefInput.value.trim();
+      if (!belief) return;
+
+      clearError();
+      setFormDisabled(true);
+      progressElement.classList.add('is-visible');
+      progressStepElement.textContent = 'Warming up the echo chamber...';
+      renderDots(0);
+      startFlavorRotation();
+
+      let runId;
+      try {
+        const runResponse = await fetch('/api/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ claim: belief }),
+        });
+        if (!runResponse.ok) {
+          const errorBody = await runResponse.json().catch(() => ({}));
+          throw new Error(errorBody?.error || `Request failed (${runResponse.status})`);
+        }
+        const runPayload = await runResponse.json();
+        runId = runPayload.runId;
+      } catch (runStartError) {
+        stopFlavorRotation();
+        showError(runStartError.message || 'Could not start the pipeline.');
+        setFormDisabled(false);
+        progressElement.classList.remove('is-visible');
+        return;
+      }
+
+      const eventSource = new EventSource(`/api/stream/${runId}`);
+      eventSource.onmessage = (messageEvent) => {
+        try {
+          const parsedEvent = JSON.parse(messageEvent.data);
+          handleStreamEvent(parsedEvent);
+        } catch (parseError) {
+          console.error('Bad SSE payload', parseError);
+        }
+      };
+      eventSource.onerror = () => {
+        // SSE auto-closes after 'done' or 'ready'; only surface if we never
+        // reached a ready state.
+      };
+    });
+  </script>
+</body>
+</html>

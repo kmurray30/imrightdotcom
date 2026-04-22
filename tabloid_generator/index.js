@@ -329,6 +329,28 @@ ${paragraphsHtml}${bunkyCalloutHtml}
       display: flex;
       align-items: center;
       justify-content: space-between;
+      position: relative;
+    }
+    .site-header__back {
+      position: absolute;
+      left: 1.25rem;
+      top: 50%;
+      transform: translateY(-50%);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      color: #a1a1a6;
+      text-decoration: none;
+      font-size: 1.1rem;
+      line-height: 1;
+      transition: color 0.15s ease, background 0.15s ease;
+    }
+    .site-header__back:hover {
+      color: #1d1d1f;
+      background: rgba(0, 0, 0, 0.04);
     }
     .site-header__logo {
       font-size: 1.25rem;
@@ -336,6 +358,7 @@ ${paragraphsHtml}${bunkyCalloutHtml}
       color: #ee3322;
       letter-spacing: -0.02em;
       text-decoration: none;
+      margin: 0 auto;
     }
     .site-header__logo:hover { color: #c4291c; }
     .container { max-width: 680px; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
@@ -359,14 +382,26 @@ ${paragraphsHtml}${bunkyCalloutHtml}
       margin: 0 0 0.75rem 0;
       letter-spacing: -0.02em;
     }
-    .site-header__debug {
+    .site-footer {
+      max-width: 680px;
+      margin: 2rem auto 0 auto;
+      padding: 1.5rem 1.25rem 2.5rem 1.25rem;
+      border-top: 1px solid #e5e5e7;
+      color: #8e8e93;
       font-size: 0.8rem;
+      text-align: center;
     }
-    .site-header__debug a {
+    .site-footer p { margin: 0 0 0.35rem 0; }
+    .site-footer p:last-child { margin-bottom: 0; }
+    .site-footer__how-link {
       color: #6e6e73;
       text-decoration: none;
+      border-bottom: 1px dotted #c1c1c6;
     }
-    .site-header__debug a:hover { color: #0f65ef; text-decoration: underline; }
+    .site-footer__how-link:hover {
+      color: #0f65ef;
+      border-bottom-color: #0f65ef;
+    }
     .article {
       background: #fff;
       border-radius: 12px;
@@ -540,8 +575,8 @@ ${paragraphsHtml}${bunkyCalloutHtml}
 <body>
   <header class="site-header">
     <div class="site-header__inner">
-      <a href="#" class="site-header__logo">TruthFeed</a>
-      ${slug ? `<span class="site-header__debug"><a href="../../imright/debug/${escapeHtml(slug)}.html" target="_blank" rel="noopener">Debug</a></span>` : ''}
+      <a href="/" class="site-header__back" aria-label="Back to imright.io" title="Back">&larr;</a>
+      <a href="/" class="site-header__logo">IMRIGHT</a>
     </div>
   </header>
   <div class="container${hasBunky ? ' container--with-bunky' : ''}">
@@ -635,6 +670,10 @@ ${conclusionHtml}
 
 })();
   </script>
+  <footer class="site-footer">
+    <p>${slug ? `<a class="site-footer__how-link" href="../../imright/debug/${escapeHtml(slug)}.html" target="_blank" rel="noopener">Find out how this works</a>` : ''}</p>
+    <p>IMRIGHT &middot; This article was auto-generated to demonstrate confirmation bias. Do not forward to relatives.</p>
+  </footer>
 </body>
 </html>`;
 }
