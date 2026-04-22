@@ -3,7 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import yaml from 'yaml';
 import { callGrok } from '../utils/grok.js';
-import { fetchImage, downloadImage } from '../utils/pixabay.js';
+import { downloadImage, fetchImage } from '../utils/pixabay.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -222,6 +222,11 @@ function generateHtml(selected, topic, slug = null, citations = [], idToUrl = nu
   const urlToIndex = buildUrlToIndex(citations);
   const debugPageUrl = slug ? `../../imright/debug/${slug}.html` : null;
   const imageMap = imagePaths instanceof Map ? imagePaths : new Map();
+  const publishedDate = new Date().toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
 
   // Intro is written after sections by Grok but rendered first in the article, in its own section
   const introHtml = intro
@@ -575,8 +580,8 @@ ${paragraphsHtml}${bunkyCalloutHtml}
 <body>
   <header class="site-header">
     <div class="site-header__inner">
-      <a href="/" class="site-header__back" aria-label="Back to imright.io" title="Back">&larr;</a>
-      <a href="/" class="site-header__logo">IMRIGHT</a>
+      <a href="/" class="site-header__back" aria-label="Back to imright.com" title="Back">&larr;</a>
+      <a href="/" class="site-header__logo">imright.com</a>
     </div>
   </header>
   <div class="container${hasBunky ? ' container--with-bunky' : ''}">
@@ -672,7 +677,7 @@ ${conclusionHtml}
   </script>
   <footer class="site-footer">
     <p>${slug ? `<a class="site-footer__how-link" href="../../imright/debug/${escapeHtml(slug)}.html" target="_blank" rel="noopener">Find out how this works</a>` : ''}</p>
-    <p>IMRIGHT &middot; This article was auto-generated to demonstrate confirmation bias. Do not forward to relatives.</p>
+    <p>imright.com &middot; Published ${publishedDate}</p>
   </footer>
 </body>
 </html>`;

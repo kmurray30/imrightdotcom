@@ -1,4 +1,4 @@
-We're live! Check us out at https://imright.io
+We're live! Check us out at https://imright.com
 
 ## Setup
 

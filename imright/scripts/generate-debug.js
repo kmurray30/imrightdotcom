@@ -553,7 +553,7 @@ function buildHtml(data) {
       </p>
     </header>
     <div class="process-blurb">
-      <p><strong>How the article got made.</strong> This page shows every stage of the imright pipeline for the claim above. The pipeline turns a one-line conspiracy into a fully-cited tabloid article by mining Wikipedia and letting Grok stitch the pieces together:</p>
+      <p><strong>How the article got made.</strong> This page shows every stage of the imright.com pipeline for the claim above. The pipeline turns a one-line conspiracy into a fully-cited tabloid article by mining Wikipedia and letting Grok stitch the pieces together:</p>
       <ol>
         <li><strong>Conspirator</strong> brainstorms bad-faith angles supporting the claim and generates Wikipedia search queries for each.</li>
         <li><strong>Wiki searcher</strong> runs every query against Wikipedia and collects candidate article titles.</li>
@@ -583,7 +583,7 @@ function buildHtml(data) {
     <section id="${overviewSectionId}">
       <h2 class="section-toggle">Overview</h2>
       <div class="section-content">
-        <p class="section-blurb">Side-by-side waterfall: on the left, every argument the Conspirator proposed with the Wikipedia search terms it generated and the references those terms turned up. On the right, the final tabloid article broken into intro / sections / conclusion with the references it actually ended up citing. Hover a reference to see its excerpt.</p>
+        <p class="section-blurb">Side-by-side waterfall: on the left, every argument the Conspirator proposed with the Wikipedia search terms it generated and the references those terms turned up. On the right, the final tabloid article broken into the final arguments it landed on based on the "evidence" it was able to find, listing the references it ended up citing. Hover a reference to see its excerpt.</p>
         <div class="overview-panes" id="overview-panes">
           <div class="overview-pane" id="overview-left">
             <h3>Original arguments</h3>
@@ -1342,7 +1342,7 @@ ${renderRefsList(refs, 0, searchTerm)}
   html += `
     <footer class="debug-footer">
       <p><a href="../../tabloid_generator/output/${escapeHtml(data.slug)}.html">← Back to the article</a> &middot; <a href="/">Home</a></p>
-      <p>IMRIGHT pipeline debug &middot; all data here was generated locally for the run above.</p>
+      <p>imright.com pipeline debug &middot; all data here was generated locally for the run above.</p>
     </footer>
   </div>
   <script id="debug-data" type="application/json">${JSON.stringify(data)}</script>

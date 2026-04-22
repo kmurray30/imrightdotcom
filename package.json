@@ -2,7 +2,7 @@
   "name": "imrightdotcom",
   "private": true,
   "version": "1.0.0",
-  "description": "imright.io — landing page + full conspiracy-to-tabloid pipeline",
+  "description": "imright.com — landing page + full conspiracy-to-tabloid pipeline",
   "type": "module",
   "scripts": {
     "dev": "node imright/scripts/serve-site.js",

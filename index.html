@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>imright.io &mdash; Prove your conspiracy right</title>
+  <title>imright.com &mdash; Prove your conspiracy right</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
@@ -13,7 +13,13 @@
     body {
       min-height: 100vh;
       font-family: "Source Sans 3", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: radial-gradient(ellipse at top, #f5f6fa 0%, #e9ebf3 60%, #dfe2ee 100%);
+      background:
+        radial-gradient(circle at 18% 12%, rgba(255, 196, 120, 0.65), transparent 55%),
+        radial-gradient(circle at 82% 8%, rgba(255, 130, 140, 0.55), transparent 55%),
+        radial-gradient(circle at 90% 90%, rgba(148, 182, 255, 0.55), transparent 55%),
+        radial-gradient(circle at 10% 85%, rgba(178, 240, 200, 0.55), transparent 55%),
+        linear-gradient(180deg, #fff4ea 0%, #f1ebff 55%, #eaf1ff 100%);
+      background-attachment: fixed;
       color: #1c1c1c;
       line-height: 1.6;
       font-size: 17px;
@@ -169,56 +175,53 @@
     }
 
     .progress {
-      margin-top: 20px;
-      padding: 16px 18px;
-      border-radius: 10px;
+      margin-top: 22px;
+      padding: 18px 20px;
+      border-radius: 12px;
       background: #fff9e6;
       border: 1px solid #e6d9a8;
       display: none;
     }
     .progress.is-visible { display: block; }
-    .progress__header {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      margin-bottom: 8px;
-    }
-    .progress__spinner {
-      width: 18px;
-      height: 18px;
-      border-radius: 50%;
-      border: 2px solid rgba(238, 51, 34, 0.25);
-      border-top-color: #ee3322;
-      animation: progress-spin 0.8s linear infinite;
-    }
-    @keyframes progress-spin {
-      to { transform: rotate(360deg); }
-    }
     .progress__step {
+      margin: 0 0 12px 0;
       font-weight: 600;
       color: #1c1c1c;
-      font-size: 0.95rem;
+      font-size: 1rem;
+      line-height: 1.35;
     }
-    .progress__flavor {
-      margin: 0;
-      color: #6e6e73;
-      font-size: 0.85rem;
-      font-style: italic;
+    .progress__bar {
+      position: relative;
+      width: 100%;
+      height: 14px;
+      border-radius: 999px;
+      background: rgba(238, 51, 34, 0.12);
+      overflow: hidden;
     }
-    .progress__dots {
-      display: flex;
-      gap: 6px;
-      margin-top: 12px;
+    .progress__bar-fill {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 0%;
+      background: linear-gradient(90deg, #ff6a3d 0%, #ee3322 60%, #c4291c 100%);
+      border-radius: 999px;
+      transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
     }
-    .progress__dot {
-      flex: 1;
-      height: 4px;
-      border-radius: 2px;
-      background: rgba(238, 51, 34, 0.15);
-      transition: background 0.3s ease;
+    .progress__bar-fill::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(
+        90deg,
+        transparent 0%,
+        rgba(255, 255, 255, 0.35) 50%,
+        transparent 100%
+      );
+      animation: progress-shimmer 1.6s linear infinite;
     }
-    .progress__dot.is-active { background: #ee3322; }
-    .progress__dot.is-done { background: rgba(238, 51, 34, 0.55); }
+    @keyframes progress-shimmer {
+      from { transform: translateX(-100%); }
+      to { transform: translateX(100%); }
+    }
 
     .error {
       margin-top: 16px;
@@ -289,14 +292,14 @@
     <div class="landing-card">
       <div class="landing-card__brand-row">
         <div class="brand">
-          <span class="brand__name">imright.io</span>
-          <span class="brand__emoji" aria-hidden="true">😎👍</span>
+          <span class="brand__name">imright.com</span>
+          <span class="brand__emoji" aria-hidden="true"></span>
         </div>
         <button
           class="info-toggle"
           id="infoToggle"
           type="button"
-          aria-label="Toggle info about imright.io"
+          aria-label="Toggle info about imright.com"
           aria-expanded="false"
           aria-controls="infoBlurb"
         >
@@ -304,7 +307,7 @@
         </button>
       </div>
 
-      <p class="tagline">State your conspiracy. We'll scour Wikipedia until it becomes gospel.</p>
+      <p class="tagline">You know why you're here.</p>
 
       <form class="belief-form" id="beliefForm">
         <label class="belief-form__label" for="beliefInput">State your belief</label>
@@ -323,14 +326,17 @@
       </form>
 
       <div class="progress" id="progress" aria-live="polite">
-        <div class="progress__header">
-          <div class="progress__spinner" aria-hidden="true"></div>
-          <div>
-            <div class="progress__step" id="progressStep">Warming up the echo chamber...</div>
-            <p class="progress__flavor" id="progressFlavor">Cherry-picking evidence...</p>
-          </div>
+        <p class="progress__step" id="progressStep">Assembling the case they don't want you to see...</p>
+        <div
+          class="progress__bar"
+          role="progressbar"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow="0"
+          id="progressBar"
+        >
+          <div class="progress__bar-fill" id="progressBarFill"></div>
         </div>
-        <div class="progress__dots" id="progressDots" aria-hidden="true"></div>
       </div>
 
       <div class="error" id="errorMessage" role="alert"></div>
@@ -339,7 +345,7 @@
         <div class="info-blurb__header">
           <div class="info-blurb__avatar" aria-hidden="true">ℹ️</div>
           <div>
-            <p class="info-blurb__name" id="infoBlurbHeading">imright.io</p>
+            <p class="info-blurb__name" id="infoBlurbHeading">imright.com</p>
             <p class="info-blurb__timestamp">just now &middot; Public post</p>
           </div>
         </div>
@@ -348,11 +354,11 @@
           <p><strong>How it works:</strong></p>
           <ol>
             <li>Enter any belief or conspiracy you hold</li>
-            <li>We dream up the angriest-possible angles to defend it</li>
-            <li>We scrape Wikipedia for every article that could plausibly support them</li>
-            <li>We filter out the pages that don't fit the narrative</li>
-            <li>We extract citations and validate every link</li>
-            <li>We write you a tabloid article you can email to your relatives</li>
+            <li>We pinpoint the most damning angles in your favor</li>
+            <li>We canvass the canon of human knowledge for corroboration</li>
+            <li>We separate the obvious truth from establishment spin</li>
+            <li>We cross-reference the airtight evidence</li>
+            <li>We publish the definitive exposé for your group chat</li>
           </ol>
           <p><strong>Why does this exist?</strong> To demonstrate how easy it is to find "evidence" for any argument when you only ever look one way.</p>
           <p>Ready to be validated? Enter your belief above. 👆</p>
@@ -362,8 +368,7 @@
   </main>
 
   <footer class="footer">
-    <p>Disclaimer: This prototype intentionally cherry-picks information to demonstrate confirmation bias.</p>
-    <p>imright.io &mdash; the internet agrees with you, probably</p>
+    <p>imright.com &middot; Published April 2026</p>
   </footer>
 
   <script>
@@ -372,53 +377,120 @@
     const submitButton = document.getElementById('submitButton');
     const progressElement = document.getElementById('progress');
     const progressStepElement = document.getElementById('progressStep');
-    const progressFlavorElement = document.getElementById('progressFlavor');
-    const progressDotsElement = document.getElementById('progressDots');
+    const progressBarElement = document.getElementById('progressBar');
+    const progressBarFillElement = document.getElementById('progressBarFill');
     const errorElement = document.getElementById('errorMessage');
     const infoToggle = document.getElementById('infoToggle');
     const infoBlurb = document.getElementById('infoBlurb');
 
-    const FLAVOR_MESSAGES = [
-      "Cherry-picking evidence...",
-      "Exposing the conspiracy...",
-      "Saying what everyone is thinking...",
-      "Ignoring context...",
-      "Finding the perfect headline...",
-      "Confirming your suspicions...",
-      "Filtering out dissent...",
-      "Hot-gluing correlations to causation...",
-      "Putting the CITE in incitement...",
-    ];
     // Stages the user sees on the landing page (1..VISIBLE_STAGES). Step 7
-    // (counterarguments) intentionally omitted — by then the article page
+    // (counterarguments) is intentionally omitted — by then the article page
     // is on screen and counterargs stream in there via Bunky.
     const VISIBLE_STAGES = 6;
 
-    let flavorIntervalId = null;
-    function startFlavorRotation() {
-      let index = 0;
-      progressFlavorElement.textContent = FLAVOR_MESSAGES[0];
-      flavorIntervalId = setInterval(() => {
-        index = (index + 1) % FLAVOR_MESSAGES.length;
-        progressFlavorElement.textContent = FLAVOR_MESSAGES[index];
-      }, 2400);
-    }
-    function stopFlavorRotation() {
-      if (flavorIntervalId) {
-        clearInterval(flavorIntervalId);
-        flavorIntervalId = null;
-      }
+    // Funny blurbs per pipeline stage. Keyed by the stage name emitted from
+    // imright/index.js onProgress so there is a single source of truth. Each
+    // stage has 10 options; we independently pick one per stage at run start
+    // so each run reads differently (and no two stages cross-contaminate).
+    const STEP_BLURB_OPTIONS = {
+      'Generating bad-faith angles...': [
+        "Uncovering what they don't want you to know...",
+        "Connecting the dots no one else dares to...",
+        "Mapping the shape of the cover-up...",
+        "Identifying the obvious-in-hindsight truths...",
+        "Following the threads they tried to sever...",
+        "Naming the patterns only the brave can see...",
+        "Charting the anomalies the sheep keep missing...",
+        "Spotting the telltale fingerprints of the plot...",
+        "Reading between the lines of the official story...",
+        "Isolating the smoking guns hidden in plain sight...",
+      ],
+      'Fetching Wikipedia articles...': [
+        "Consulting humanity's collected wisdom...",
+        "Interrogating the public record...",
+        "Combing the accumulated testimony of mankind...",
+        "Auditing the world's receipts...",
+        "Summoning the vast library of corroboration...",
+        "Demanding answers from the encyclopedias of record...",
+        "Scouring the footnotes of history itself...",
+        "Canvassing the scholarship the mainstream ignores...",
+        "Cross-checking the annals of the informed...",
+        "Petitioning the archives for their hidden truths...",
+      ],
+      'Filtering articles for relevance...': [
+        "Separating the truth from establishment spin...",
+        "Filtering out the paid disinformation...",
+        "Discarding narratives funded by Big Consensus...",
+        "Rejecting footnotes written by the coverup...",
+        "Quarantining the obvious propaganda...",
+        "Tossing out the compromised sources...",
+        "Weeding out anything the gatekeepers touched...",
+        "Ignoring articles edited by the opposition...",
+        "Scrubbing away the gaslighting...",
+        "Removing the obvious plants...",
+      ],
+      'Extracting citations...': [
+        "Cross-referencing a mountain of airtight evidence...",
+        "Collecting the receipts the courts will demand...",
+        "Archiving the irrefutable paper trail...",
+        "Stamping every quote with notarial certainty...",
+        "Triple-checking each bombshell...",
+        "Compiling the dossier of undeniable proof...",
+        "Linking chains of evidence they can't deny...",
+        "Sealing the forensic record...",
+        "Locking down citations before the memory-hole...",
+        "Documenting what the whistleblowers already confirmed...",
+      ],
+      'Generating tabloid article...': [
+        "Drafting the definitive, long-overdue exposé...",
+        "Penning the article the newsroom was too scared to run...",
+        "Writing the story the editors refused to greenlight...",
+        "Composing your Pulitzer-worthy vindication...",
+        "Stitching the case together with surgical precision...",
+        "Typing up what every honest reporter already knew...",
+        "Finalizing the piece the mainstream will never touch...",
+        "Hammering out the manifesto of common sense...",
+        "Laying out the airtight narrative...",
+        "Polishing the bombshell for publication...",
+      ],
+      'Fetching images...': [
+        "Surfacing the photographs they tried to bury...",
+        "Locating the leaked photographs...",
+        "Digging up the visuals the networks scrubbed...",
+        "Retrieving the damning visual evidence...",
+        "Recovering pictures from the deleted archive...",
+        "Declassifying the suppressed imagery...",
+        "Securing eyewitness photos before they vanish...",
+        "Exhuming images from the memory hole...",
+        "Rescuing the footage they swept under the rug...",
+        "Pulling up the snapshots the cleanup crew missed...",
+      ],
+    };
+
+    // Independently roll one blurb per stage for this run. Each stage gets
+    // its own draw, so the six stages are uncorrelated.
+    function pickRandomBlurb(stageName) {
+      const options = STEP_BLURB_OPTIONS[stageName];
+      if (!options || options.length === 0) return stageName;
+      const randomIndex = Math.floor(Math.random() * options.length);
+      return options[randomIndex];
     }
 
-    function renderDots(currentStep) {
-      progressDotsElement.innerHTML = '';
-      for (let index = 1; index <= VISIBLE_STAGES; index++) {
-        const dotElement = document.createElement('div');
-        dotElement.className = 'progress__dot';
-        if (index < currentStep) dotElement.classList.add('is-done');
-        else if (index === currentStep) dotElement.classList.add('is-active');
-        progressDotsElement.appendChild(dotElement);
+    function pickStepBlurbsForRun() {
+      const blurbsForRun = {};
+      for (const stageName of Object.keys(STEP_BLURB_OPTIONS)) {
+        blurbsForRun[stageName] = pickRandomBlurb(stageName);
       }
+      return blurbsForRun;
+    }
+
+    // Re-rolled every time the user submits the form (see beliefForm submit).
+    let currentRunStepBlurbs = pickStepBlurbsForRun();
+
+    function setProgressPercent(percent) {
+      const clamped = Math.max(0, Math.min(100, percent));
+      progressBarFillElement.style.width = `${clamped}%`;
+      progressBarElement.setAttribute('aria-valuenow', String(Math.round(clamped)));
     }
 
     function showError(message) {
@@ -450,19 +522,16 @@
     function handleStreamEvent(event) {
       if (event.type === 'progress') {
         if (event.step > VISIBLE_STAGES) return;
-        progressStepElement.textContent = `Step ${event.step} of ${VISIBLE_STAGES}: ${event.name}`;
-        renderDots(event.step);
+        const blurb = currentRunStepBlurbs[event.name] ?? event.name;
+        progressStepElement.textContent = blurb;
       } else if (event.type === 'stepComplete') {
-        if (event.step >= VISIBLE_STAGES) {
-          renderDots(VISIBLE_STAGES + 1);
-        }
+        const completedStep = Math.min(event.step, VISIBLE_STAGES);
+        setProgressPercent((completedStep / VISIBLE_STAGES) * 100);
       } else if (event.type === 'ready') {
-        stopFlavorRotation();
         progressStepElement.textContent = 'Done. Opening your definitive proof...';
-        progressFlavorElement.textContent = '';
+        setProgressPercent(100);
         window.location.href = event.url;
       } else if (event.type === 'error') {
-        stopFlavorRotation();
         showError(event.message || 'Pipeline failed.');
         setFormDisabled(false);
         progressElement.classList.remove('is-visible');
@@ -477,9 +546,9 @@
       clearError();
       setFormDisabled(true);
       progressElement.classList.add('is-visible');
-      progressStepElement.textContent = 'Warming up the echo chamber...';
-      renderDots(0);
-      startFlavorRotation();
+      currentRunStepBlurbs = pickStepBlurbsForRun();
+      progressStepElement.textContent = 'Assembling the case they don\'t want you to see...';
+      setProgressPercent(0);
 
       let runId;
       try {
@@ -495,7 +564,6 @@
         const runPayload = await runResponse.json();
         runId = runPayload.runId;
       } catch (runStartError) {
-        stopFlavorRotation();
         showError(runStartError.message || 'Could not start the pipeline.');
         setFormDisabled(false);
         progressElement.classList.remove('is-visible');
