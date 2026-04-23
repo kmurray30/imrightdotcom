@@ -534,8 +534,11 @@ ${paragraphsHtml}${bunkyCalloutHtml}
       position: fixed;
       top: 0;
       right: 0;
-      width: 380px;
-      max-width: 40vw;
+      /* Err small on wide/medium viewports (a 380px panel is ~27% of a
+       * 1400px screen and ~42% of a 900px screen), then smoothly grow as
+       * a percentage as the viewport keeps shrinking. Caps at 65vw so the
+       * panel never takes over more than about two-thirds of the screen. */
+      width: min(380px, 65vw);
       height: 100vh;
       background: #fff;
       box-shadow: -4px 0 24px rgba(0,0,0,0.12);
@@ -580,7 +583,9 @@ ${paragraphsHtml}${bunkyCalloutHtml}
      * (900px container + 180px right gutter for Bunky bubbles), the 180px
      * right margin on .article--has-bunky reserves space that doesn't exist
      * and squishes the article text. Drop the gutter and render each Bunky
-     * bubble inline at the end of its section instead. */
+     * callout inline at the end of its section. The image and speech bubble
+     * sit on a single row (image on the left, bubble flexing to fill the
+     * remaining width) so the bubble doesn't wrap below Bunky. */
     @media (max-width: 860px) {
       .container--with-bunky { max-width: 680px; }
       .article--has-bunky { margin-right: 0; }
@@ -589,10 +594,14 @@ ${paragraphsHtml}${bunkyCalloutHtml}
         transform: none;
         width: auto;
         margin-top: 1rem;
-        align-items: flex-start;
+        flex-direction: row;
+        align-items: center;
+        gap: 0.75rem;
       }
+      .bunky-callout__img { flex-shrink: 0; }
       .article__bunky-bubble {
-        max-width: 100%;
+        max-width: none;
+        flex: 1;
         text-align: left;
       }
     }
@@ -675,22 +684,32 @@ ${conclusionHtml}
   var panel = document.getElementById("bunkyPanel");
   var analysisEl = document.getElementById("bunkyPanelAnalysis");
   var closeBtn = panel && panel.querySelector(".bunky-panel__close");
-  document.addEventListener("click", function(e) {
-    var bubble = e.target.closest('.article__bunky-bubble[data-has-analysis="true"]');
-    if (bubble && bubble._analysis) {
-      analysisEl.textContent = bubble._analysis;
-      panel.classList.add("is-open");
-      panel.setAttribute("aria-hidden", "false");
-    }
-  });
-  if (closeBtn) closeBtn.addEventListener("click", function() {
+  // The bubble whose analysis is currently displayed. Used to toggle the
+  // panel closed when the same bubble is clicked twice, and to open with
+  // fresh content when a different bubble is clicked while the panel is
+  // already open.
+  var activeBubble = null;
+  function closeBunkyPanel() {
     panel.classList.remove("is-open");
     panel.setAttribute("aria-hidden", "true");
+    activeBubble = null;
+  }
+  document.addEventListener("click", function(e) {
+    var bubble = e.target.closest('.article__bunky-bubble[data-has-analysis="true"]');
+    if (!bubble || !bubble._analysis) return;
+    if (panel.classList.contains("is-open") && activeBubble === bubble) {
+      closeBunkyPanel();
+      return;
+    }
+    analysisEl.textContent = bubble._analysis;
+    panel.classList.add("is-open");
+    panel.setAttribute("aria-hidden", "false");
+    activeBubble = bubble;
   });
+  if (closeBtn) closeBtn.addEventListener("click", closeBunkyPanel);
   document.addEventListener("keydown", function(e) {
     if (e.key === "Escape" && panel && panel.classList.contains("is-open")) {
-      panel.classList.remove("is-open");
-      panel.setAttribute("aria-hidden", "true");
+      closeBunkyPanel();
     }
   });
 
