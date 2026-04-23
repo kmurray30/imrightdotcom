@@ -575,6 +575,27 @@ ${paragraphsHtml}${bunkyCalloutHtml}
       color: #424245;
       white-space: pre-wrap;
     }
+
+    /* When the viewport is narrower than the side-gutter layout can support
+     * (900px container + 180px right gutter for Bunky bubbles), the 180px
+     * right margin on .article--has-bunky reserves space that doesn't exist
+     * and squishes the article text. Drop the gutter and render each Bunky
+     * bubble inline at the end of its section instead. */
+    @media (max-width: 860px) {
+      .container--with-bunky { max-width: 680px; }
+      .article--has-bunky { margin-right: 0; }
+      .bunky-callout {
+        position: static;
+        transform: none;
+        width: auto;
+        margin-top: 1rem;
+        align-items: flex-start;
+      }
+      .article__bunky-bubble {
+        max-width: 100%;
+        text-align: left;
+      }
+    }
   </style>
 </head>
 <body>

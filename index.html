@@ -148,6 +148,11 @@
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
+      /* When the button wraps below the input (narrow viewport), keep it
+       * centered on its own line. On a single line the input has flex: 1 and
+       * consumes all free space, so justify-content has no visible effect;
+       * on the wrapped line the button doesn't grow, so this centers it. */
+      justify-content: center;
     }
     .belief-form__input {
       flex: 1;

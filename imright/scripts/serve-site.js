@@ -10,14 +10,14 @@
  * in imright/cli.js does not terminate this server).
  */
 
-import fs from 'fs';
-import path from 'path';
-import http from 'http';
 import crypto from 'crypto';
+import fs from 'fs';
+import http from 'http';
+import path from 'path';
 import { fileURLToPath } from 'url';
 import { runPipeline } from '../index.js';
-import { slugify } from '../utils.js';
 import { loadEnv } from '../load-env.js';
+import { slugify } from '../utils.js';
 
 loadEnv();
 
