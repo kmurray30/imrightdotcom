@@ -205,38 +205,68 @@
       color: #1c1c1c;
       font-size: 1rem;
       line-height: 1.35;
+      opacity: 1;
+      transform: translateY(0);
+      transition: opacity 0.28s ease-in-out;
+    }
+    /* Fade-out only affects opacity — the element stays at translateY(0)
+     * while it becomes invisible, so when fade-in starts and snaps the
+     * transform to translateY(16px), the transform jump happens while the
+     * element is already at opacity 0 (invisible) and is never painted.
+     * Only the new text's floating-up motion is visible to the user. */
+    .progress__step.fade-out {
+      opacity: 0;
+    }
+    .progress__step.fade-in {
+      animation: progress-step-fade-in-up 0.28s ease-out forwards;
+    }
+    @keyframes progress-step-fade-in-up {
+      from {
+        opacity: 0;
+        transform: translateY(16px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
     }
     .progress__bar {
       position: relative;
       width: 100%;
-      height: 14px;
+      height: 10px;
       border-radius: 999px;
-      background: rgba(238, 51, 34, 0.12);
+      background: rgba(15, 42, 68, 0.08);
       overflow: hidden;
     }
-    .progress__bar-fill {
-      position: absolute;
-      inset: 0 auto 0 0;
-      width: 0%;
-      background: linear-gradient(90deg, #ff6a3d 0%, #ee3322 60%, #c4291c 100%);
-      border-radius: 999px;
-      transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-    }
-    .progress__bar-fill::after {
+    /* Shimmer lives on the track (not the fill) so it's always visible —
+     * even at 0% fill — and naturally brightens the fill as it sweeps
+     * across. Classic skeleton-loader pattern. */
+    .progress__bar::after {
       content: "";
       position: absolute;
       inset: 0;
       background: linear-gradient(
         90deg,
         transparent 0%,
-        rgba(255, 255, 255, 0.35) 50%,
+        rgba(255, 255, 255, 0.55) 50%,
         transparent 100%
       );
-      animation: progress-shimmer 1.6s linear infinite;
+      transform: translateX(-100%);
+      animation: progress-bar-shimmer 1.4s ease-in-out infinite;
+      pointer-events: none;
+      z-index: 1;
     }
-    @keyframes progress-shimmer {
+    @keyframes progress-bar-shimmer {
       from { transform: translateX(-100%); }
       to { transform: translateX(100%); }
+    }
+    .progress__bar-fill {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 0%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #ee3322 0%, #ff6a3d 100%);
+      transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
     }
 
     .error {
@@ -509,6 +539,41 @@
       progressBarElement.setAttribute('aria-valuenow', String(Math.round(clamped)));
     }
 
+    // Animated swap of the progress-step blurb: mimics og_site's loading-text
+    // transitions (fade-out up, then fade-in up). If a swap is already mid-
+    // flight, the pending text is overridden so we always show the latest.
+    const FADE_OUT_MS = 280;
+    let pendingProgressStepTimeout = null;
+
+    function retriggerFadeIn() {
+      progressStepElement.classList.remove('fade-out');
+      // Re-trigger the fade-in keyframes even if the class is already
+      // present from a prior swap: remove, force reflow, then add.
+      progressStepElement.classList.remove('fade-in');
+      void progressStepElement.offsetWidth;
+      progressStepElement.classList.add('fade-in');
+    }
+    function setProgressStepText(text, options = {}) {
+      const isInitial = options.initial === true;
+      if (pendingProgressStepTimeout) {
+        clearTimeout(pendingProgressStepTimeout);
+        pendingProgressStepTimeout = null;
+      }
+      if (isInitial) {
+        progressStepElement.textContent = text;
+        retriggerFadeIn();
+        return;
+      }
+      if (progressStepElement.textContent === text) return;
+      progressStepElement.classList.remove('fade-in');
+      progressStepElement.classList.add('fade-out');
+      pendingProgressStepTimeout = setTimeout(() => {
+        pendingProgressStepTimeout = null;
+        progressStepElement.textContent = text;
+        retriggerFadeIn();
+      }, FADE_OUT_MS);
+    }
+
     function showError(message) {
       errorElement.textContent = message;
       errorElement.classList.add('is-visible');
@@ -539,12 +604,12 @@
       if (event.type === 'progress') {
         if (event.step > VISIBLE_STAGES) return;
         const blurb = currentRunStepBlurbs[event.name] ?? event.name;
-        progressStepElement.textContent = blurb;
+        setProgressStepText(blurb);
       } else if (event.type === 'stepComplete') {
         const completedStep = Math.min(event.step, VISIBLE_STAGES);
         setProgressPercent((completedStep / VISIBLE_STAGES) * 100);
       } else if (event.type === 'ready') {
-        progressStepElement.textContent = 'Done. Opening your definitive proof...';
+        setProgressStepText('Done. Opening your definitive proof...');
         setProgressPercent(100);
         window.location.href = event.url;
       } else if (event.type === 'error') {
@@ -563,7 +628,10 @@
       setFormDisabled(true);
       progressElement.classList.add('is-visible');
       currentRunStepBlurbs = pickStepBlurbsForRun();
-      progressStepElement.textContent = 'Assembling the case they don\'t want you to see...';
+      setProgressStepText(
+        "Assembling the case they don't want you to see...",
+        { initial: true }
+      );
       setProgressPercent(0);
 
       let runId;
