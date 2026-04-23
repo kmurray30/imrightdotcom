@@ -1,0 +1,4 @@
+{
+  "_comment": "App-wide configuration. `activeColorScheme` selects which entry from config/color_schemes.json (under `schemes`) is applied to the landing page. Change the value and reload the page (no server restart needed) to preview a different scheme.",
+  "activeColorScheme": "home_background_15"
+}

@@ -1,0 +1,167 @@
+{
+  "_comment": "Named color schemes for imright.com. Each scheme's `background` is an array of CSS background layers that will be joined with ', ' and injected as the `background` value of <body> on the landing page. The first layer paints on top; the last paints at the bottom. Schemes are named home_background_1, home_background_2, ... add new ones without removing the old, then set config/app_config.json#activeColorScheme.",
+  "schemes": {
+    "home_background_1": {
+      "label": "Pastel mesh (original)",
+      "description": "Soft orange, coral, periwinkle, and mint glows over a cream -> lavender -> blue vertical wash. The look the site shipped with.",
+      "background": [
+        "radial-gradient(circle at 18% 12%, rgba(255, 196, 120, 0.65), transparent 55%)",
+        "radial-gradient(circle at 82% 8%, rgba(255, 130, 140, 0.55), transparent 55%)",
+        "radial-gradient(circle at 90% 90%, rgba(148, 182, 255, 0.55), transparent 55%)",
+        "radial-gradient(circle at 10% 85%, rgba(178, 240, 200, 0.55), transparent 55%)",
+        "linear-gradient(180deg, #fff4ea 0%, #f1ebff 55%, #eaf1ff 100%)"
+      ]
+    },
+    "home_background_2": {
+      "label": "Tabloid fire",
+      "description": "Hot oranges, reds, and gold glows on a warm peach wash. Leans into the #ee3322 CTA color.",
+      "background": [
+        "radial-gradient(circle at 15% 15%, rgba(255, 140, 60, 0.65), transparent 55%)",
+        "radial-gradient(circle at 85% 10%, rgba(238, 51, 34, 0.45), transparent 55%)",
+        "radial-gradient(circle at 88% 92%, rgba(255, 200, 80, 0.55), transparent 55%)",
+        "radial-gradient(circle at 8% 88%, rgba(255, 106, 61, 0.45), transparent 55%)",
+        "linear-gradient(180deg, #fff1e0 0%, #ffe4d6 55%, #ffd8cf 100%)"
+      ]
+    },
+    "home_background_3": {
+      "label": "Deep conspiracy",
+      "description": "Dark navy base with purple, teal, and magenta glows. Night-mode, late-night-forum vibe. NOTE: text colors on the landing card assume a light backdrop; pair with care or plan to add a dark-mode text pass later.",
+      "background": [
+        "radial-gradient(circle at 20% 15%, rgba(120, 80, 220, 0.55), transparent 55%)",
+        "radial-gradient(circle at 85% 12%, rgba(230, 70, 180, 0.45), transparent 55%)",
+        "radial-gradient(circle at 90% 88%, rgba(60, 200, 220, 0.45), transparent 55%)",
+        "radial-gradient(circle at 12% 85%, rgba(90, 110, 255, 0.45), transparent 55%)",
+        "linear-gradient(180deg, #0f1228 0%, #141a36 55%, #0b1020 100%)"
+      ]
+    },
+    "home_background_4": {
+      "label": "Mint sage calm",
+      "description": "Cool greens, teals, and soft yellows on a pale mint wash. Quieter and more editorial.",
+      "background": [
+        "radial-gradient(circle at 15% 15%, rgba(160, 230, 200, 0.65), transparent 55%)",
+        "radial-gradient(circle at 85% 12%, rgba(200, 230, 150, 0.55), transparent 55%)",
+        "radial-gradient(circle at 88% 88%, rgba(120, 200, 220, 0.45), transparent 55%)",
+        "radial-gradient(circle at 10% 85%, rgba(240, 230, 160, 0.5), transparent 55%)",
+        "linear-gradient(180deg, #f0fbf4 0%, #eaf6ef 55%, #e6f1ec 100%)"
+      ]
+    },
+    "home_background_5": {
+      "label": "Vaporwave",
+      "description": "Magenta, cyan, and lilac glows over a blush -> periwinkle wash. Saturated and retro.",
+      "background": [
+        "radial-gradient(circle at 18% 10%, rgba(255, 120, 220, 0.6), transparent 55%)",
+        "radial-gradient(circle at 82% 10%, rgba(120, 220, 255, 0.55), transparent 55%)",
+        "radial-gradient(circle at 90% 90%, rgba(180, 140, 255, 0.55), transparent 55%)",
+        "radial-gradient(circle at 10% 85%, rgba(255, 180, 220, 0.55), transparent 55%)",
+        "linear-gradient(180deg, #ffe6f2 0%, #ecdcff 55%, #dcecff 100%)"
+      ]
+    },
+    "home_background_6": {
+      "label": "Newsprint neutral",
+      "description": "Barely-there warm-gray wash with faint sepia and cool-gray glows. Reads as classic print.",
+      "background": [
+        "radial-gradient(circle at 18% 12%, rgba(220, 200, 170, 0.4), transparent 55%)",
+        "radial-gradient(circle at 82% 10%, rgba(200, 200, 200, 0.35), transparent 55%)",
+        "radial-gradient(circle at 88% 90%, rgba(180, 180, 190, 0.35), transparent 55%)",
+        "radial-gradient(circle at 10% 85%, rgba(210, 200, 180, 0.35), transparent 55%)",
+        "linear-gradient(180deg, #f7f3ec 0%, #f1ecdf 55%, #ece7db 100%)"
+      ]
+    },
+    "home_background_7": {
+      "label": "Tropical punch",
+      "description": "Four color families: golden mango, tangerine, hot pink, and clear pool blue over a soft peach and aqua wash.",
+      "background": [
+        "radial-gradient(circle at 16% 12%, rgba(255, 200, 80, 0.65), transparent 55%)",
+        "radial-gradient(circle at 86% 10%, rgba(255, 150, 90, 0.55), transparent 55%)",
+        "radial-gradient(circle at 12% 88%, rgba(255, 100, 160, 0.5), transparent 55%)",
+        "radial-gradient(circle at 90% 88%, rgba(80, 200, 230, 0.5), transparent 55%)",
+        "linear-gradient(180deg, #fff2e0 0%, #fff8f0 50%, #e8f8ff 100%)"
+      ]
+    },
+    "home_background_8": {
+      "label": "Aurora wash",
+      "description": "Mint, electric cyan, orchid, and periwinkle over a very light icy base — like northern lights in daylight.",
+      "background": [
+        "radial-gradient(circle at 20% 15%, rgba(100, 240, 180, 0.5), transparent 55%)",
+        "radial-gradient(circle at 80% 12%, rgba(0, 210, 240, 0.45), transparent 55%)",
+        "radial-gradient(circle at 88% 90%, rgba(200, 120, 255, 0.45), transparent 55%)",
+        "radial-gradient(circle at 8% 82%, rgba(150, 160, 255, 0.5), transparent 55%)",
+        "linear-gradient(180deg, #f0faff 0%, #eef6ff 45%, #f5f0ff 100%)"
+      ]
+    },
+    "home_background_9": {
+      "label": "Berry bowl",
+      "description": "Raspberry, Concord grape, blueberry, and soft rose-pink on a barely pink-lilac base.",
+      "background": [
+        "radial-gradient(circle at 15% 18%, rgba(220, 80, 130, 0.45), transparent 55%)",
+        "radial-gradient(circle at 84% 14%, rgba(150, 90, 200, 0.45), transparent 55%)",
+        "radial-gradient(circle at 90% 86%, rgba(100, 140, 230, 0.45), transparent 55%)",
+        "radial-gradient(circle at 10% 80%, rgba(255, 160, 190, 0.5), transparent 55%)",
+        "linear-gradient(180deg, #fff0f4 0%, #f3e8ff 50%, #eceaff 100%)"
+      ]
+    },
+    "home_background_10": {
+      "label": "Citrus + plum",
+      "description": "Lemon, lime, blood orange, and deep plum on a warm ivory wash — sharp complementary contrast but still light.",
+      "background": [
+        "radial-gradient(circle at 18% 14%, rgba(255, 240, 100, 0.55), transparent 55%)",
+        "radial-gradient(circle at 82% 10%, rgba(200, 240, 120, 0.5), transparent 55%)",
+        "radial-gradient(circle at 88% 90%, rgba(255, 140, 60, 0.5), transparent 55%)",
+        "radial-gradient(circle at 10% 86%, rgba(120, 60, 140, 0.35), transparent 55%)",
+        "linear-gradient(180deg, #fffef5 0%, #fff6e6 50%, #f8f0ff 100%)"
+      ]
+    },
+    "home_background_11": {
+      "label": "Mediterranean",
+      "description": "Terracotta, olive, deep azure, and sun-warm sand over plaster-white — three earth tones plus one sea blue.",
+      "background": [
+        "radial-gradient(circle at 16% 12%, rgba(220, 120, 80, 0.45), transparent 55%)",
+        "radial-gradient(circle at 84% 12%, rgba(120, 150, 90, 0.45), transparent 55%)",
+        "radial-gradient(circle at 88% 90%, rgba(50, 130, 200, 0.4), transparent 55%)",
+        "radial-gradient(circle at 10% 86%, rgba(240, 210, 150, 0.55), transparent 55%)",
+        "linear-gradient(180deg, #faf6ef 0%, #f0ebe0 50%, #e8f2fa 100%)"
+      ]
+    },
+    "home_background_12": {
+      "label": "Cotton candy / carnival",
+      "description": "Bubblegum pink, blue-raspberry, lemon, and soft grape on a pale lavender base.",
+      "background": [
+        "radial-gradient(circle at 18% 10%, rgba(255, 160, 210, 0.55), transparent 55%)",
+        "radial-gradient(circle at 82% 10%, rgba(120, 190, 255, 0.5), transparent 55%)",
+        "radial-gradient(circle at 12% 88%, rgba(255, 245, 120, 0.55), transparent 55%)",
+        "radial-gradient(circle at 90% 86%, rgba(200, 160, 240, 0.45), transparent 55%)",
+        "linear-gradient(180deg, #fff0fb 0%, #f0e6ff 45%, #e8f4ff 100%)"
+      ]
+    },
+    "home_background_13": {
+      "label": "Desert + oasis",
+      "description": "Sand, clay rose, cactus green, and oasis turquoise on a warm mineral wash.",
+      "background": [
+        "radial-gradient(circle at 15% 14%, rgba(230, 200, 140, 0.6), transparent 55%)",
+        "radial-gradient(circle at 85% 10%, rgba(200, 120, 110, 0.45), transparent 55%)",
+        "radial-gradient(circle at 90% 88%, rgba(80, 180, 120, 0.4), transparent 55%)",
+        "radial-gradient(circle at 8% 84%, rgba(40, 190, 200, 0.4), transparent 55%)",
+        "linear-gradient(180deg, #faf2e0 0%, #f0ead8 50%, #e0f0f2 100%)"
+      ]
+    },
+    "home_background_14": {
+      "label": "Sorbet stripe dream",
+      "description": "Strawberry, orange sherbet, lime, and violet on a cream base — four distinct sorbet hues.",
+      "background": [
+        "radial-gradient(circle at 20% 12%, rgba(255, 150, 170, 0.55), transparent 55%)",
+        "radial-gradient(circle at 80% 10%, rgba(255, 180, 100, 0.55), transparent 55%)",
+        "radial-gradient(circle at 88% 90%, rgba(150, 230, 130, 0.5), transparent 55%)",
+        "radial-gradient(circle at 8% 82%, rgba(200, 160, 255, 0.5), transparent 55%)",
+        "linear-gradient(180deg, #fffcf5 0%, #fff5f0 50%, #f5f8ff 100%)"
+      ]
+    },
+    "home_background_15": {
+      "label": "og_site echocheck intro (cool blue)",
+      "description": "Same stack as imright.io / echocheck landing: a soft white hot-spot (top-left) over a 165° sky-blue to cornflower wash. Source of truth: og_site/css/layout.css (body.intro). If you restyle og_site, consider updating this to match.",
+      "background": [
+        "radial-gradient(circle at 20% -20%, rgba(255, 255, 255, 0.52) 0%, rgba(255, 255, 255, 0.24) 32%, transparent 55%)",
+        "linear-gradient(165deg, #c0e7ff 0%, #9bd6ff 35%, #67b8f7 72%, #4aa1f0 100%)"
+      ]
+    }
+  }
+}

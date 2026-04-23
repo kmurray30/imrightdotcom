@@ -26,6 +26,109 @@ const PROJECT_ROOT = path.resolve(__dirname, '../..');
 const DEFAULT_PORT = 3758;
 const PORT = parseInt(process.argv[2] || String(DEFAULT_PORT), 10);
 
+const APP_CONFIG_PATH = path.join(PROJECT_ROOT, 'config', 'app_config.json');
+const COLOR_SCHEMES_PATH = path.join(PROJECT_ROOT, 'config', 'color_schemes.json');
+const DEFAULT_COLOR_SCHEME_NAME = 'home_background_1';
+const ACTIVE_HOME_BACKGROUND_PLACEHOLDER = 'ACTIVE_HOME_BACKGROUND_LAYERS';
+
+/**
+ * Hard-coded backstop for the home background. Used only if config files are
+ * missing, malformed, or point at a scheme that no longer exists. Kept
+ * identical to home_background_1 in config/color_schemes.json so the page
+ * still looks correct in failure modes.
+ */
+const FALLBACK_HOME_BACKGROUND_LAYERS = [
+  'radial-gradient(circle at 18% 12%, rgba(255, 196, 120, 0.65), transparent 55%)',
+  'radial-gradient(circle at 82% 8%, rgba(255, 130, 140, 0.55), transparent 55%)',
+  'radial-gradient(circle at 90% 90%, rgba(148, 182, 255, 0.55), transparent 55%)',
+  'radial-gradient(circle at 10% 85%, rgba(178, 240, 200, 0.55), transparent 55%)',
+  'linear-gradient(180deg, #fff4ea 0%, #f1ebff 55%, #eaf1ff 100%)',
+];
+
+/**
+ * Read `config/app_config.json` and `config/color_schemes.json` and return the
+ * CSS `background` value (layers joined with ', ') for the currently active
+ * scheme. Any failure (missing file, invalid JSON, unknown scheme, missing
+ * layers) logs a warning and falls back to the hard-coded default so the
+ * landing page never breaks on a config typo.
+ */
+function resolveActiveHomeBackground() {
+  let activeSchemeName = DEFAULT_COLOR_SCHEME_NAME;
+  try {
+    const appConfigRaw = fs.readFileSync(APP_CONFIG_PATH, 'utf8');
+    const appConfig = JSON.parse(appConfigRaw);
+    if (typeof appConfig.activeColorScheme === 'string' && appConfig.activeColorScheme.trim()) {
+      activeSchemeName = appConfig.activeColorScheme.trim();
+    }
+  } catch (appConfigError) {
+    console.error(
+      `[serve-site] could not read ${APP_CONFIG_PATH}; using default scheme "${DEFAULT_COLOR_SCHEME_NAME}":`,
+      appConfigError?.message ?? appConfigError
+    );
+  }
+
+  let schemes;
+  try {
+    const colorSchemesRaw = fs.readFileSync(COLOR_SCHEMES_PATH, 'utf8');
+    const parsed = JSON.parse(colorSchemesRaw);
+    schemes = parsed && typeof parsed === 'object' ? parsed.schemes : null;
+  } catch (colorSchemesError) {
+    console.error(
+      `[serve-site] could not read ${COLOR_SCHEMES_PATH}; using hard-coded fallback layers:`,
+      colorSchemesError?.message ?? colorSchemesError
+    );
+    return FALLBACK_HOME_BACKGROUND_LAYERS.join(', ');
+  }
+
+  if (!schemes || typeof schemes !== 'object') {
+    console.error(
+      `[serve-site] ${COLOR_SCHEMES_PATH} has no "schemes" object; using hard-coded fallback layers.`
+    );
+    return FALLBACK_HOME_BACKGROUND_LAYERS.join(', ');
+  }
+
+  const activeScheme = schemes[activeSchemeName] ?? schemes[DEFAULT_COLOR_SCHEME_NAME];
+  if (!activeScheme) {
+    console.error(
+      `[serve-site] active color scheme "${activeSchemeName}" not found and default "${DEFAULT_COLOR_SCHEME_NAME}" is missing too; using hard-coded fallback layers.`
+    );
+    return FALLBACK_HOME_BACKGROUND_LAYERS.join(', ');
+  }
+
+  if (!activeScheme.background || !Array.isArray(activeScheme.background) || activeScheme.background.length === 0) {
+    console.error(
+      `[serve-site] color scheme "${activeSchemeName}" is missing a non-empty "background" array; using hard-coded fallback layers.`
+    );
+    return FALLBACK_HOME_BACKGROUND_LAYERS.join(', ');
+  }
+
+  return activeScheme.background.join(', ');
+}
+
+/**
+ * Render index.html with the placeholder replaced by the active scheme's
+ * background. Done per-request (cheap I/O, small file) so editing
+ * config/app_config.json or config/color_schemes.json takes effect on the
+ * next reload without a server restart.
+ */
+function serveLandingPage(response) {
+  const landingPagePath = path.join(PROJECT_ROOT, 'index.html');
+  fs.readFile(landingPagePath, 'utf8', (readError, rawHtml) => {
+    if (readError) {
+      response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      response.end('Failed to read index.html');
+      return;
+    }
+    const activeHomeBackgroundCss = resolveActiveHomeBackground();
+    const renderedHtml = rawHtml.split(ACTIVE_HOME_BACKGROUND_PLACEHOLDER).join(activeHomeBackgroundCss);
+    response.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-cache',
+    });
+    response.end(renderedHtml);
+  });
+}
+
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
@@ -256,6 +359,11 @@ const server = http.createServer(async (request, response) => {
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     response.writeHead(405, { 'Content-Type': 'text/plain; charset=utf-8' });
     response.end('Method Not Allowed');
+    return;
+  }
+
+  if (urlPath === '/' || urlPath === '/index.html') {
+    serveLandingPage(response);
     return;
   }
 
