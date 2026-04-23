@@ -5,8 +5,10 @@
   "description": "imright.com — landing page + full conspiracy-to-tabloid pipeline",
   "type": "module",
   "scripts": {
-    "dev": "node imright/scripts/serve-site.js",
+    "dev": "SERVE_MODE=local node imright/scripts/serve-site.js",
+    "dev:lan": "SERVE_MODE=lan node imright/scripts/serve-site.js",
     "start": "node imright/scripts/serve-site.js",
+    "start:prod": "SERVE_MODE=prod node imright/scripts/serve-site.js",
     "cli": "node imright/cli.js",
     "debug": "node imright/scripts/generate-debug.js",
     "serve-output": "node imright/scripts/serve-output.js"

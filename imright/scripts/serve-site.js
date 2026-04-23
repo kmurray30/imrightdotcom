@@ -23,8 +23,50 @@ loadEnv();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '../..');
-const DEFAULT_PORT = 3758;
-const PORT = parseInt(process.argv[2] || String(DEFAULT_PORT), 10);
+/**
+ * High-level mode the server runs in. Each mode bundles a set of defaults
+ * (bind host, port, and — in the future — things like caching headers,
+ * logging verbosity, compression, etc.).
+ *
+ *   local - 127.0.0.1 (default). Only reachable from this machine.
+ *   lan   - 0.0.0.0. Reachable from any host on the local network, handy
+ *           for testing on a phone or a second laptop.
+ *   prod  - 0.0.0.0. Placeholder for production defaults; extend
+ *           MODE_DEFAULTS below as real prod config (caching, logging,
+ *           etc.) gets added.
+ *
+ * Pick a mode in one of three ways:
+ *   1) `npm run dev`  /  `npm run dev:lan`  /  `npm run start:prod`
+ *   2) SERVE_MODE=lan npm run dev
+ *   3) put `SERVE_MODE=lan` in env.local (sticky for this machine)
+ *
+ * Individual env vars (SERVE_HOST, PORT) still override the mode's
+ * defaults, so one-off tweaks don't require inventing a new mode.
+ */
+const MODE_DEFAULTS = {
+  local: { host: '127.0.0.1', port: 3758 },
+  lan: { host: '0.0.0.0', port: 3758 },
+  prod: { host: '0.0.0.0', port: 3758 },
+};
+const DEFAULT_SERVE_MODE = 'local';
+
+const requestedServeMode = (process.env.SERVE_MODE || DEFAULT_SERVE_MODE).trim().toLowerCase();
+const SERVE_MODE = Object.prototype.hasOwnProperty.call(MODE_DEFAULTS, requestedServeMode)
+  ? requestedServeMode
+  : DEFAULT_SERVE_MODE;
+if (SERVE_MODE !== requestedServeMode) {
+  console.error(
+    `[serve-site] unknown SERVE_MODE "${requestedServeMode}"; valid: ${Object.keys(MODE_DEFAULTS).join(', ')}. Falling back to "${DEFAULT_SERVE_MODE}".`
+  );
+}
+const modeConfig = MODE_DEFAULTS[SERVE_MODE];
+
+// Precedence: explicit CLI arg (port) > env var > mode default.
+const PORT = parseInt(
+  process.argv[2] || process.env.PORT || String(modeConfig.port),
+  10
+);
+const SERVE_HOST = (process.env.SERVE_HOST || modeConfig.host).trim();
 
 const APP_CONFIG_PATH = path.join(PROJECT_ROOT, 'config', 'app_config.json');
 const COLOR_SCHEMES_PATH = path.join(PROJECT_ROOT, 'config', 'color_schemes.json');
@@ -370,8 +412,14 @@ const server = http.createServer(async (request, response) => {
   serveStaticFile(urlPath, response);
 });
 
-server.listen(PORT, '127.0.0.1', () => {
+server.listen(PORT, SERVE_HOST, () => {
   const url = `http://127.0.0.1:${PORT}`;
   process.stdout.write(`${url}\n`);
-  console.error(`[serve-site] listening on ${url}`);
+  const reachability =
+    SERVE_HOST === '0.0.0.0'
+      ? 'reachable on the local network'
+      : 'local machine only';
+  console.error(
+    `[serve-site] mode=${SERVE_MODE} listening on ${SERVE_HOST}:${PORT} (${reachability}); open ${url}`
+  );
 });
