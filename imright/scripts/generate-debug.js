@@ -502,9 +502,6 @@ function buildHtml(data) {
     .overview-pane h3 { font-size: 0.95rem; margin: 0 0 0.5rem 0; color: #aaa; }
     .overview-arg { margin-bottom: 1rem; }
     .overview-arg-title { font-weight: 600; margin-bottom: 0.25rem; font-size: 0.9rem; }
-    .overview-arg-badge { font-size: 0.75em; padding: 0.1em 0.4em; border-radius: 3px; margin-left: 0.5em; }
-    .overview-arg-badge.kept { background: #2d4a2d; color: #6df4a1; }
-    .overview-arg-badge.filtered { background: #4a2d2d; color: #e63946; }
     .overview-term { margin-left: 1rem; margin-bottom: 0.5rem; font-size: 0.85rem; }
     .overview-term-title { color: #bbb; margin-bottom: 0.25rem; }
     .overview-ref a { color: #6df4a1; }
@@ -590,11 +587,8 @@ function buildHtml(data) {
 `;
   for (let argIdx = 0; argIdx < overviewArgs.length; argIdx++) {
     const overviewArg = overviewArgs[argIdx];
-    const badge = overviewArg.keep
-      ? '<span class="overview-arg-badge kept">KEPT</span>'
-      : '<span class="overview-arg-badge filtered">FILTERED</span>';
     html += `            <div class="overview-arg">
-              <div class="overview-arg-title">${escapeHtml(overviewArg.argument)}${badge}</div>
+              <div class="overview-arg-title">${escapeHtml(overviewArg.argument)}</div>
 `;
     for (let termIdx = 0; termIdx < (overviewArg.search_queries ?? []).length; termIdx++) {
       const searchTerm = overviewArg.search_queries[termIdx];

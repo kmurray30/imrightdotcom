@@ -429,6 +429,11 @@
     const infoToggle = document.getElementById('infoToggle');
     const infoBlurb = document.getElementById('infoBlurb');
 
+    // Reference to the current SSE connection. Held at module scope so
+    // resetLandingState() (called on bfcache restore) can close it and stop
+    // it from auto-reconnecting and re-firing the buffered `ready` event.
+    let activeEventSource = null;
+
     // Stages the user sees on the landing page (1..VISIBLE_STAGES). Step 7
     // (counterarguments) is intentionally omitted — by then the article page
     // is on screen and counterargs stream in there via Bunky.
@@ -611,6 +616,13 @@
       } else if (event.type === 'ready') {
         setProgressStepText('Done. Opening your definitive proof...');
         setProgressPercent(100);
+        // Close the stream before navigating so a bfcache restore won't
+        // auto-reconnect and replay this same `ready` event, which would
+        // bounce the user straight back to the article they just left.
+        if (activeEventSource) {
+          activeEventSource.close();
+          activeEventSource = null;
+        }
         window.location.href = event.url;
       } else if (event.type === 'error') {
         showError(event.message || 'Pipeline failed.');
@@ -654,7 +666,14 @@
         return;
       }
 
+      // Close any leftover SSE from a previous run before opening a fresh
+      // one — prevents duplicate handlers and stale replayed `ready` events.
+      if (activeEventSource) {
+        activeEventSource.close();
+        activeEventSource = null;
+      }
       const eventSource = new EventSource(`/api/stream/${runId}`);
+      activeEventSource = eventSource;
       eventSource.onmessage = (messageEvent) => {
         try {
           const parsedEvent = JSON.parse(messageEvent.data);
@@ -667,6 +686,38 @@
         // SSE auto-closes after 'done' or 'ready'; only surface if we never
         // reached a ready state.
       };
+    });
+
+    // When the user navigates back to the landing page (including from the
+    // browser's bfcache), scrub the in-flight progress UI so they don't see
+    // a frozen "80%" loading bar or disabled submit button, AND close any
+    // lingering SSE connection. The SSE cleanup is the important one: the
+    // server replays buffered events (including `ready`) on reconnect, and
+    // EventSource auto-reconnects when a bfcache'd page is restored, which
+    // would fire `ready` again and redirect the user back to the article
+    // they just navigated away from.
+    function resetLandingState() {
+      if (activeEventSource) {
+        activeEventSource.close();
+        activeEventSource = null;
+      }
+      if (pendingProgressStepTimeout) {
+        clearTimeout(pendingProgressStepTimeout);
+        pendingProgressStepTimeout = null;
+      }
+      clearError();
+      progressElement.classList.remove('is-visible');
+      progressStepElement.classList.remove('fade-out', 'fade-in');
+      progressStepElement.textContent = '';
+      setProgressPercent(0);
+      setFormDisabled(false);
+      setInfoBlurbOpen(false);
+    }
+
+    window.addEventListener('pageshow', (pageShowEvent) => {
+      if (pageShowEvent.persisted) {
+        resetLandingState();
+      }
     });
   </script>
 </body>
