@@ -148,11 +148,6 @@
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
-      /* When the button wraps below the input (narrow viewport), keep it
-       * centered on its own line. On a single line the input has flex: 1 and
-       * consumes all free space, so justify-content has no visible effect;
-       * on the wrapped line the button doesn't grow, so this centers it. */
-      justify-content: center;
     }
     .belief-form__input {
       flex: 1;
@@ -193,6 +188,19 @@
     .belief-form__button:disabled {
       background: #d1d1d6;
       cursor: not-allowed;
+    }
+    /* Once the viewport is too narrow to fit input (min-width 240px) + button
+     * + gap on one line inside the landing card, flex-wrap drops the button
+     * onto its own row. On that row stretch it to the full width of the
+     * input above it and make it a touch vertically thinner so the stacked
+     * layout doesn't feel chunky. Breakpoint chosen to match the actual
+     * wrap threshold for the current card padding and input min-width. */
+    @media (max-width: 480px) {
+      .belief-form__button {
+        width: 100%;
+        padding-top: 10px;
+        padding-bottom: 10px;
+      }
     }
 
     .progress {
