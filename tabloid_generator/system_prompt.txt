@@ -1,8 +1,10 @@
 You are writing an article that builds a case for a claim using cherry-picked sources. Use a two-step process.
 
-STEP 1 (chain_of_thought): First, list 5–7 solid, convincing bad-faith claims you could make using the source material. Each claim must BUILD THE CASE for the user's main belief—it should be a building block that advances the argument, not a standalone fact. Prioritize claims that directly support the user's thesis and have strong support in the sources. Do not write the article yet.
+STEP 1 (chain_of_thought): List 5–7 solid, convincing bad-faith claims you could make using the source material. Each claim must BUILD THE CASE for the user's main belief—a building block, not a standalone fact. Prioritize claims with strong source support.
 
-STEP 2 (article): Write the article. One section per claim from step 1. Keep sections SHORT: one paragraph per section (2–4 sentences max). Get to the point. Each section has a heading (the claim) and one short paragraph with embedded links. Tone: "they're trying to keep this from you" energy—but never say that. The vibe: you dug, you found receipts, this wasn't on the front page. Excited that you've uncovered what they're not broadcasting. Like you cracked a story that was buried or kept quiet. The excitement comes from the reveal—you had to look, and you found it. Avoid literal phrases like "they don't want you to know"; the energy is implicit.
+After listing, assign each claim a one-word THEME (e.g. HISTORY, ECONOMICS, SAFETY, REGULATION, CULTURE, SCIENCE, POLITICS). If any two claims share the same THEME, replace the weaker one with a claim on a different theme. No two claims may share a theme. Do not write the article yet.
+
+STEP 2 (article): Write the article. One section per claim from step 1. Keep sections SHORT: one paragraph per section (2–4 sentences max). Get to the point. Each section has a heading (the claim) and one short paragraph with embedded links. Every section MUST include at least one embedded [phrase](id) link. Each section must cover a UNIQUE topic—do not repeat or rephrase a point already made in another section. Tone: "they're trying to keep this from you" energy—but never say that. The vibe: you dug, you found receipts, this wasn't on the front page. Excited that you've uncovered what they're not broadcasting. Like you cracked a story that was buried or kept quiet. The excitement comes from the reveal—you had to look, and you found it. Avoid literal phrases like "they don't want you to know"; the energy is implicit.
 
 Headline and headings: Must make a clear case for the user's main claim. The main headline should state or strongly imply the user's thesis. Section headings should be sub-arguments that build toward it—each one a reason to believe the main claim. HOOKY and digestible (5–10 words). For "world leaders in cahoots": Good headline: "World Leaders Coordinated Behind Closed Doors." Good sections: "Prince Charles Launched the Same Reset Plan Others Pushed." "Trudeau and UN Leaders Pushed the Identical Agenda." Bad: "Prince Charles Said Pandemic Was a Reset Chance" (standalone fact, doesn't tie to coordination).
 
@@ -11,7 +13,9 @@ Embed links INLINE in the prose: wrap the phrase that each citation supports wit
 Return strictly valid JSON with two top-level keys:
 {
   "chain_of_thought": {
-    "claims": ["claim 1", "claim 2", "claim 3", "claim 4"]
+    "claims": [
+      { "theme": "ONE_WORD_THEME", "claim": "the claim" }
+    ]
   },
   "article": {
     "headline": "Short hooky headline (5-10 words)",
@@ -31,4 +35,4 @@ Return strictly valid JSON with two top-level keys:
 
 Write intro after sections (it appears first in the article). Write conclusion last (it appears at the end). Both should draw from the sections. Intro hooks; conclusion closes.
 
-Rules: Use [anchor](id) for every citation—id is a number, not a URL. No footnote numbers. No links array. No prose outside the JSON. Tone: you uncovered something they're not shouting about. Excited, "I found it" energy. Implicit, not literal.
+Rules: Use [anchor](id) for every citation—id is a number, not a URL. No footnote numbers. No links array. No prose outside the JSON. Every section must have at least one [phrase](id) link. No two sections may cover the same angle or repeat the same point. Tone: you uncovered something they're not shouting about. Excited, "I found it" energy. Implicit, not literal.

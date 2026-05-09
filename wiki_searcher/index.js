@@ -21,7 +21,11 @@ export async function fetchWiki(conspiracyData, options = {}) {
   const WIKI_API = 'https://en.wikipedia.org/w/api.php';
   const USER_AGENT = 'imright-wiki-fetcher/1.0 (educational use)';
 
-  const searchQueries = (conspiracyData.angles ?? []).flatMap((angle) => angle.search_queries ?? []).filter(Boolean);
+  // Prefer the consolidated top-level search_queries added by the conspirator's second pass.
+  // Fall back to flatMapping per-angle queries for older conspiracy files that predate this field.
+  const searchQueries = (conspiracyData.search_queries?.length > 0)
+    ? conspiracyData.search_queries
+    : (conspiracyData.angles ?? []).flatMap((angle) => angle.search_queries ?? []).filter(Boolean);
 
   if (searchQueries.length === 0) {
     throw new Error('No search queries found in conspiracy data.');

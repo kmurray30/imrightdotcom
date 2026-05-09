@@ -223,12 +223,13 @@ function buildHtml(data) {
 
   const topic = conspiracy?.topic ?? wikisFetched?.query ?? wikisFiltered?.query ?? data.slug;
   const angles = conspiracy?.angles ?? [];
+  const consolidatedSearchQueries = conspiracy?.search_queries ?? [];
   const tabloidArticle = parseTabloidArticle(data.tabloidRawOutput);
   const usedRefIdsSet = new Set(tabloidArticle?.allUsedRefIds ?? []);
   const conspiratorArgCount = angles.length;
-  const conspiratorSearchTermCount = [
-    ...new Set(angles.flatMap((a) => a.search_queries ?? [])),
-  ].length;
+  const conspiratorSearchTermCount = consolidatedSearchQueries.length > 0
+    ? consolidatedSearchQueries.length
+    : [...new Set(angles.flatMap((a) => a.search_queries ?? []))].length;
   const tabloidSectionCount = tabloidArticle?.sections?.length ?? 0;
   const tabloidLinkCount = usedRefIdsSet.size;
   const searchQueryArticleTitles = wikisFetched?.search_query_article_titles ?? wikisFiltered?.search_query_article_titles ?? {};
@@ -305,7 +306,7 @@ function buildHtml(data) {
     { id: 'overview', label: 'Overview' },
     {
       id: 'conspirator',
-      label: `Conspirator (${conspiratorArgCount} arguments, ${conspiratorSearchTermCount} search terms)`,
+      label: `Conspirator (${conspiratorArgCount} argument ideas → ${conspiratorSearchTermCount} search queries)`,
     },
     {
       id: 'articles-found',
@@ -552,8 +553,8 @@ function buildHtml(data) {
     <div class="process-blurb">
       <p><strong>How the article got made.</strong> This page shows every stage of the imright.com pipeline for the claim above. The pipeline turns a one-line conspiracy into a fully-cited tabloid article by mining Wikipedia and letting Grok stitch the pieces together:</p>
       <ol>
-        <li><strong>Conspirator</strong> brainstorms bad-faith angles supporting the claim and generates Wikipedia search queries for each.</li>
-        <li><strong>Wiki searcher</strong> runs every query against Wikipedia and collects candidate article titles.</li>
+        <li><strong>Conspirator</strong> brainstorms bad-faith argument angles for the claim, generates per-angle Wikipedia query ideas, then consolidates them into a final ranked set of search queries.</li>
+        <li><strong>Wiki searcher</strong> runs the consolidated search queries against Wikipedia and collects candidate article titles.</li>
         <li><strong>Wiki filterer</strong> keeps only the pages that could plausibly back the narrative and drops the rest.</li>
         <li><strong>Ref extractor</strong> pulls sentences with citation links from the kept pages and validates that each outbound link actually resolves.</li>
         <li><strong>Tabloid generator</strong> asks Grok to write a tabloid-style article grounded in those verified citations.</li>
@@ -580,46 +581,56 @@ function buildHtml(data) {
     <section id="${overviewSectionId}">
       <h2 class="section-toggle">Overview</h2>
       <div class="section-content">
-        <p class="section-blurb">Side-by-side waterfall: on the left, every argument the Conspirator proposed with the Wikipedia search terms it generated and the references those terms turned up. On the right, the final tabloid article broken into the final arguments it landed on based on the "evidence" it was able to find, listing the references it ended up citing. Hover a reference to see its excerpt.</p>
+        <p class="section-blurb">Side-by-side waterfall. Left: the two-step research pipeline — argument ideas brainstormed by the Conspirator (with their per-angle query hints), then the consolidated search queries that were actually run, with the references they returned. Right: the final tabloid article sections with the references each ended up citing. Hover a reference to see its excerpt.</p>
         <div class="overview-panes" id="overview-panes">
           <div class="overview-pane" id="overview-left">
-            <h3>Original arguments</h3>
+            <h3>Step 1 — Argument ideas</h3>
 `;
   for (let argIdx = 0; argIdx < overviewArgs.length; argIdx++) {
     const overviewArg = overviewArgs[argIdx];
     html += `            <div class="overview-arg">
               <div class="overview-arg-title">${escapeHtml(overviewArg.argument)}</div>
 `;
-    for (let termIdx = 0; termIdx < (overviewArg.search_queries ?? []).length; termIdx++) {
-      const searchTerm = overviewArg.search_queries[termIdx];
-      const refs = refsPerTerm[searchTerm] ?? [];
-      const validCount = refs.filter((r) => !r.dead).length;
-      const usedCount = refs.filter(
-        (r) => !r.dead && usedRefIdsSet.has(urlToRefNum.get(r.link))
-      ).length;
-      const countsLabel =
-        refs.length > 0
-          ? `(${refs.length} refs, ${validCount} valid, ${usedCount} used)`
-          : '(not searched)';
+    for (const queryIdea of (overviewArg.search_queries ?? [])) {
       html += `              <div class="overview-term">
-                <div class="overview-term-title">${escapeHtml(searchTerm)} ${countsLabel}</div>
-`;
-      for (const ref of refs) {
-        const refNum = ref.dead ? null : urlToRefNum.get(ref.link);
-        const titleDisplay = ref.dead ? escapeHtml(ref.link) : escapeHtml(ref.title || ref.link);
-        const deadBadge = ref.dead ? ` <span class="ref-dead">DEAD</span>` : '';
-        const usedBadge =
-          refNum != null && usedRefIdsSet.has(refNum)
-            ? ' <span class="ref-used">USED</span>'
-            : '';
-        const tooltipContent = escapeHtml(ref.content || 'No excerpt.');
-        html += `                <div class="overview-ref">${refNum != null ? `[${refNum}] ` : ''}<a href="${escapeHtml(ref.link ?? '#')}" target="_blank" rel="noopener">${titleDisplay}</a>${deadBadge}${usedBadge}<span class="overview-ref-tooltip">${tooltipContent}</span></div>
-`;
-      }
-      html += `              </div>
+                <div class="overview-term-title" style="color:#888;font-style:italic;">${escapeHtml(queryIdea)}</div>
+              </div>
 `;
     }
     html += `            </div>
+`;
+  }
+  html += `            <h3 style="margin-top:1.5rem;">Step 2 — Consolidated search queries</h3>
+`;
+  const searchQueriesForOverview = consolidatedSearchQueries.length > 0
+    ? consolidatedSearchQueries
+    : [...new Set(angles.flatMap((a) => a.search_queries ?? []))];
+  for (const searchTerm of searchQueriesForOverview) {
+    const refs = refsPerTerm[searchTerm] ?? [];
+    const validCount = refs.filter((r) => !r.dead).length;
+    const usedCount = refs.filter(
+      (r) => !r.dead && usedRefIdsSet.has(urlToRefNum.get(r.link))
+    ).length;
+    const countsLabel = refs.length > 0
+      ? `(${refs.length} refs, ${validCount} valid, ${usedCount} used)`
+      : '(no refs)';
+    html += `            <div class="overview-arg">
+              <div class="overview-term">
+                <div class="overview-term-title">${escapeHtml(searchTerm)} ${countsLabel}</div>
+`;
+    for (const ref of refs) {
+      const refNum = ref.dead ? null : urlToRefNum.get(ref.link);
+      const titleDisplay = ref.dead ? escapeHtml(ref.link) : escapeHtml(ref.title || ref.link);
+      const deadBadge = ref.dead ? ` <span class="ref-dead">DEAD</span>` : '';
+      const usedBadge = refNum != null && usedRefIdsSet.has(refNum)
+        ? ' <span class="ref-used">USED</span>'
+        : '';
+      const tooltipContent = escapeHtml(ref.content || 'No excerpt.');
+      html += `                <div class="overview-ref">${refNum != null ? `[${refNum}] ` : ''}<a href="${escapeHtml(ref.link ?? '#')}" target="_blank" rel="noopener">${titleDisplay}</a>${deadBadge}${usedBadge}<span class="overview-ref-tooltip">${tooltipContent}</span></div>
+`;
+    }
+    html += `              </div>
+            </div>
 `;
   }
   html += `          </div>
@@ -708,34 +719,37 @@ function buildHtml(data) {
   const conspiratorOutputTokens = conspiratorStage?.outputTokens ?? 0;
   html += `
     <section id="conspirator">
-      <h2 class="section-toggle">Conspirator (${conspiratorArgCount} arguments, ${conspiratorSearchTermCount} search terms)</h2>
+      <h2 class="section-toggle">Conspirator (${conspiratorArgCount} argument ideas → ${conspiratorSearchTermCount} search queries)</h2>
       <div class="section-content">
-        <p class="section-blurb">Stage 1. Grok takes the claim and brainstorms several bad-faith arguments that would defend it, then emits a set of Wikipedia search queries per argument for the next stage to run. Includes the raw prompt, raw response, and the parsed argument tree.</p>
+        <p class="section-blurb">Stage 1. Two Grok turns in one call. Turn 1: brainstorm bad-faith argument angles and per-angle query ideas. Turn 2 (same conversation): look at all the query ideas and consolidate them into the final ${conspiratorSearchTermCount} highest-value, deduplicated search queries that the Wiki searcher will actually run.</p>
         <div class="ref-item">
           <div class="term-toggle collapsed">Input (${conspiratorInputTokens} tokens)</div>
           <div class="term-content collapsed">
 `;
   if (conspiratorRawInput) {
-    const anglesMessages = conspiratorRawInput.angles ?? [];
-    html += `            <div class="ref-item">
-              <div class="term-toggle collapsed">angles</div>
+    for (const [groupKey, groupLabel] of [['anglesMessages', 'Turn 1 — argument ideas'], ['consolidationMessages', 'Turn 2 — consolidation']]) {
+      const messages = conspiratorRawInput[groupKey] ?? (groupKey === 'anglesMessages' ? conspiratorRawInput.angles ?? [] : []);
+      if (messages.length === 0) continue;
+      html += `            <div class="ref-item">
+              <div class="term-toggle collapsed">${escapeHtml(groupLabel)}</div>
               <div class="term-content collapsed">
 `;
-    for (let idx = 0; idx < anglesMessages.length; idx++) {
-      const msg = anglesMessages[idx];
-      const role = msg?.role ?? 'unknown';
-      const content = msg?.content ?? '';
-      html += `                <div class="ref-item">
+      for (let idx = 0; idx < messages.length; idx++) {
+        const msg = messages[idx];
+        const role = msg?.role ?? 'unknown';
+        const content = msg?.content ?? '';
+        html += `                <div class="ref-item">
                   <div class="term-toggle collapsed">${escapeHtml(role)}</div>
                   <div class="term-content collapsed">
                     <pre class="grok-pre">${formatMessageContent(content)}</pre>
                   </div>
                 </div>
 `;
-    }
-    html += `              </div>
+      }
+      html += `              </div>
             </div>
 `;
+    }
   } else {
     html += `            <p class="no-data">No raw input (re-run pipeline to capture).</p>\n`;
   }
@@ -763,7 +777,7 @@ function buildHtml(data) {
   html += `          </div>
         </div>
         <div class="ref-item">
-          <div class="term-toggle">Arguments</div>
+          <div class="term-toggle">Argument ideas (Turn 1)</div>
           <div class="term-content">
 `;
   if (angles.length > 0) {
@@ -771,7 +785,7 @@ function buildHtml(data) {
       html += `            <p><strong>${escapeHtml(angle.argument ?? '')}</strong></p>\n`;
       const queries = angle.search_queries ?? [];
       if (queries.length > 0) {
-        html += `            <ul>\n`;
+        html += `            <ul style="color:#888;font-style:italic;">\n`;
         for (const query of queries) {
           html += `              <li>${escapeHtml(query)}</li>\n`;
         }
@@ -780,6 +794,21 @@ function buildHtml(data) {
     }
   } else {
     html += `            <p class="no-data">No conspiracy data available.</p>\n`;
+  }
+  html += `          </div>
+        </div>
+        <div class="ref-item">
+          <div class="term-toggle">Consolidated search queries (Turn 2)</div>
+          <div class="term-content">
+`;
+  if (consolidatedSearchQueries.length > 0) {
+    html += `            <ol>\n`;
+    for (const query of consolidatedSearchQueries) {
+      html += `              <li>${escapeHtml(query)}</li>\n`;
+    }
+    html += `            </ol>\n`;
+  } else {
+    html += `            <p class="no-data">No consolidated queries (re-run pipeline to capture).</p>\n`;
   }
   html += `          </div>
         </div>
