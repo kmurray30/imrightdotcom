@@ -13,7 +13,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * @param {object} conspiracyData - Output from conspirator (topic, angles with search_queries)
  * @param {object} [options] - Optional config
  * @param {number} [options.articlesPerQuery] - Max articles per search query (default: 5 from config, or 10)
- * @returns {Promise<{ query: string, search_queries: string[], search_query_article_titles: object, fetched_at: string, page_count: number, pages: object[] }>}
+ * @returns {Promise<{ query: string, search_queries: string[], search_query_article_titles: object, fetched_at: string, page_count: number, pages: Array<{ pageid: number, title: string, extract: string, source: string, revision_id: number, last_modified: string, search_queries_hit: string[] }> }>}
  */
 export async function fetchWiki(conspiracyData, options = {}) {
 
@@ -50,89 +50,48 @@ export async function fetchWiki(conspiracyData, options = {}) {
     return response.json();
   }
 
-  async function searchPages(query, limit) {
+  /**
+   * Search Wikipedia and fetch page content in a single API call using
+   * generator=search, which pipes search results directly into a prop query.
+   */
+  async function searchAndFetchPages(searchQuery, limit) {
     const data = await fetchFromMediaWiki({
       action: 'query',
-      list: 'search',
-      srsearch: query,
-      format: 'json',
-      srlimit: limit,
-    });
-
-    return data.query.search.map((result) => ({
-      title: result.title,
-      pageid: result.pageid,
-      snippet: result.snippet,
-      size: result.size,
-      wordcount: result.wordcount,
-    }));
-  }
-
-  async function fetchPageData(searchResults) {
-    if (searchResults.length === 0) return [];
-
-    const data = await fetchFromMediaWiki({
-      action: 'query',
+      generator: 'search',
+      gsrsearch: searchQuery,
+      gsrlimit: limit,
       prop: 'extracts|revisions',
       exintro: false,
       explaintext: true,
       exchars: EXTRACT_CHARS_PER_PAGE,
       rvprop: 'ids|timestamp|content',
       rvslots: 'main',
-      titles: searchResults.map((page) => page.title).join('|'),
       format: 'json',
     });
 
-    const pages = data.query.pages;
-    const results = [];
+    if (!data.query?.pages) return [];
 
-    for (const pageId of Object.keys(pages)) {
-      const page = pages[pageId];
+    return Object.values(data.query.pages).map((page) => {
       const revision = page.revisions?.[0];
       const mainSlot = revision?.slots?.main;
       const source = mainSlot?.['*'] ?? mainSlot?.content ?? '';
 
-      results.push({
+      return {
         pageid: page.pageid,
         title: page.title,
         extract: page.extract?.trim() ?? '',
         source: source.trim(),
         revision_id: revision?.revid,
         last_modified: revision?.timestamp,
-      });
-    }
-
-    return results;
+      };
+    });
   }
 
   const query = conspiracyData.topic ?? '';
 
-  // Run all search queries concurrently; each does searchPages + fetchPageData
+  // Run all search queries concurrently — each is now a single API call.
   const pageLists = await Promise.all(
-    searchQueries.map(async (searchQuery) => {
-      const searchResults = await searchPages(searchQuery, articlesPerQuery);
-      if (searchResults.length === 0) return [];
-
-      const pageData = await fetchPageData(searchResults);
-      const searchByTitle = Object.fromEntries(searchResults.map((r) => [r.title, r]));
-
-      return pageData.map((page) => {
-        const searchMeta = searchByTitle[page.title];
-        return {
-          title: page.title,
-          pageid: page.pageid,
-          extract: page.extract,
-          source: page.source,
-          revision_id: page.revision_id,
-          last_modified: page.last_modified,
-          ...(searchMeta && {
-            snippet: searchMeta.snippet,
-            size_bytes: searchMeta.size,
-            wordcount: searchMeta.wordcount,
-          }),
-        };
-      });
-    })
+    searchQueries.map((searchQuery) => searchAndFetchPages(searchQuery, articlesPerQuery))
   );
 
   // Build search_query_article_titles: query -> [titles]
