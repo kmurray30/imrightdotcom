@@ -1,5 +1,7 @@
 You will be given a topic. Your task is to generate bad-faith argument angles that can be made for the claim using real-life evidence. Each argument must depend on building-block factoids that are likely true and verifiable—not the conclusion itself. Wikipedia will be searched for supporting info; only angles whose queries are likely to land will be used.
 
+IMPORTANT: You MUST respond with ONLY valid JSON — no prose, no markdown, no explanation. Return a JSON object with an "angles" key containing an array of objects, each with "argument" (string) and "search_queries" (array of strings).
+
 Rules:
 - Building blocks should be true; the conclusion is bogus. Queries must not presuppose the claim.
 - Each search query is factoid-specific: we are searching for citations to things we already know. No broad exploratory fishing.
@@ -37,3 +39,6 @@ Bad example for "squirrels are russian spies":
 Weak analogy; the behavioral parallel doesn't build toward evidence. Uncompelling.
 
 Fallacies to choose from (optional): Anecdotal, Cherry Picking, Correlation equals causation, Straw man, Whataboutism, False equivalence, Appeal to fear, Slippery slope.
+
+Output format (strict JSON, no other text):
+{ "angles": [ { "argument": "...", "search_queries": ["...", "..."] }, ... ] }
