@@ -449,6 +449,7 @@ ${paragraphsHtml}${bunkyCalloutHtml}
       width: 48px;
       height: 48px;
       object-fit: contain;
+      cursor: pointer;
     }
     .article__section:last-of-type { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
     .article__heading {
@@ -696,15 +697,29 @@ ${conclusionHtml}
   }
   document.addEventListener("click", function(e) {
     var bubble = e.target.closest('.article__bunky-bubble[data-has-analysis="true"]');
-    if (!bubble || !bubble._analysis) return;
-    if (panel.classList.contains("is-open") && activeBubble === bubble) {
-      closeBunkyPanel();
+    if (!bubble) {
+      var bunkyImage = e.target.closest(".bunky-callout__img");
+      if (bunkyImage) {
+        var callout = bunkyImage.closest(".bunky-callout");
+        if (callout) {
+          bubble = callout.querySelector('.article__bunky-bubble[data-has-analysis="true"]');
+        }
+      }
+    }
+    if (bubble && bubble._analysis) {
+      if (panel.classList.contains("is-open") && activeBubble === bubble) {
+        closeBunkyPanel();
+        return;
+      }
+      analysisEl.textContent = bubble._analysis;
+      panel.classList.add("is-open");
+      panel.setAttribute("aria-hidden", "false");
+      activeBubble = bubble;
       return;
     }
-    analysisEl.textContent = bubble._analysis;
-    panel.classList.add("is-open");
-    panel.setAttribute("aria-hidden", "false");
-    activeBubble = bubble;
+    if (panel.classList.contains("is-open") && !e.target.closest(".bunky-panel")) {
+      closeBunkyPanel();
+    }
   });
   if (closeBtn) closeBtn.addEventListener("click", closeBunkyPanel);
   document.addEventListener("keydown", function(e) {
