@@ -1,9 +1,37 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { callGrok } from '../utils/grok.js';
+import { callGrokJson } from '../utils/grok.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Extract the angles array from a parsed JSON response, regardless of
+ * which top-level key Grok decides to use (angles, arguments, etc.).
+ *
+ * @param {any} parsed - Parsed JSON from Grok
+ * @returns {Array} - The extracted array of angle objects
+ */
+function extractAnglesArray(parsed) {
+  if (Array.isArray(parsed)) {
+    return parsed;
+  }
+
+  if (parsed && typeof parsed === 'object') {
+    if (Array.isArray(parsed.angles) && parsed.angles.length > 0) {
+      return parsed.angles;
+    }
+    if (Array.isArray(parsed.arguments) && parsed.arguments.length > 0) {
+      return parsed.arguments;
+    }
+    const arrayValues = Object.values(parsed).filter(Array.isArray);
+    if (arrayValues.length === 1 && arrayValues[0].length > 0) {
+      return arrayValues[0];
+    }
+  }
+
+  return [];
+}
 
 /**
  * Conspirator module: generates bad-faith argument angles for a topic,
@@ -22,33 +50,21 @@ export async function generateAngles(topic, options = {}) {
     'utf8'
   ).trim();
 
-  function parseJsonResponse(rawContent) {
-    let content = rawContent.trim();
-    const codeBlockMatch = content.match(/^```(?:json)?\s*([\s\S]*?)```\s*$/);
-    if (codeBlockMatch) {
-      content = codeBlockMatch[1].trim();
-    }
-    return JSON.parse(content);
-  }
-
   // Turn 1: generate angles with per-angle search queries.
   const anglesMessages = [
     { role: 'system', content: SYSTEM_PROMPT },
     {
       role: 'user',
-      content: `Topic: ${topic}\n\nGenerate bad-faith argument angles and search queries for this topic.`,
+      content: `Topic: ${topic}\n\nGenerate bad-faith argument angles and search queries for this topic. Return a JSON array of objects, each with "argument" (string) and "search_queries" (array of strings).`,
     },
   ];
-  const rawAnglesContent = await callGrok(anglesMessages);
 
-  let parsed;
-  try {
-    parsed = parseJsonResponse(rawAnglesContent);
-  } catch (parseError) {
-    throw new Error(`Failed to parse JSON from Grok response: ${parseError.message}`);
-  }
+  const { parsed, rawContent: rawAnglesContent } = await callGrokJson(anglesMessages, {
+    callerName: 'conspirator/angles',
+    response_format: { type: 'json_object' },
+  });
 
-  const rawAngles = Array.isArray(parsed) ? parsed : (parsed.angles ?? []);
+  const rawAngles = extractAnglesArray(parsed);
   if (rawAngles.length === 0) {
     throw new Error(`Grok returned empty angles. Raw response:\n${rawAnglesContent}`);
   }
@@ -70,20 +86,29 @@ export async function generateAngles(topic, options = {}) {
         'Consolidate them into exactly 8 of the highest-value, most distinct Wikipedia search queries. ' +
         'Deduplicate overlapping ones, combine similar ones into a single sharper query, ' +
         'and drop low-value or redundant ones. ' +
-        'Return ONLY a JSON array of exactly 8 strings — no explanation, no markdown, no other text.',
+        'Return ONLY a JSON object with a "queries" key containing an array of exactly 8 strings.',
     },
   ];
-  const rawConsolidatedContent = await callGrok(consolidationMessages);
+
+  const { parsed: parsedConsolidated, rawContent: rawConsolidatedContent } = await callGrokJson(
+    consolidationMessages,
+    { callerName: 'conspirator/consolidation', response_format: { type: 'json_object' } }
+  );
 
   let searchQueries;
-  try {
-    const parsedConsolidated = parseJsonResponse(rawConsolidatedContent);
-    if (!Array.isArray(parsedConsolidated)) {
-      throw new Error('Expected a JSON array');
-    }
+  if (Array.isArray(parsedConsolidated)) {
     searchQueries = parsedConsolidated.slice(0, 8).filter((query) => typeof query === 'string' && query.trim());
-  } catch (consolidationError) {
-    throw new Error(`Failed to parse consolidated search queries: ${consolidationError.message}`);
+  } else if (parsedConsolidated && typeof parsedConsolidated === 'object') {
+    const arrayValue = parsedConsolidated.queries
+      ?? parsedConsolidated.search_queries
+      ?? Object.values(parsedConsolidated).find(Array.isArray);
+    if (Array.isArray(arrayValue)) {
+      searchQueries = arrayValue.slice(0, 8).filter((query) => typeof query === 'string' && query.trim());
+    } else {
+      searchQueries = [];
+    }
+  } else {
+    searchQueries = [];
   }
 
   if (searchQueries.length === 0) {

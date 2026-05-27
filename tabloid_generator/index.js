@@ -2,7 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import yaml from 'yaml';
-import { callGrok } from '../utils/grok.js';
+import { callGrokJson } from '../utils/grok.js';
+import { parseJsonFromLlmResponse } from '../utils/parse-json.js';
 import { downloadImage, fetchImage } from '../utils/pixabay.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -58,12 +59,7 @@ function condenseForLlm(citations) {
 }
 
 function parseJsonResponse(rawContent) {
-  let content = rawContent.trim();
-  const codeBlockMatch = content.match(/^```(?:json)?\s*([\s\S]*?)```\s*$/);
-  if (codeBlockMatch) {
-    content = codeBlockMatch[1].trim();
-  }
-  return JSON.parse(content);
+  return parseJsonFromLlmResponse(rawContent);
 }
 
 /** Escape HTML for safe output. */
@@ -774,19 +770,15 @@ ${JSON.stringify(candidateArguments, null, 2)}`;
       'utf8'
     );
   }
-  const rawContent = await callGrok(messages);
+
+  const { parsed, rawContent } = await callGrokJson(messages, {
+    callerName: 'tabloid_generator',
+  });
 
   if (slug) {
     const outputRawDir = path.join(__dirname, 'output_raw');
     fs.mkdirSync(outputRawDir, { recursive: true });
     fs.writeFileSync(path.join(outputRawDir, `${slug}.txt`), rawContent, 'utf8');
-  }
-
-  let parsed;
-  try {
-    parsed = parseJsonResponse(rawContent);
-  } catch (parseError) {
-    throw new Error(`Failed to parse JSON from Grok response: ${parseError.message}`);
   }
 
   const article = parsed.article ?? parsed;

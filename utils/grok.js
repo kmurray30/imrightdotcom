@@ -7,11 +7,13 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { parseJsonFromLlmResponse } from './parse-json.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const XAI_API_URL = 'https://api.x.ai/v1/chat/completions';
 const DEFAULT_MODEL = 'grok-4-1-fast-non-reasoning';
+const MAX_JSON_RETRIES = 3;
 
 /** Module-level accumulator for token usage across callGrok invocations. */
 const tokenUsage = { inputTokens: 0, outputTokens: 0 };
@@ -84,6 +86,54 @@ export async function callGrok(messages, options = {}) {
   }
 
   return content;
+}
+
+/**
+ * Call Grok and parse the response as JSON, with automatic retries.
+ *
+ * On parse failure, retries the LLM call up to MAX_JSON_RETRIES times total.
+ * Each retry logs a serious error to console.error (these are expensive and
+ * indicate the model is misbehaving). The parsed JSON object is returned
+ * directly rather than the raw string.
+ *
+ * @param {Array<{ role: string, content: string }>} messages - Chat messages
+ * @param {object} [options] - Same options as callGrok, plus:
+ * @param {number} [options.maxRetries] - Max total attempts (default: 3)
+ * @param {string} [options.callerName] - Name of calling module for error logs
+ * @returns {Promise<{ parsed: any, rawContent: string }>} - Parsed JSON and raw response
+ */
+export async function callGrokJson(messages, options = {}) {
+  const maxRetries = options.maxRetries ?? MAX_JSON_RETRIES;
+  const callerName = options.callerName ?? 'unknown';
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const rawContent = await callGrok(messages, options);
+
+    try {
+      const parsed = parseJsonFromLlmResponse(rawContent);
+      return { parsed, rawContent };
+    } catch (parseError) {
+      const isLastAttempt = attempt >= maxRetries;
+
+      console.error(
+        `[CRITICAL] ${callerName}: JSON parse failed on attempt ${attempt}/${maxRetries}. ` +
+        `Error: ${parseError.message}. ` +
+        `Raw response (first 500 chars): ${rawContent.slice(0, 500)}`
+      );
+
+      if (isLastAttempt) {
+        throw new Error(
+          `Failed to parse JSON from Grok response after ${maxRetries} attempts. ` +
+          `Last error: ${parseError.message}`
+        );
+      }
+
+      console.error(
+        `[CRITICAL] ${callerName}: Retrying LLM call (attempt ${attempt + 1}/${maxRetries}). ` +
+        `This is expensive — the model returned unparseable JSON.`
+      );
+    }
+  }
 }
 
 /**

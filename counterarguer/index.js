@@ -6,7 +6,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { callGrok } from '../utils/grok.js';
+import { callGrokJson } from '../utils/grok.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -14,15 +14,6 @@ const SYSTEM_PROMPT = fs.readFileSync(
   path.join(__dirname, 'system_prompt.txt'),
   'utf8'
 ).trim();
-
-function parseJsonResponse(rawContent) {
-  let content = rawContent.trim();
-  const codeBlockMatch = content.match(/^```(?:json)?\s*([\s\S]*?)```\s*$/);
-  if (codeBlockMatch) {
-    content = codeBlockMatch[1].trim();
-  }
-  return JSON.parse(content);
-}
 
 /**
  * Generate counterarguments for each body section of the article.
@@ -68,10 +59,12 @@ Return JSON: { "blurb": "5-15 word zinger for a thought bubble", "analysis": "2-
     rawInputs.push({ sectionIndex: index, heading, messages });
 
     try {
-      const rawContent = await callGrok(messages, { response_format: { type: 'json_object' } });
+      const { parsed, rawContent } = await callGrokJson(messages, {
+        response_format: { type: 'json_object' },
+        callerName: `counterarguer/section-${index + 1}`,
+      });
       rawOutputs.push({ sectionIndex: index, heading, rawContent });
 
-      const parsed = parseJsonResponse(rawContent);
       counterarguments.push({
         blurb: parsed.blurb || '',
         analysis: parsed.analysis || '',
