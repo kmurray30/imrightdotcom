@@ -30,8 +30,10 @@ import {
   buildExpiredCookie,
   getClientIp,
 } from './auth.js';
+import { startObservability, shutdownObservability } from './observability.js';
 
 loadEnv();
+startObservability();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '../..');
@@ -541,3 +543,10 @@ server.listen(PORT, SERVE_HOST, () => {
     `[serve-site] mode=${SERVE_MODE} listening on ${SERVE_HOST}:${PORT} (${reachability}); open ${url}`
   );
 });
+
+for (const signal of ['SIGTERM', 'SIGINT']) {
+  process.on(signal, async () => {
+    await shutdownObservability();
+    process.exit(0);
+  });
+}

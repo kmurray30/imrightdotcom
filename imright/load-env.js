@@ -21,7 +21,11 @@ export function loadEnv() {
           const eqIndex = trimmed.indexOf('=');
           if (eqIndex > 0) {
             const key = trimmed.slice(0, eqIndex).trim();
-            const value = trimmed.slice(eqIndex + 1).trim();
+            let value = trimmed.slice(eqIndex + 1).trim();
+            const isQuoted =
+              value.length >= 2 &&
+              ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")));
+            if (isQuoted) value = value.slice(1, -1);
             if (!process.env[key]) process.env[key] = value;
           }
         }

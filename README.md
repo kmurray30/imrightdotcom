@@ -10,6 +10,8 @@ Requires `XAI_API_KEY` in env or `env.local`/`.env` in project root.
 
 The whole site sits behind a password gate (`imright/scripts/auth.js`). Set `SITE_PASSWORD` in `env.local` for local dev, and as a real environment variable in Railway for prod — the server refuses to start if it's unset. Sessions are signed with a secret generated fresh per process, so restarting the server logs everyone out; that's fine for a simple gate like this.
 
+Server logs + metrics push to Grafana Cloud (Loki + Prometheus, via OTLP) if `OTEL_EXPORTER_OTLP_ENDPOINT`/`OTEL_EXPORTER_OTLP_HEADERS` are set (Grafana Cloud → Connections → OpenTelemetry). Currently bare-bones — a startup log, a 60s heartbeat log, and a heartbeat counter metric (`imright/scripts/observability.js`) just to confirm both pipes work; unset, it silently falls back to console-only. Query in Grafana Explore: logs with `{service_name="imright"}`, metrics with `imright_heartbeat_total{service_name="imright"}`.
+
 ## Run the site (landing page + pipeline)
 
 ```bash
