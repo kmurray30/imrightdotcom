@@ -8,6 +8,8 @@ npm install
 
 Requires `XAI_API_KEY` in env or `env.local`/`.env` in project root.
 
+The whole site sits behind a password gate (`imright/scripts/auth.js`). Set `SITE_PASSWORD` in `env.local` for local dev, and as a real environment variable in Railway for prod — the server refuses to start if it's unset. Sessions are signed with a secret generated fresh per process, so restarting the server logs everyone out; that's fine for a simple gate like this.
+
 ## Run the site (landing page + pipeline)
 
 ```bash

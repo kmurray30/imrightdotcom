@@ -18,11 +18,37 @@ import { fileURLToPath } from 'url';
 import { runPipeline } from '../index.js';
 import { loadEnv } from '../load-env.js';
 import { slugify } from '../utils.js';
+import {
+  safeCompare,
+  isLockedOut,
+  recordLoginFailure,
+  recordLoginSuccess,
+  createSessionToken,
+  verifySessionToken,
+  parseCookies,
+  buildSessionCookie,
+  buildExpiredCookie,
+  getClientIp,
+} from './auth.js';
 
 loadEnv();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '../..');
+
+const SITE_PASSWORD = process.env.SITE_PASSWORD || '';
+if (!SITE_PASSWORD) {
+  console.error(
+    '[serve-site] SITE_PASSWORD is not set. Refusing to start unprotected — set it in env.local (or the deploy environment) and restart.'
+  );
+  process.exit(1);
+}
+// Generated fresh per process: signs the login cookie so it can't be forged.
+// Restarting the server invalidates existing sessions, which is fine for a
+// simple password gate like this one.
+const SESSION_SECRET = crypto.randomBytes(32).toString('hex');
+const SESSION_COOKIE_NAME = 'imright_session';
+const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 /**
  * High-level mode the server runs in. Each mode bundles a set of defaults
  * (bind host, port, and — in the future — things like caching headers,
@@ -169,6 +195,78 @@ function serveLandingPage(response) {
     });
     response.end(renderedHtml);
   });
+}
+
+/**
+ * Render login.html the same way serveLandingPage renders index.html, so the
+ * password gate matches the site's background/branding.
+ */
+function serveLoginPage(response, statusCode = 200) {
+  const loginPagePath = path.join(PROJECT_ROOT, 'imright', 'login.html');
+  fs.readFile(loginPagePath, 'utf8', (readError, rawHtml) => {
+    if (readError) {
+      response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      response.end('Failed to read login.html');
+      return;
+    }
+    const activeHomeBackgroundCss = resolveActiveHomeBackground();
+    const renderedHtml = rawHtml.split(ACTIVE_HOME_BACKGROUND_PLACEHOLDER).join(activeHomeBackgroundCss);
+    response.writeHead(statusCode, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    response.end(renderedHtml);
+  });
+}
+
+function isAuthenticated(request) {
+  const cookies = parseCookies(request.headers.cookie);
+  const token = cookies[SESSION_COOKIE_NAME];
+  if (!token) return false;
+  return verifySessionToken(token, SESSION_SECRET);
+}
+
+/**
+ * POST /api/login { password }
+ * On success, sets a signed session cookie; on failure, records the attempt
+ * against the caller's IP so repeated wrong guesses eventually get locked out.
+ */
+async function handleApiLogin(request, response) {
+  const clientIp = getClientIp(request);
+
+  if (isLockedOut(clientIp)) {
+    sendJson(response, 429, { error: 'too_many_attempts' });
+    return;
+  }
+
+  let body;
+  try {
+    body = await readJsonBody(request);
+  } catch {
+    sendJson(response, 400, { error: 'invalid_json' });
+    return;
+  }
+
+  const password = typeof body.password === 'string' ? body.password : '';
+  if (!password || !safeCompare(password, SITE_PASSWORD)) {
+    recordLoginFailure(clientIp);
+    sendJson(response, 401, { error: 'invalid_password' });
+    return;
+  }
+
+  recordLoginSuccess(clientIp);
+  const token = createSessionToken(SESSION_SECRET, SESSION_MAX_AGE_MS);
+  response.setHeader(
+    'Set-Cookie',
+    buildSessionCookie(SESSION_COOKIE_NAME, token, SESSION_MAX_AGE_MS, SERVE_MODE === 'prod')
+  );
+  sendJson(response, 200, { ok: true });
+}
+
+/** POST /api/logout — clears the session cookie. */
+function handleApiLogout(response) {
+  response.setHeader('Set-Cookie', buildExpiredCookie(SESSION_COOKIE_NAME, SERVE_MODE === 'prod'));
+  sendJson(response, 200, { ok: true });
 }
 
 const MIME_TYPES = {
@@ -386,6 +484,26 @@ function handleApiStream(runId, response) {
 
 const server = http.createServer(async (request, response) => {
   const urlPath = (request.url ?? '/').split('?')[0] || '/';
+
+  // Login/logout must be reachable without a session, everything else is gated below.
+  if (request.method === 'POST' && urlPath === '/api/login') {
+    await handleApiLogin(request, response);
+    return;
+  }
+
+  if (request.method === 'POST' && urlPath === '/api/logout') {
+    handleApiLogout(response);
+    return;
+  }
+
+  if (!isAuthenticated(request)) {
+    if (request.method === 'GET' || request.method === 'HEAD') {
+      serveLoginPage(response);
+    } else {
+      sendJson(response, 401, { error: 'unauthenticated' });
+    }
+    return;
+  }
 
   if (request.method === 'POST' && urlPath === '/api/run') {
     await handleApiRun(request, response);
