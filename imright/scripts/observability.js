@@ -7,12 +7,17 @@
  * goes to the console.
  */
 
+import { diag, DiagConsoleLogger, DiagLogLevel } from '@opentelemetry/api';
 import { LoggerProvider, BatchLogRecordProcessor } from '@opentelemetry/sdk-logs';
 import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-http';
 import { MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { SeverityNumber } from '@opentelemetry/api-logs';
+
+// Without this, failed OTLP exports (bad auth, network errors, etc.) are silently
+// swallowed by the SDK instead of showing up anywhere.
+diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.ERROR);
 
 const SERVICE_NAME = 'imright';
 const HEARTBEAT_INTERVAL_MS = 60_000;
@@ -22,6 +27,11 @@ let otelLogger = null;
 let meterProvider = null;
 let heartbeatCounter = null;
 let heartbeatTimer = null;
+let pageViewCounter = null;
+let submitCounter = null;
+let runResultCounter = null;
+let timeToReadyHistogram = null;
+let costHistogram = null;
 
 /** OTEL_EXPORTER_OTLP_HEADERS is comma-separated key=value pairs, e.g. "Authorization=Basic abc123". */
 function parseOtlpHeaders(headersRaw) {
@@ -109,13 +119,36 @@ export function startObservability() {
         }),
       ],
     });
-    heartbeatCounter = meterProvider.getMeter(SERVICE_NAME).createCounter('imright.heartbeat', {
+    const meter = meterProvider.getMeter(SERVICE_NAME);
+    heartbeatCounter = meter.createCounter('imright.heartbeat', {
       description: 'Incremented once per heartbeat tick; used to validate the Grafana metrics pipeline.',
+    });
+    pageViewCounter = meter.createCounter('imright.page_view', {
+      description: 'Page views, labeled by page type (landing, article).',
+    });
+    submitCounter = meter.createCounter('imright.submit', {
+      description: 'Times a user clicked submit to start a pipeline run.',
+    });
+    runResultCounter = meter.createCounter('imright.pipeline.runs', {
+      description: 'Completed pipeline runs, labeled by outcome (success, error).',
+    });
+    timeToReadyHistogram = meter.createHistogram('imright.pipeline.time_to_ready_ms', {
+      description: 'Time from submit to the article page being ready to view.',
+      unit: 'ms',
+    });
+    costHistogram = meter.createHistogram('imright.pipeline.cost_usd', {
+      description: 'Estimated LLM cost per completed pipeline run.',
+      unit: 'USD',
     });
   } catch (setupError) {
     console.error(`[observability] failed to set up Grafana metrics; continuing without metrics: ${setupError.message}`);
     meterProvider = null;
     heartbeatCounter = null;
+    pageViewCounter = null;
+    submitCounter = null;
+    runResultCounter = null;
+    timeToReadyHistogram = null;
+    costHistogram = null;
   }
 
   console.error(
@@ -129,6 +162,36 @@ export function startObservability() {
     heartbeatCounter?.add(1);
   }, HEARTBEAT_INTERVAL_MS);
   heartbeatTimer.unref();
+}
+
+/** Call when a page is loaded (landing page, an article, etc.). */
+export function recordPageView(page, attributes = {}) {
+  log('info', 'page_view', { page, ...attributes });
+  pageViewCounter?.add(1, { page });
+}
+
+/** Call when a user submits a claim to start a pipeline run. */
+export function recordSubmit(slug) {
+  log('info', 'submit', { slug });
+  submitCounter?.add(1);
+}
+
+/** Call once a pipeline run finishes, success or failure. */
+export function recordRunResult(status, slug, attributes = {}) {
+  log(status === 'success' ? 'info' : 'error', `pipeline run ${status}`, { slug, status, ...attributes });
+  runResultCounter?.add(1, { status });
+}
+
+/** Call when the article page becomes ready to view, with ms elapsed since submit. */
+export function recordTimeToReady(ms, slug) {
+  log('info', 'page ready', { slug, timeMs: Math.round(ms) });
+  timeToReadyHistogram?.record(ms);
+}
+
+/** Call with the estimated LLM cost (USD) of a completed pipeline run. */
+export function recordCost(usd, slug) {
+  log('info', 'pipeline cost', { slug, costUsd: usd });
+  costHistogram?.record(usd);
 }
 
 /** Flushes buffered logs/metrics and stops the heartbeat. Call on process shutdown. */

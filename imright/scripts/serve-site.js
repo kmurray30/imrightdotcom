@@ -30,7 +30,15 @@ import {
   buildExpiredCookie,
   getClientIp,
 } from './auth.js';
-import { startObservability, shutdownObservability } from './observability.js';
+import {
+  startObservability,
+  shutdownObservability,
+  recordPageView,
+  recordSubmit,
+  recordRunResult,
+  recordTimeToReady,
+  recordCost,
+} from './observability.js';
 
 loadEnv();
 startObservability();
@@ -389,6 +397,8 @@ async function handleApiRun(request, response) {
   const runId = crypto.randomUUID();
   const runState = createRunState(slug, articleUrl);
   activeRuns.set(runId, runState);
+  recordSubmit(slug);
+  const submittedAt = performance.now();
 
   const onProgress = (stepIndex, totalSteps, message) => {
     broadcastEvent(runState, {
@@ -409,6 +419,7 @@ async function handleApiRun(request, response) {
   };
 
   const onPageReady = (readySlug) => {
+    recordTimeToReady(performance.now() - submittedAt, readySlug);
     broadcastEvent(runState, {
       type: 'ready',
       url: `/tabloid_generator/output/${readySlug}.html`,
@@ -420,11 +431,14 @@ async function handleApiRun(request, response) {
   // Run the pipeline detached from the HTTP response so the browser can start
   // listening to SSE. Errors are broadcast and then logged.
   runPipeline(claim, { onProgress, onStepComplete, onPageReady })
-    .then(() => {
+    .then((result) => {
+      recordRunResult('success', slug);
+      recordCost(result?.tokenUsage?.totalCost ?? 0, slug);
       broadcastEvent(runState, { type: 'done' });
     })
     .catch((pipelineError) => {
       console.error('[serve-site] pipeline error:', pipelineError);
+      recordRunResult('error', slug, { message: pipelineError?.message ?? 'Pipeline failed' });
       broadcastEvent(runState, {
         type: 'error',
         message: pipelineError?.message ?? 'Pipeline failed',
@@ -525,8 +539,14 @@ const server = http.createServer(async (request, response) => {
   }
 
   if (urlPath === '/' || urlPath === '/index.html') {
+    recordPageView('landing');
     serveLandingPage(response);
     return;
+  }
+
+  const articleMatch = urlPath.match(/^\/tabloid_generator\/output\/([^/]+)\.html$/);
+  if (articleMatch) {
+    recordPageView('article', { slug: articleMatch[1] });
   }
 
   serveStaticFile(urlPath, response);

@@ -10,7 +10,16 @@ Requires `XAI_API_KEY` in env or `env.local`/`.env` in project root.
 
 The whole site sits behind a password gate (`imright/scripts/auth.js`). Set `SITE_PASSWORD` in `env.local` for local dev, and as a real environment variable in Railway for prod — the server refuses to start if it's unset. Sessions are signed with a secret generated fresh per process, so restarting the server logs everyone out; that's fine for a simple gate like this.
 
-Server logs + metrics push to Grafana Cloud (Loki + Prometheus, via OTLP) if `OTEL_EXPORTER_OTLP_ENDPOINT`/`OTEL_EXPORTER_OTLP_HEADERS` are set (Grafana Cloud → Connections → OpenTelemetry). Currently bare-bones — a startup log, a 60s heartbeat log, and a heartbeat counter metric (`imright/scripts/observability.js`) just to confirm both pipes work; unset, it silently falls back to console-only. Query in Grafana Explore: logs with `{service_name="imright"}`, metrics with `imright_heartbeat_total{service_name="imright"}`.
+Server logs + metrics push to Grafana Cloud (Loki + Prometheus, via OTLP) if `OTEL_EXPORTER_OTLP_ENDPOINT`/`OTEL_EXPORTER_OTLP_HEADERS` are set (Grafana Cloud → Connections → OpenTelemetry). Bare-bones for now (`imright/scripts/observability.js`); unset, it silently falls back to console-only. Query in Grafana Explore with `{service_name="imright"}` (logs) or the metric names below (Prometheus):
+
+| Signal | Name | Fires when |
+| --- | --- | --- |
+| log + counter | `heartbeat` / `imright_heartbeat_total` | every 60s the server is up |
+| log + counter | `page_view` / `imright_page_view_total{page="landing"\|"article"}` | landing page or an article is loaded |
+| log + counter | `submit` / `imright_submit_total` | a claim is submitted (POST /api/run) |
+| log + histogram | `page ready` / `imright_pipeline_time_to_ready_ms` | article page is ready to view, ms since submit |
+| log + counter | `pipeline run success\|error` / `imright_pipeline_runs_total{status=...}` | a pipeline run finishes |
+| log + histogram | `pipeline cost` / `imright_pipeline_cost_usd` | estimated LLM cost (USD) of a completed run |
 
 ## Run the site (landing page + pipeline)
 
