@@ -14,6 +14,7 @@ import { MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { SeverityNumber } from '@opentelemetry/api-logs';
+import { ExportResultCode } from '@opentelemetry/core';
 
 // Without this, failed OTLP exports (bad auth, network errors, etc.) are silently
 // swallowed by the SDK instead of showing up anywhere.
@@ -53,6 +54,27 @@ function buildOtlpUrl(endpoint, signalPath) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Wraps an OTLP exporter so every real export attempt logs its actual outcome
+ * (accepted vs. rejected, with the real error) to the console — visible in
+ * Railway's logs. Without this, a failed export is invisible unless it happens
+ * to trip OTel's own internal diagnostics.
+ */
+function withExportLogging(exporter, label) {
+  const originalExport = exporter.export.bind(exporter);
+  exporter.export = (items, resultCallback) => {
+    originalExport(items, (result) => {
+      if (result.code === ExportResultCode.SUCCESS) {
+        console.error(`[observability] ${label} export: accepted by Grafana`);
+      } else {
+        console.error(`[observability] ${label} export: REJECTED - ${result.error?.message ?? result.error ?? 'unknown error'}`);
+      }
+      resultCallback(result);
+    });
+  };
+  return exporter;
 }
 
 function severityFor(level) {
@@ -98,7 +120,9 @@ export function startObservability() {
   try {
     loggerProvider = new LoggerProvider({
       resource,
-      processors: [new BatchLogRecordProcessor({ exporter: new OTLPLogExporter({ url: logsUrl, headers }) })],
+      processors: [
+        new BatchLogRecordProcessor({ exporter: withExportLogging(new OTLPLogExporter({ url: logsUrl, headers }), 'logs') }),
+      ],
     });
     otelLogger = loggerProvider.getLogger(SERVICE_NAME);
   } catch (setupError) {
@@ -114,7 +138,7 @@ export function startObservability() {
       resource,
       readers: [
         new PeriodicExportingMetricReader({
-          exporter: new OTLPMetricExporter({ url: metricsUrl, headers }),
+          exporter: withExportLogging(new OTLPMetricExporter({ url: metricsUrl, headers }), 'metrics'),
           exportIntervalMillis: HEARTBEAT_INTERVAL_MS,
         }),
       ],
