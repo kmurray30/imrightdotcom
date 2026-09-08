@@ -237,6 +237,20 @@ function isAuthenticated(request) {
 }
 
 /**
+ * Lets Google's crawlers (AdSense review + ad-serving bots) read the site
+ * without a session, since the password gate would otherwise 401 them and
+ * block AdSense verification/ad delivery entirely. User-Agent sniffing is
+ * spoofable, so this only ever grants read access (GET/HEAD), never bypasses
+ * auth for POST endpoints like /api/run.
+ */
+const GOOGLE_BOT_USER_AGENT_PATTERN = /Googlebot|Mediapartners-Google|AdsBot-Google|APIs-Google/i;
+
+function isGoogleBotRequest(request) {
+  const userAgent = request.headers['user-agent'] || '';
+  return GOOGLE_BOT_USER_AGENT_PATTERN.test(userAgent);
+}
+
+/**
  * POST /api/login { password }
  * On success, sets a signed session cookie; on failure, records the attempt
  * against the caller's IP so repeated wrong guesses eventually get locked out.
@@ -513,12 +527,20 @@ const server = http.createServer(async (request, response) => {
   }
 
   if (!isAuthenticated(request)) {
-    if (request.method === 'GET' || request.method === 'HEAD') {
-      serveLoginPage(response);
-    } else {
-      sendJson(response, 401, { error: 'unauthenticated' });
+    const isBotReadRequest =
+      (request.method === 'GET' || request.method === 'HEAD') &&
+      (urlPath === '/ads.txt' || isGoogleBotRequest(request));
+
+    if (!isBotReadRequest) {
+      if (request.method === 'GET' || request.method === 'HEAD') {
+        serveLoginPage(response);
+      } else {
+        sendJson(response, 401, { error: 'unauthenticated' });
+      }
+      return;
     }
-    return;
+    // Google crawler (or a request for /ads.txt): fall through to normal
+    // GET/HEAD routing below without a session.
   }
 
   if (request.method === 'POST' && urlPath === '/api/run') {
