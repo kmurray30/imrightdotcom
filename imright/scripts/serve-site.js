@@ -35,10 +35,16 @@ import {
   shutdownObservability,
   recordPageView,
   recordSubmit,
-  recordRunResult,
   recordTimeToReady,
-  recordCost,
+  recordTrafficRequest,
+  recordVisitor,
+  recordSessionStart,
+  recordInteractionStarted,
+  recordInteractionComplete,
 } from './observability.js';
+import { resolveIdentity, appendSetCookie, classifyTraffic, checkRunAbuse, decideVerboseSampling } from './identity.js';
+import { runWithInteractionContext, setClaimText, getSummary, addTraceEvent } from './interaction-context.js';
+import { computeCost } from '../../utils/grok.js';
 
 loadEnv();
 startObservability();
@@ -259,6 +265,7 @@ async function handleApiLogin(request, response) {
   const clientIp = getClientIp(request);
 
   if (isLockedOut(clientIp)) {
+    recordTrafficRequest('blocked');
     sendJson(response, 429, { error: 'too_many_attempts' });
     return;
   }
@@ -280,16 +287,15 @@ async function handleApiLogin(request, response) {
 
   recordLoginSuccess(clientIp);
   const token = createSessionToken(SESSION_SECRET, SESSION_MAX_AGE_MS);
-  response.setHeader(
-    'Set-Cookie',
-    buildSessionCookie(SESSION_COOKIE_NAME, token, SESSION_MAX_AGE_MS, SERVE_MODE === 'prod')
-  );
+  // appendSetCookie (not setHeader) so this doesn't clobber the visitor/session
+  // identity cookies already queued on this response by resolveIdentity().
+  appendSetCookie(response, buildSessionCookie(SESSION_COOKIE_NAME, token, SESSION_MAX_AGE_MS, SERVE_MODE === 'prod'));
   sendJson(response, 200, { ok: true });
 }
 
 /** POST /api/logout — clears the session cookie. */
 function handleApiLogout(response) {
-  response.setHeader('Set-Cookie', buildExpiredCookie(SESSION_COOKIE_NAME, SERVE_MODE === 'prod'));
+  appendSetCookie(response, buildExpiredCookie(SESSION_COOKIE_NAME, SERVE_MODE === 'prod'));
   sendJson(response, 200, { ok: true });
 }
 
@@ -391,7 +397,7 @@ function sendJson(response, statusCode, payload) {
  * Starts runPipeline in the background and returns { runId, slug, articleUrl }.
  * Progress + the onPageReady signal are streamed via /api/stream/:runId.
  */
-async function handleApiRun(request, response) {
+async function handleApiRun(request, response, identity) {
   let body;
   try {
     body = await readJsonBody(request);
@@ -406,13 +412,22 @@ async function handleApiRun(request, response) {
     return;
   }
 
+  const { visitorId, sessionId } = identity;
+  const clientIp = getClientIp(request);
+  const { suspectedAbuse, duplicateRequest } = checkRunAbuse({ visitorId, ip: clientIp, claim });
+  // A visitor tripping the abuse heuristics gets reclassified even if their cookie made
+  // them look like a normal browser session — visibility, not enforcement (see README).
+  const trafficClass = suspectedAbuse ? 'suspicious_api' : identity.trafficClass;
+
   const slug = slugify(claim);
   const articleUrl = `/tabloid_generator/output/${slug}.html`;
-  const runId = crypto.randomUUID();
+  const interactionId = crypto.randomUUID();
   const runState = createRunState(slug, articleUrl);
-  activeRuns.set(runId, runState);
+  activeRuns.set(interactionId, runState);
   recordSubmit(slug);
+  recordInteractionStarted();
   const submittedAt = performance.now();
+  let pipelineResult = null;
 
   const onProgress = (stepIndex, totalSteps, message) => {
     broadcastEvent(runState, {
@@ -423,7 +438,10 @@ async function handleApiRun(request, response) {
     });
   };
 
-  const onStepComplete = (stepIndex, totalSteps, message) => {
+  const onStepComplete = (stepIndex, totalSteps, message, delta) => {
+    // Batched into this interaction's own trace event log (see interaction-context.js) —
+    // still one log write at the end, not a separate permanent line per step.
+    addTraceEvent('pipeline_step', { step: stepIndex, total: totalSteps, name: message, ...delta });
     broadcastEvent(runState, {
       type: 'stepComplete',
       step: stepIndex,
@@ -440,40 +458,73 @@ async function handleApiRun(request, response) {
     });
   };
 
-  sendJson(response, 200, { runId, slug, articleUrl });
+  sendJson(response, 200, { runId: interactionId, slug, articleUrl });
+
+  /** Builds and ships the Layer 3 interaction summary from whatever the interaction
+   * context accumulated, regardless of how far the pipeline got before success/failure. */
+  function completeInteraction(success) {
+    const summary = getSummary();
+    const costUsd = computeCost(summary.tokenUsage).totalCost;
+    recordInteractionComplete({
+      interactionId: summary.interactionId,
+      visitorId: summary.visitorId,
+      sessionId: summary.sessionId,
+      trafficClass: summary.trafficClass,
+      success,
+      durationMs: performance.now() - submittedAt,
+      stageRows: pipelineResult?.stageRows ?? [],
+      tokenUsage: summary.tokenUsage,
+      costUsd,
+      llm: summary.llm,
+      external: summary.external,
+      suspectedAbuse,
+      duplicateRequest,
+      claimLength: claim.length,
+      verbose: summary.verbose,
+      claimText: summary.claimText,
+      events: summary.events,
+    });
+  }
 
   // Run the pipeline detached from the HTTP response so the browser can start
-  // listening to SSE. Errors are broadcast and then logged.
-  runPipeline(claim, { onProgress, onStepComplete, onPageReady })
-    .then((result) => {
-      recordRunResult('success', slug);
-      recordCost(result?.tokenUsage?.totalCost ?? 0, slug);
-      broadcastEvent(runState, { type: 'done' });
-    })
-    .catch((pipelineError) => {
-      console.error('[serve-site] pipeline error:', pipelineError);
-      recordRunResult('error', slug, { message: pipelineError?.message ?? 'Pipeline failed' });
-      broadcastEvent(runState, {
-        type: 'error',
-        message: pipelineError?.message ?? 'Pipeline failed',
-      });
-    })
-    .finally(() => {
-      runState.finished = true;
-      // Close all subscribers. Give browsers a moment to process the final event.
-      setTimeout(() => {
-        for (const subscriberResponse of runState.subscribers) {
-          try {
-            subscriberResponse.end();
-          } catch {
-            // ignore
+  // listening to SSE. Errors are broadcast and then logged. Wrapped in its own
+  // interaction context so every LLM/external call inside runPipeline attributes
+  // its tokens/cost/retries back to this one interaction (see interaction-context.js).
+  runWithInteractionContext({ interactionId, visitorId, sessionId, trafficClass }, () => {
+    setClaimText(claim);
+    decideVerboseSampling({ visitorId });
+
+    return runPipeline(claim, { onProgress, onStepComplete, onPageReady })
+      .then((result) => {
+        pipelineResult = result;
+        completeInteraction(true);
+        broadcastEvent(runState, { type: 'done' });
+      })
+      .catch((pipelineError) => {
+        console.error('[serve-site] pipeline error:', pipelineError);
+        completeInteraction(false);
+        broadcastEvent(runState, {
+          type: 'error',
+          message: pipelineError?.message ?? 'Pipeline failed',
+        });
+      })
+      .finally(() => {
+        runState.finished = true;
+        // Close all subscribers. Give browsers a moment to process the final event.
+        setTimeout(() => {
+          for (const subscriberResponse of runState.subscribers) {
+            try {
+              subscriberResponse.end();
+            } catch {
+              // ignore
+            }
           }
-        }
-        runState.subscribers.clear();
-        // Keep runState cached briefly for any late replays, then drop it.
-        setTimeout(() => activeRuns.delete(runId), 60_000);
-      }, 250);
-    });
+          runState.subscribers.clear();
+          // Keep runState cached briefly for any late replays, then drop it.
+          setTimeout(() => activeRuns.delete(interactionId), 60_000);
+        }, 250);
+      });
+  });
 }
 
 /**
@@ -514,6 +565,24 @@ function handleApiStream(runId, response) {
 
 const server = http.createServer(async (request, response) => {
   const urlPath = (request.url ?? '/').split('?')[0] || '/';
+  const cookies = parseCookies(request.headers.cookie);
+
+  // Identity + traffic classification happen for every request, before auth/routing,
+  // so scanner noise and unauthenticated probes are counted too — that's the whole
+  // point of distinguishing "harmless scanner" from "real product traffic" from
+  // "suspicious traffic that actually invokes expensive work" (see identity.js).
+  const { visitorId, sessionId, isNewVisitor, isNewSession } = resolveIdentity(request, response, cookies, {
+    secure: SERVE_MODE === 'prod',
+  });
+  recordVisitor(isNewVisitor);
+  if (isNewSession) recordSessionStart();
+  const trafficClass = classifyTraffic({
+    method: request.method,
+    urlPath,
+    userAgent: request.headers['user-agent'],
+    hasVisitorCookie: !isNewVisitor,
+  });
+  recordTrafficRequest(trafficClass);
 
   // Login/logout must be reachable without a session, everything else is gated below.
   if (request.method === 'POST' && urlPath === '/api/login') {
@@ -544,7 +613,7 @@ const server = http.createServer(async (request, response) => {
   }
 
   if (request.method === 'POST' && urlPath === '/api/run') {
-    await handleApiRun(request, response);
+    await handleApiRun(request, response, { visitorId, sessionId, trafficClass });
     return;
   }
 

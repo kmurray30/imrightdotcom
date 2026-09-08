@@ -15,6 +15,7 @@
  *          ref_extractor/extracted/, tabloid_generator/output/
  */
 
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { exec, execSync, spawn } from 'child_process';
@@ -22,6 +23,7 @@ import { fileURLToPath } from 'url';
 import { runPipeline, regenerateHtmlOnly } from './index.js';
 import { slugify } from './utils.js';
 import { loadEnv } from './load-env.js';
+import { runWithInteractionContext } from './scripts/interaction-context.js';
 
 /** Open file or URL in default browser (macOS: open, Windows: start, Linux: xdg-open). */
 function openInBrowser(filePathOrUrl) {
@@ -223,16 +225,23 @@ async function main() {
     child.on('error', () => { clearTimeout(timeout); detachPipes(); resolve(null); });
   });
 
-  const result = await runPipeline(claim, {
-    onProgress,
-    onStepComplete,
-    onPageReady: (slug) => {
-      const url = serveBaseUrl
-        ? `${serveBaseUrl}/tabloid_generator/output/${slug}.html`
-        : outputPathForClaim(slug);
-      openInBrowser(url);
-    },
-  });
+  // Wrapped in its own interaction context so token/cost accounting and any
+  // configured Grafana telemetry attribute correctly to this one CLI run,
+  // the same way a browser-driven /api/run interaction does.
+  const result = await runWithInteractionContext(
+    { interactionId: crypto.randomUUID(), visitorId: 'local-cli', sessionId: 'local-cli', trafficClass: 'cli' },
+    () =>
+      runPipeline(claim, {
+        onProgress,
+        onStepComplete,
+        onPageReady: (slug) => {
+          const url = serveBaseUrl
+            ? `${serveBaseUrl}/tabloid_generator/output/${slug}.html`
+            : outputPathForClaim(slug);
+          openInBrowser(url);
+        },
+      })
+  );
 
   const outputPath = outputPathForClaim(result.slug);
 

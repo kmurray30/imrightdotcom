@@ -1,0 +1,29 @@
+{
+  "_comment": "Thresholds for anomaly tagging + the verbose-trace sampling tiers. Safe to tune without code changes; the server reads this fresh on each interaction.",
+
+  "anomalyThresholds": {
+    "highCostUsd": 0.05,
+    "highTokenCount": 20000,
+    "excessiveLlmCalls": 12,
+    "retryHeavyRetries": 3,
+    "largeInputTokens": 12000,
+    "largeOutputTokens": 6000
+  },
+
+  "verbosityTiers": {
+    "_comment": "Rolling interactions/hour -> probability [0-1] of a full detailed trace for a normal (non-anomalous) interaction. First matching maxInteractionsPerHour wins. Anomalous/error interactions are always traced regardless of tier.",
+    "tiers": [
+      { "maxInteractionsPerHour": 20, "sampleRate": 1 },
+      { "maxInteractionsPerHour": 200, "sampleRate": 0.25 },
+      { "maxInteractionsPerHour": 2000, "sampleRate": 0.05 },
+      { "maxInteractionsPerHour": null, "sampleRate": 0.01 }
+    ]
+  },
+
+  "abuseHeuristics": {
+    "_comment": "Simple in-memory /api/run rate tracking, not exact across restarts/replicas by design.",
+    "maxRunsPerVisitorPerHour": 20,
+    "maxRunsPerIpPerHour": 40,
+    "duplicateClaimWindowSeconds": 300
+  }
+}

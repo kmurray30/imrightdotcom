@@ -8,15 +8,17 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { parseJsonFromLlmResponse } from './parse-json.js';
+import { HttpStatusError, classifyTransportError, isRetryableTransportStatus } from './external-api.js';
+import { recordLlmCallMetric, recordLlmTokensMetric, recordRetryMetric } from '../imright/scripts/observability.js';
+import { getContext, addTokenUsage, recordLlmCallAttempt, markLlmRetry, addTraceEvent } from '../imright/scripts/interaction-context.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const XAI_API_URL = 'https://api.x.ai/v1/chat/completions';
 const DEFAULT_MODEL = 'grok-4-1-fast-non-reasoning';
 const MAX_JSON_RETRIES = 3;
-
-/** Module-level accumulator for token usage across callGrok invocations. */
-const tokenUsage = { inputTokens: 0, outputTokens: 0 };
+const MAX_TRANSPORT_RETRIES = 1;
+const PROVIDER = 'xai';
 
 /**
  * Call Grok chat completions API.
@@ -37,8 +39,11 @@ export async function callGrok(messages, options = {}) {
     );
   }
 
+  const model = options.model ?? DEFAULT_MODEL;
+  const pipelineStep = options.callerName ?? 'unknown';
+  const maxTransportRetries = options.maxTransportRetries ?? MAX_TRANSPORT_RETRIES;
   const body = {
-    model: options.model ?? DEFAULT_MODEL,
+    model,
     messages,
     stream: false,
     ...(options.response_format && { response_format: options.response_format }),
@@ -46,22 +51,69 @@ export async function callGrok(messages, options = {}) {
   };
 
   const timeoutMs = options.timeoutMs ?? 60_000;
-  const response = await fetch(XAI_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey.trim()}`,
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
 
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`XAI API error ${response.status}: ${errorBody}`);
+  async function performRequest() {
+    const response = await fetch(XAI_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey.trim()}`,
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => '');
+      const retryAfterHeader = response.headers.get('retry-after');
+      throw new HttpStatusError(response.status, `XAI API error ${response.status}: ${errorBody}`, {
+        retryAfterSeconds: retryAfterHeader ? Number(retryAfterHeader) : undefined,
+      });
+    }
+
+    return response.json();
   }
 
-  const data = await response.json();
+  // Retries here are transport-level only (timeout/429/5xx/network) — distinct from
+  // callGrokJson's retry, which re-calls callGrok because the model's *output* was
+  // unparseable, not because the request failed.
+  let data;
+  for (let attempt = 1; ; attempt++) {
+    const isRetry = attempt > 1;
+    const start = performance.now();
+    try {
+      data = await performRequest();
+      const latencyMs = performance.now() - start;
+      recordLlmCallAttempt({ success: true, isRetry });
+      recordLlmCallMetric({ provider: PROVIDER, model, pipelineStep, status: 'success', latencyMs });
+      addTraceEvent('llm_call', { provider: PROVIDER, model, pipelineStep, attempt, status: 'success', latencyMs: Math.round(latencyMs) });
+      break;
+    } catch (error) {
+      const latencyMs = performance.now() - start;
+      const status = classifyTransportError(error);
+      recordLlmCallAttempt({ success: false, isRetry });
+      recordLlmCallMetric({ provider: PROVIDER, model, pipelineStep, status, latencyMs });
+      addTraceEvent('llm_call', {
+        provider: PROVIDER,
+        model,
+        pipelineStep,
+        attempt,
+        status,
+        latencyMs: Math.round(latencyMs),
+        error: String(error?.message ?? error).slice(0, 200),
+      });
+
+      const canRetry = isRetryableTransportStatus(status) && attempt <= maxTransportRetries;
+      if (!canRetry) throw error;
+
+      recordRetryMetric({ kind: 'llm_transport', pipelineStep, reason: status });
+      const retryAfterMs = Number.isFinite(error?.retryAfterSeconds)
+        ? Math.min(error.retryAfterSeconds * 1000, 5000)
+        : 500 * attempt;
+      await new Promise((resolve) => setTimeout(resolve, retryAfterMs + Math.random() * 100));
+    }
+  }
+
   const message = data.choices?.[0]?.message;
   const content = message?.content;
   const refusal = message?.refusal;
@@ -81,8 +133,11 @@ export async function callGrok(messages, options = {}) {
 
   const usage = data.usage;
   if (usage) {
-    tokenUsage.inputTokens += usage.prompt_tokens ?? 0;
-    tokenUsage.outputTokens += usage.completion_tokens ?? 0;
+    const inputTokens = usage.prompt_tokens ?? 0;
+    const outputTokens = usage.completion_tokens ?? 0;
+    addTokenUsage(inputTokens, outputTokens);
+    const { totalCost } = computeCost({ inputTokens, outputTokens }, model);
+    recordLlmTokensMetric({ provider: PROVIDER, model, pipelineStep, inputTokens, outputTokens, cost: totalCost });
   }
 
   return content;
@@ -132,24 +187,29 @@ export async function callGrokJson(messages, options = {}) {
         `[CRITICAL] ${callerName}: Retrying LLM call (attempt ${attempt + 1}/${maxRetries}). ` +
         `This is expensive — the model returned unparseable JSON.`
       );
+      markLlmRetry();
+      recordRetryMetric({ kind: 'llm_json', pipelineStep: callerName, reason: 'invalid_json' });
     }
   }
 }
 
 /**
- * Returns accumulated token usage since last reset.
+ * Returns accumulated token usage since last reset, for the current interaction
+ * (or a shared fallback accumulator when called outside an interaction context).
  * @returns {{ inputTokens: number, outputTokens: number }}
  */
 export function getTokenUsage() {
-  return { ...tokenUsage };
+  return { ...getContext().tokenUsage };
 }
 
 /**
- * Resets the token usage accumulator. Call at the start of each pipeline run.
+ * Resets the token usage accumulator for the current interaction. Call at the
+ * start of each pipeline run.
  */
 export function resetTokenUsage() {
-  tokenUsage.inputTokens = 0;
-  tokenUsage.outputTokens = 0;
+  const store = getContext();
+  store.tokenUsage.inputTokens = 0;
+  store.tokenUsage.outputTokens = 0;
 }
 
 /**
