@@ -243,7 +243,7 @@ function isAuthenticated(request) {
  * spoofable, so this only ever grants read access (GET/HEAD), never bypasses
  * auth for POST endpoints like /api/run.
  */
-const GOOGLE_BOT_USER_AGENT_PATTERN = /Googlebot|Mediapartners-Google|AdsBot-Google|APIs-Google/i;
+const GOOGLE_BOT_USER_AGENT_PATTERN = /Googlebot|Mediapartners-Google|Google-Display-Ads-Bot|AdsBot-Google|APIs-Google/i;
 
 function isGoogleBotRequest(request) {
   const userAgent = request.headers['user-agent'] || '';
