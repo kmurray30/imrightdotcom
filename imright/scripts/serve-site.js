@@ -527,8 +527,16 @@ function serveStaticFile(requestUrlPath, response) {
  * pre-rendered HTML file, so every request reflects the latest saved state
  * (e.g. counterarguments filled in once step 7 finishes).
  */
-function handleArticlePage(pageId, response) {
-  const record = loadPage(pageId);
+async function handleArticlePage(pageId, response) {
+  let record;
+  try {
+    record = await loadPage(pageId);
+  } catch (dbError) {
+    console.error('[serve-site] failed to load page from DB:', dbError.message);
+    response.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
+    response.end('Page store unavailable');
+    return;
+  }
   if (!record) {
     response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
     response.end('Page not found');
@@ -557,8 +565,15 @@ function handleArticlePage(pageId, response) {
  * GET /api/pages/:pageId/counterarguments — polled by the article page's own
  * script while Bunky's rebuttals (step 7) are still being generated.
  */
-function handleApiPageCounterarguments(pageId, response) {
-  const record = loadPage(pageId);
+async function handleApiPageCounterarguments(pageId, response) {
+  let record;
+  try {
+    record = await loadPage(pageId);
+  } catch (dbError) {
+    console.error('[serve-site] failed to load page from DB:', dbError.message);
+    sendJson(response, 503, { error: 'page_store_unavailable' });
+    return;
+  }
   if (!record) {
     sendJson(response, 404, { error: 'not_found' });
     return;
@@ -654,10 +669,10 @@ async function handleApiRun(request, response, identity) {
 
   const onPageReady = (readySlug, pageId) => {
     recordTimeToReady(performance.now() - submittedAt, readySlug);
-    broadcastEvent(runState, {
-      type: 'ready',
-      url: `/a/${pageId}`,
-    });
+    // pageId is null if the DB write failed (see runPipeline) — fall back to
+    // the ephemeral slug-based file so the user can still read the article.
+    const url = pageId ? `/a/${pageId}` : `/tabloid_generator/output/${readySlug}.html`;
+    broadcastEvent(runState, { type: 'ready', url });
   };
 
   sendJson(response, 200, { runId: interactionId, slug, articleUrl });
@@ -860,7 +875,7 @@ const server = http.createServer(async (request, response) => {
 
   const counterargsMatch = urlPath.match(/^\/api\/pages\/([a-z0-9-]+)\/counterarguments$/);
   if (request.method === 'GET' && counterargsMatch) {
-    handleApiPageCounterarguments(counterargsMatch[1], response);
+    await handleApiPageCounterarguments(counterargsMatch[1], response);
     return;
   }
 
@@ -879,7 +894,7 @@ const server = http.createServer(async (request, response) => {
   const persistedArticleMatch = urlPath.match(/^\/a\/([a-z0-9-]+)$/);
   if (persistedArticleMatch) {
     recordPageView('article', { slug: persistedArticleMatch[1] });
-    handleArticlePage(persistedArticleMatch[1], response);
+    await handleArticlePage(persistedArticleMatch[1], response);
     return;
   }
 

@@ -249,23 +249,31 @@ export async function runPipeline(claim, options = {}) {
   // hotlinked image URLs, no binary assets — so a shared link keeps working
   // without re-running the pipeline. This is separate from the ephemeral
   // slug-based HTML file above, which just serves local/CLI use.
-  const pageId = createPageId(claim);
-  savePage(pageId, {
-    pageId,
-    claim,
-    topic: articleResult.topic,
-    createdAt: new Date().toISOString(),
-    article: {
-      headline: articleResult.article?.headline,
-      intro: articleResult.article?.intro,
-      sections: articleResult.article?.sections,
-      conclusion: articleResult.article?.conclusion,
-      paragraphs: articleResult.article?.paragraphs,
-    },
-    citations: articleResult.condensed,
-    images: Object.fromEntries(imageUrls),
-    counterarguments: null,
-  });
+  // Best-effort: a DB hiccup shouldn't lose the article the user is about to
+  // see, so on failure fall back to null (callers use the ephemeral URL instead).
+  let pageId = null;
+  try {
+    pageId = await createPageId(claim);
+    await savePage(pageId, {
+      pageId,
+      claim,
+      topic: articleResult.topic,
+      createdAt: new Date().toISOString(),
+      article: {
+        headline: articleResult.article?.headline,
+        intro: articleResult.article?.intro,
+        sections: articleResult.article?.sections,
+        conclusion: articleResult.article?.conclusion,
+        paragraphs: articleResult.article?.paragraphs,
+      },
+      citations: articleResult.condensed,
+      images: Object.fromEntries(imageUrls),
+      counterarguments: null,
+    });
+  } catch (pageStoreError) {
+    console.error('Warning: could not persist page record:', pageStoreError.message);
+    pageId = null;
+  }
 
   // Page is ready; open browser now so user can read while step 7 runs
   onPageReady(slug, pageId);
@@ -353,10 +361,16 @@ export async function runPipeline(claim, options = {}) {
       // Fold counterarguments into the persisted page record too, so a fresh
       // load of the shared link renders them immediately (no polling needed)
       // and anyone still on the page can pick them up via /api/pages/:id/counterarguments.
-      const storedPage = loadPage(pageId);
-      if (storedPage) {
-        storedPage.counterarguments = counterarguments;
-        savePage(pageId, storedPage);
+      if (pageId) {
+        try {
+          const storedPage = await loadPage(pageId);
+          if (storedPage) {
+            storedPage.counterarguments = counterarguments;
+            await savePage(pageId, storedPage);
+          }
+        } catch (pageStoreError) {
+          console.error('Warning: could not update persisted page with counterarguments:', pageStoreError.message);
+        }
       }
 
       onStepComplete(7, totalSteps, 'Generating counterarguments...', {

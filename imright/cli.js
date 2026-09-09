@@ -239,7 +239,11 @@ async function main() {
             ? `${serveBaseUrl}/tabloid_generator/output/${slug}.html`
             : outputPathForClaim(slug);
           openInBrowser(url);
-          console.error(`Shareable link (once deployed): /a/${pageId}`);
+          if (pageId) {
+            console.error(`Shareable link (once deployed): /a/${pageId}`);
+          } else {
+            console.error('Could not persist a shareable page record (DATABASE_URL not set or unreachable).');
+          }
         },
       })
   );
