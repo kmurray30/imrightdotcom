@@ -18,6 +18,8 @@ import { fileURLToPath } from 'url';
 import { runPipeline } from '../index.js';
 import { loadEnv } from '../load-env.js';
 import { slugify } from '../utils.js';
+import { loadPage } from './page-store.js';
+import { renderStoredPage } from '../../tabloid_generator/index.js';
 import {
   safeCompare,
   safeCompareHash,
@@ -519,6 +521,51 @@ function serveStaticFile(requestUrlPath, response) {
   });
 }
 
+/**
+ * GET /a/:pageId — the durable, shareable article link. Renders straight
+ * from the persisted page-store JSON record (see page-store.js), not from a
+ * pre-rendered HTML file, so every request reflects the latest saved state
+ * (e.g. counterarguments filled in once step 7 finishes).
+ */
+function handleArticlePage(pageId, response) {
+  const record = loadPage(pageId);
+  if (!record) {
+    response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    response.end('Page not found');
+    return;
+  }
+
+  // Best-effort: the debug page is generated from ephemeral pipeline
+  // intermediates (not part of the persisted record), so it may not exist
+  // by the time this link is opened — link to it only if it's still there.
+  const debugSlug = slugify(record.claim || '');
+  const debugPath = path.join(PROJECT_ROOT, 'imright', 'debug', `${debugSlug}.html`);
+  const debugPageUrl = fs.existsSync(debugPath) ? `/imright/debug/${debugSlug}.html` : null;
+
+  const html = renderStoredPage(record, {
+    debugPageUrl,
+    counterargsUrl: `/api/pages/${pageId}/counterarguments`,
+  });
+  response.writeHead(200, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': 'no-cache',
+  });
+  response.end(html);
+}
+
+/**
+ * GET /api/pages/:pageId/counterarguments — polled by the article page's own
+ * script while Bunky's rebuttals (step 7) are still being generated.
+ */
+function handleApiPageCounterarguments(pageId, response) {
+  const record = loadPage(pageId);
+  if (!record) {
+    sendJson(response, 404, { error: 'not_found' });
+    return;
+  }
+  sendJson(response, 200, { counterarguments: Array.isArray(record.counterarguments) ? record.counterarguments : [] });
+}
+
 function readJsonBody(request) {
   return new Promise((resolve, reject) => {
     let raw = '';
@@ -605,11 +652,11 @@ async function handleApiRun(request, response, identity) {
     });
   };
 
-  const onPageReady = (readySlug) => {
+  const onPageReady = (readySlug, pageId) => {
     recordTimeToReady(performance.now() - submittedAt, readySlug);
     broadcastEvent(runState, {
       type: 'ready',
-      url: `/tabloid_generator/output/${readySlug}.html`,
+      url: `/a/${pageId}`,
     });
   };
 
@@ -811,6 +858,12 @@ const server = http.createServer(async (request, response) => {
     return;
   }
 
+  const counterargsMatch = urlPath.match(/^\/api\/pages\/([a-z0-9-]+)\/counterarguments$/);
+  if (request.method === 'GET' && counterargsMatch) {
+    handleApiPageCounterarguments(counterargsMatch[1], response);
+    return;
+  }
+
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     response.writeHead(405, { 'Content-Type': 'text/plain; charset=utf-8' });
     response.end('Method Not Allowed');
@@ -820,6 +873,13 @@ const server = http.createServer(async (request, response) => {
   if (urlPath === '/' || urlPath === '/index.html') {
     recordPageView('landing');
     serveLandingPage(response);
+    return;
+  }
+
+  const persistedArticleMatch = urlPath.match(/^\/a\/([a-z0-9-]+)$/);
+  if (persistedArticleMatch) {
+    recordPageView('article', { slug: persistedArticleMatch[1] });
+    handleArticlePage(persistedArticleMatch[1], response);
     return;
   }
 

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 import yaml from 'yaml';
 import { callGrokJson } from '../utils/grok.js';
 import { parseJsonFromLlmResponse } from '../utils/parse-json.js';
-import { downloadImage, fetchImage } from '../utils/pixabay.js';
+import { fetchImage } from '../utils/pixabay.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -130,17 +130,16 @@ function buildUrlToIndex(citations) {
 }
 
 /**
- * Fetch images from Pixabay for article photo_queries and download to local images dir.
- * Runs fetches concurrently. Returns Map of key -> filename for successfully downloaded images.
+ * Fetch image URLs from Pixabay for article photo_queries. Runs concurrently.
+ * Images are hotlinked from Pixabay's CDN rather than downloaded — a page
+ * record only needs to remember the URL, which keeps stored pages small
+ * enough to persist indefinitely.
  *
  * @param {object} article - Parsed article with photo_query (top-level) and sections[].photo_query
- * @param {string} slug - Filename-safe slug
- * @param {string} projectRoot - Absolute path to project root
- * @returns {Promise<Map<string, string>>} - Map of 'hero'|'section-0'|... -> filename (e.g. 'hero.jpg')
+ * @returns {Promise<Map<string, string>>} - Map of 'hero'|'section-0'|... -> image URL
  */
-export async function fetchAndDownloadImages(article, slug, projectRoot) {
-  const imagePaths = new Map();
-  const imagesDir = path.join(projectRoot, 'tabloid_generator', 'images', slug);
+export async function fetchImageUrls(article) {
+  const imageUrls = new Map();
 
   const queries = [];
 
@@ -157,9 +156,8 @@ export async function fetchAndDownloadImages(article, slug, projectRoot) {
     }
   });
 
-  if (queries.length === 0) return imagePaths;
+  if (queries.length === 0) return imageUrls;
 
-  // Fetch all image URLs concurrently
   const fetchResults = await Promise.all(
     queries.map(async ({ key, query }) => {
       try {
@@ -172,28 +170,11 @@ export async function fetchAndDownloadImages(article, slug, projectRoot) {
     })
   );
 
-  // Download all successfully fetched images concurrently
-  const downloadPromises = fetchResults
-    .filter((r) => r.url)
-    .map(async ({ key, url }) => {
-      const ext = url?.match(/\.(jpg|jpeg|png|webp)/i)?.[1] ?? 'jpg';
-      const filename = `${key}.${ext}`;
-      const destPath = path.join(imagesDir, filename);
-      try {
-        await downloadImage(url, destPath);
-        return { key, filename };
-      } catch (err) {
-        console.error(`Download failed for ${key}:`, err.message);
-        return null;
-      }
-    });
-
-  const downloadResults = await Promise.all(downloadPromises);
-  for (const result of downloadResults) {
-    if (result) imagePaths.set(result.key, result.filename);
+  for (const result of fetchResults) {
+    if (result.url) imageUrls.set(result.key, result.url);
   }
 
-  return imagePaths;
+  return imageUrls;
 }
 
 /** Get Bunky image as data URL for self-contained HTML (avoids file:// path issues). */
@@ -209,15 +190,41 @@ function getBunkyDataUrl(projectRoot) {
   return 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><ellipse cx="24" cy="32" rx="14" ry="8" fill="%23654321"/><ellipse cx="24" cy="26" rx="12" ry="10" fill="%238B6914"/><ellipse cx="20" cy="22" rx="3" ry="2" fill="%23333"/><ellipse cx="28" cy="22" rx="3" ry="2" fill="%23333"/></svg>');
 }
 
-/** Generate self-contained tabloid-style HTML. */
-function generateHtml(selected, topic, slug = null, citations = [], idToUrl = null, imagePaths = null, bunkyDataUrl = null) {
-  const headline = selected.headline ?? 'TRUTH FLASH!';
-  const intro = selected.intro;
-  const conclusion = selected.conclusion;
-  const sections = selected.sections ?? [];
+/**
+ * Generate self-contained tabloid-style HTML from a plain record — the same
+ * shape a page-store JSON file holds, so a page can be rendered either right
+ * after generation or later, purely from the persisted record.
+ *
+ * @param {object} record
+ * @param {string} record.headline
+ * @param {*} record.intro
+ * @param {Array} [record.sections]
+ * @param {*} [record.conclusion]
+ * @param {string} record.topic
+ * @param {Array<{link,title,content}>} [record.citations]
+ * @param {Map<string,string>|object} [record.imageUrls] - key ('hero'|'section-N') -> image URL
+ * @param {string|null} [record.debugPageUrl] - link to the debug/"how this works" page, if it still exists
+ * @param {string|null} [record.counterargsUrl] - endpoint to poll for counterarguments not yet embedded
+ * @param {Array|null} [record.counterarguments] - counterarguments to embed directly, if already known
+ */
+function generateHtml({
+  headline: rawHeadline,
+  intro,
+  sections: rawSections,
+  conclusion,
+  paragraphs = [],
+  topic,
+  citations = [],
+  imageUrls = null,
+  debugPageUrl = null,
+  counterargsUrl = null,
+  counterarguments = null,
+}) {
+  const headline = rawHeadline ?? 'TRUTH FLASH!';
+  const sections = rawSections ?? [];
   const urlToIndex = buildUrlToIndex(citations);
-  const debugPageUrl = slug ? `../../imright/debug/${slug}.html` : null;
-  const imageMap = imagePaths instanceof Map ? imagePaths : new Map();
+  const idToUrl = new Map(citations.map((citation, index) => [index + 1, citation.link]));
+  const imageMap = imageUrls instanceof Map ? imageUrls : new Map(Object.entries(imageUrls ?? {}));
   const publishedDate = new Date().toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'long',
@@ -241,8 +248,8 @@ ${paragraphsHtml}
       })()
     : '';
 
-  const hasBunky = slug && sections.length > 0;
-  const resolvedBunkyUrl = bunkyDataUrl || getBunkyDataUrl();
+  const hasBunky = sections.length > 0;
+  const resolvedBunkyUrl = hasBunky ? getBunkyDataUrl() : null;
 
   // Sections — when Bunky is active, embed a callout inside each section.
   // The callout is position:absolute so it floats outside the article card to the right,
@@ -272,7 +279,7 @@ ${paragraphsHtml}${bunkyCalloutHtml}
     </section>`;
           })
           .join('\n')
-      : (selected.paragraphs ?? [])
+      : paragraphs
           .map((paragraph) => {
             const rawText = typeof paragraph === 'string' ? paragraph : (paragraph?.text ?? '');
             const processedHtml = processParagraphWithLinks(rawText, idToUrl, urlToIndex, debugPageUrl);
@@ -620,9 +627,9 @@ ${paragraphsHtml}${bunkyCalloutHtml}
     </div>
     <article class="article${hasBunky ? ' article--has-bunky' : ''}">
 ${(() => {
-  const heroFilename = imageMap.get('hero');
-  return heroFilename && slug
-    ? `    <figure class="article__hero-image"><img src="../images/${slug}/${heroFilename}" alt="" loading="lazy"></figure>\n`
+  const heroUrl = imageMap.get('hero');
+  return heroUrl
+    ? `    <figure class="article__hero-image"><img src="${escapeHtml(heroUrl)}" alt="" loading="lazy"></figure>\n`
     : '';
 })()}${introHtml}
 ${sectionsHtml}
@@ -636,11 +643,14 @@ ${conclusionHtml}
     </div>
     <div class="bunky-panel__analysis" id="bunkyPanelAnalysis"></div>
   </div>
-  <!-- BUNKY_COUNTERARGS_PLACEHOLDER -->
+  ${
+    Array.isArray(counterarguments)
+      ? `<script>window.__BUNKY_COUNTERARGS = ${JSON.stringify({ counterarguments }).replace(/<\/script>/gi, '<\\/script>')};</script>`
+      : '<!-- BUNKY_COUNTERARGS_PLACEHOLDER -->'
+  }
   <script>
 (function() {
-  var slug = ${slug ? JSON.stringify(slug) : 'null'};
-  if (!slug) return;
+  var counterargsUrl = ${counterargsUrl ? JSON.stringify(counterargsUrl) : 'null'};
   function applyCounterargs(data) {
     if (!data || !Array.isArray(data.counterarguments)) return;
     var list = data.counterarguments;
@@ -664,8 +674,7 @@ ${conclusionHtml}
   }
   if (window.__BUNKY_COUNTERARGS && tryApply(window.__BUNKY_COUNTERARGS)) {
     // Embedded at build time, done
-  } else {
-    var counterargsUrl = "../counterarguments/" + slug + ".json";
+  } else if (counterargsUrl) {
     var pollAttempts = 0;
     var maxPollAttempts = 150; // ~5 min at 2s
     function poll() {
@@ -729,7 +738,7 @@ ${conclusionHtml}
 })();
   </script>
   <footer class="site-footer">
-    <p>${slug ? `<a class="site-footer__how-link" href="../../imright/debug/${escapeHtml(slug)}.html" target="_blank" rel="noopener">Find out how this works</a>` : ''}</p>
+    <p>${debugPageUrl ? `<a class="site-footer__how-link" href="${escapeHtml(debugPageUrl)}" target="_blank" rel="noopener">Find out how this works</a>` : ''}</p>
     <p>imright.com &middot; Published ${publishedDate}</p>
   </footer>
 </body>
@@ -788,18 +797,60 @@ ${JSON.stringify(candidateArguments, null, 2)}`;
 }
 
 /**
- * Fetches images and renders HTML (stage 6).
+ * Fetches image URLs and renders HTML (stage 6), for the ephemeral
+ * slug-addressed output file (tabloid_generator/output/<slug>.html).
  *
  * @param {object} articleResult - From generateArticle: { article, condensed, idToUrl, topic }
  * @param {string} slug - Filename-safe slug
- * @param {string} projectRoot - Absolute path to project root
- * @returns {Promise<string>} - HTML string
+ * @returns {Promise<{ html: string, imageUrls: Map<string,string> }>}
  */
-export async function renderWithImages(articleResult, slug, projectRoot) {
-  const { article, condensed, idToUrl, topic } = articleResult;
-  const imagePaths = await fetchAndDownloadImages(article, slug, projectRoot);
-  const bunkyDataUrl = (slug && (article?.sections ?? []).length > 0) ? getBunkyDataUrl(projectRoot) : null;
-  return generateHtml(article, topic, slug, condensed, idToUrl, imagePaths, bunkyDataUrl);
+export async function renderWithImages(articleResult, slug) {
+  const { article, condensed, topic } = articleResult;
+  const imageUrls = await fetchImageUrls(article);
+  const debugPageUrl = slug ? `../../imright/debug/${slug}.html` : null;
+  const counterargsUrl = slug ? `../counterarguments/${slug}.json` : null;
+  const html = generateHtml({
+    headline: article?.headline,
+    intro: article?.intro,
+    sections: article?.sections,
+    conclusion: article?.conclusion,
+    paragraphs: article?.paragraphs,
+    topic,
+    citations: condensed,
+    imageUrls,
+    debugPageUrl,
+    counterargsUrl,
+  });
+  return { html, imageUrls };
+}
+
+/**
+ * Render a persisted page-store record into HTML. This is the "generate from
+ * JSON" path: everything the page needs (article text, citations, image
+ * URLs, counterarguments once known) already lives in `record`, so no
+ * pipeline data or Grok calls are involved — just template rendering.
+ *
+ * @param {object} record - A page-store record (see imright/scripts/page-store.js)
+ * @param {object} [options]
+ * @param {string|null} [options.debugPageUrl] - Link to the debug page, if it still exists
+ * @param {string|null} [options.counterargsUrl] - Endpoint to poll if counterarguments aren't embedded yet
+ * @returns {string} - HTML string
+ */
+export function renderStoredPage(record, { debugPageUrl = null, counterargsUrl = null } = {}) {
+  const article = record?.article ?? {};
+  return generateHtml({
+    headline: article.headline,
+    intro: article.intro,
+    sections: article.sections,
+    conclusion: article.conclusion,
+    paragraphs: article.paragraphs,
+    topic: record?.topic,
+    citations: record?.citations ?? [],
+    imageUrls: record?.images ?? {},
+    debugPageUrl,
+    counterargsUrl,
+    counterarguments: record?.counterarguments ?? null,
+  });
 }
 
 /**
@@ -808,13 +859,12 @@ export async function renderWithImages(articleResult, slug, projectRoot) {
  * @param {string} claim - The topic/claim string
  * @param {object} extractedByTerm - Output from ref_extractor
  * @param {string} [slug] - Filename-safe slug
- * @param {string} [projectRoot] - Project root (required for image fetching)
  * @returns {Promise<string>} - HTML string
  */
-export async function generate(claim, extractedByArticle, slug = null, projectRoot = null) {
+export async function generate(claim, extractedByArticle, slug = null) {
   const articleResult = await generateArticle(claim, extractedByArticle, slug);
-  const root = projectRoot ?? path.resolve(__dirname, '..');
-  return renderWithImages(articleResult, slug, root);
+  const { html } = await renderWithImages(articleResult, slug);
+  return html;
 }
 
 /**
@@ -848,7 +898,6 @@ export async function regenerateFromRaw(slug, projectRoot) {
 
   const allCitations = flattenAndDedupeCitations(extracted);
   const condensed = condenseForLlm(allCitations);
-  const idToUrl = new Map(condensed.map((citation, index) => [index + 1, citation.link]));
 
   let parsed;
   try {
@@ -880,11 +929,21 @@ export async function regenerateFromRaw(slug, projectRoot) {
     }
   }
 
-  const imagePaths =
+  const imageUrls =
     selected?.photo_query || (selected?.sections ?? []).some((s) => s?.photo_query)
-      ? await fetchAndDownloadImages(selected, slug, projectRoot)
+      ? await fetchImageUrls(selected)
       : new Map();
 
-  const bunkyDataUrl = (selected?.sections ?? []).length > 0 ? getBunkyDataUrl(projectRoot) : null;
-  return generateHtml(selected, topic, slug, condensed, idToUrl, imagePaths, bunkyDataUrl);
+  return generateHtml({
+    headline: selected.headline,
+    intro: selected.intro,
+    sections: selected.sections,
+    conclusion: selected.conclusion,
+    paragraphs: selected.paragraphs,
+    topic,
+    citations: condensed,
+    imageUrls,
+    debugPageUrl: `../../imright/debug/${slug}.html`,
+    counterargsUrl: `../counterarguments/${slug}.json`,
+  });
 }

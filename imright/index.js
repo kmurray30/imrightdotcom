@@ -14,6 +14,7 @@ import {
 } from '../tabloid_generator/index.js';
 import { generateCounterarguments } from '../counterarguer/index.js';
 import { slugify } from './utils.js';
+import { createPageId, savePage, loadPage } from './scripts/page-store.js';
 import {
   getTokenUsage,
   resetTokenUsage,
@@ -45,8 +46,8 @@ function saveToDisk(filePath, content, format) {
  * @param {object} [options] - Optional config
  * @param {function} [options.onProgress] - Callback (stepIndex, totalSteps, message) for progress updates
  * @param {function} [options.onStepComplete] - Callback (stepIndex, totalSteps, message, delta) after each step; delta = { inputTokens, outputTokens, totalCost, timeMs } for that step
- * @param {function} [options.onPageReady] - Callback (slug) when HTML is written and page can be opened (after step 6, before step 7)
- * @returns {Promise<{ conspiracy, wikiFetched, wikiFiltered, extracted, html, slug }>}
+ * @param {function} [options.onPageReady] - Callback (slug, pageId) when HTML is written and the page can be opened (after step 6, before step 7). `pageId` addresses the persisted page-store record (see imright/scripts/page-store.js), the durable/shareable link.
+ * @returns {Promise<{ conspiracy, wikiFetched, wikiFiltered, extracted, html, slug, pageId }>}
  */
 export async function runPipeline(claim, options = {}) {
   const onProgress = options.onProgress ?? (() => {});
@@ -222,7 +223,7 @@ export async function runPipeline(claim, options = {}) {
 
   onProgress(6, totalSteps, 'Fetching images...');
   const step6Start = performance.now();
-  const html = await renderWithImages(articleResult, slug, PROJECT_ROOT);
+  const { html, imageUrls } = await renderWithImages(articleResult, slug);
   (() => {
     const timeMs = performance.now() - step6Start;
     stageRows.push({
@@ -244,8 +245,30 @@ export async function runPipeline(claim, options = {}) {
   fs.mkdirSync(path.dirname(htmlPath), { recursive: true });
   fs.writeFileSync(htmlPath, html, 'utf8');
 
+  // Persist a compact JSON record of the page — article text, citations, and
+  // hotlinked image URLs, no binary assets — so a shared link keeps working
+  // without re-running the pipeline. This is separate from the ephemeral
+  // slug-based HTML file above, which just serves local/CLI use.
+  const pageId = createPageId(claim);
+  savePage(pageId, {
+    pageId,
+    claim,
+    topic: articleResult.topic,
+    createdAt: new Date().toISOString(),
+    article: {
+      headline: articleResult.article?.headline,
+      intro: articleResult.article?.intro,
+      sections: articleResult.article?.sections,
+      conclusion: articleResult.article?.conclusion,
+      paragraphs: articleResult.article?.paragraphs,
+    },
+    citations: articleResult.condensed,
+    images: Object.fromEntries(imageUrls),
+    counterarguments: null,
+  });
+
   // Page is ready; open browser now so user can read while step 7 runs
-  onPageReady(slug);
+  onPageReady(slug, pageId);
 
   // Write run-stats synchronously so the debug generator can read it
   const runStatsPath = path.join(PROJECT_ROOT, 'run-stats', `${slug}.json`);
@@ -327,6 +350,15 @@ export async function runPipeline(claim, options = {}) {
       runStats.stages.push(stageRow);
       fs.writeFileSync(runStatsPath, JSON.stringify(runStats, null, 2), 'utf8');
 
+      // Fold counterarguments into the persisted page record too, so a fresh
+      // load of the shared link renders them immediately (no polling needed)
+      // and anyone still on the page can pick them up via /api/pages/:id/counterarguments.
+      const storedPage = loadPage(pageId);
+      if (storedPage) {
+        storedPage.counterarguments = counterarguments;
+        savePage(pageId, storedPage);
+      }
+
       onStepComplete(7, totalSteps, 'Generating counterarguments...', {
         ...delta,
         totalCost: deltaCosts.totalCost,
@@ -375,6 +407,7 @@ export async function runPipeline(claim, options = {}) {
     extracted,
     html,
     slug,
+    pageId,
     stageRows,
     refStats,
     tokenUsage: {

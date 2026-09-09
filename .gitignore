@@ -5,6 +5,7 @@ env.js
 env.local
 .env.local
 data/site_lock.json
+data/pages/
 conspirator/conspiracies/
 conspirator/raw_input/
 conspirator/raw_output/

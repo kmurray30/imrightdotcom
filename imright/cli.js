@@ -234,11 +234,12 @@ async function main() {
       runPipeline(claim, {
         onProgress,
         onStepComplete,
-        onPageReady: (slug) => {
+        onPageReady: (slug, pageId) => {
           const url = serveBaseUrl
             ? `${serveBaseUrl}/tabloid_generator/output/${slug}.html`
             : outputPathForClaim(slug);
           openInBrowser(url);
+          console.error(`Shareable link (once deployed): /a/${pageId}`);
         },
       })
   );
