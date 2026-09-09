@@ -111,6 +111,26 @@ if (SERVE_MODE !== requestedServeMode) {
 }
 const modeConfig = MODE_DEFAULTS[SERVE_MODE];
 
+// The site-lock state (password protection on/off + password hash, see
+// site-lock.js) lives in Postgres so it survives redeploys — Railway's app
+// filesystem and any in-memory state do not. In prod this is required: an
+// unset DATABASE_URL there previously meant the site could silently come
+// back up unprotected after a deploy, which is exactly what this guards
+// against. Local/LAN dev can still run without it (site-lock just won't
+// persist across restarts), since not everyone hacking on the landing page
+// needs a Postgres instance running.
+if (!process.env.DATABASE_URL) {
+  if (SERVE_MODE === 'prod') {
+    console.error(
+      '[serve-site] DATABASE_URL is not set. Refusing to start in prod without it — the site password lock is stored in Postgres so it survives redeploys. Add a Postgres database in Railway (New -> Database -> PostgreSQL; it injects DATABASE_URL automatically) and restart.'
+    );
+    process.exit(1);
+  }
+  console.error(
+    '[serve-site] DATABASE_URL is not set — site-lock state (password protection on/off + password) will not persist across restarts. Fine for local dev; required in prod.'
+  );
+}
+
 // Precedence: explicit CLI arg (port) > env var > mode default.
 const PORT = parseInt(
   process.argv[2] || process.env.PORT || String(modeConfig.port),
@@ -281,28 +301,29 @@ function serveAdminLoginPage(response, statusCode = 200) {
  * whether a password is set — never the password or its hash) inlined as
  * JSON, so the dashboard shows correct state on first paint.
  */
-function serveAdminDashboardPage(response) {
+async function serveAdminDashboardPage(response) {
   const adminPagePath = path.join(PROJECT_ROOT, 'imright', 'admin.html');
-  fs.readFile(adminPagePath, 'utf8', (readError, rawHtml) => {
-    if (readError) {
-      response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-      response.end('Failed to read admin.html');
-      return;
-    }
-    const activeHomeBackgroundCss = resolveActiveHomeBackground();
-    const siteLock = readSiteLock();
-    const adminStateJson = JSON.stringify({
-      passwordProtectionEnabled: siteLock.passwordProtectionEnabled,
-      passwordSet: Boolean(siteLock.passwordHash),
-    });
-    let renderedHtml = rawHtml.split(ACTIVE_HOME_BACKGROUND_PLACEHOLDER).join(activeHomeBackgroundCss);
-    renderedHtml = renderedHtml.split('ADMIN_STATE_JSON').join(adminStateJson);
-    response.writeHead(200, {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'no-store',
-    });
-    response.end(renderedHtml);
+  let rawHtml;
+  try {
+    rawHtml = await fs.promises.readFile(adminPagePath, 'utf8');
+  } catch {
+    response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+    response.end('Failed to read admin.html');
+    return;
+  }
+  const activeHomeBackgroundCss = resolveActiveHomeBackground();
+  const siteLock = await readSiteLock();
+  const adminStateJson = JSON.stringify({
+    passwordProtectionEnabled: siteLock.passwordProtectionEnabled,
+    passwordSet: Boolean(siteLock.passwordHash),
   });
+  let renderedHtml = rawHtml.split(ACTIVE_HOME_BACKGROUND_PLACEHOLDER).join(activeHomeBackgroundCss);
+  renderedHtml = renderedHtml.split('ADMIN_STATE_JSON').join(adminStateJson);
+  response.writeHead(200, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': 'no-store',
+  });
+  response.end(renderedHtml);
 }
 
 /**
@@ -342,7 +363,7 @@ async function handleApiLogin(request, response) {
     return;
   }
 
-  const siteLock = readSiteLock();
+  const siteLock = await readSiteLock();
   const password = typeof body.password === 'string' ? body.password : '';
   if (!password || !safeCompareHash(password, siteLock.passwordHash)) {
     recordLoginFailure(lockoutKey);
@@ -447,7 +468,7 @@ async function handleApiAdminSettings(request, response) {
     patch.passwordHash = hashPassword(body.newPassword);
   }
 
-  const updated = writeSiteLock(patch);
+  const updated = await writeSiteLock(patch);
   sendJson(response, 200, {
     passwordProtectionEnabled: updated.passwordProtectionEnabled,
     passwordSet: Boolean(updated.passwordHash),
@@ -775,14 +796,14 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     if (isAdminAuthenticated(request)) {
-      serveAdminDashboardPage(response);
+      await serveAdminDashboardPage(response);
     } else {
       serveAdminLoginPage(response);
     }
     return;
   }
 
-  const siteLock = readSiteLock();
+  const siteLock = await readSiteLock();
   if (siteLock.passwordProtectionEnabled && !isAuthenticated(request)) {
     const isBotReadRequest =
       (request.method === 'GET' || request.method === 'HEAD') &&

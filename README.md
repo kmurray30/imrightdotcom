@@ -8,7 +8,9 @@ npm install
 
 Requires `XAI_API_KEY` in env or `env.local`/`.env` in project root.
 
-The site can optionally sit behind a password gate (`imright/scripts/auth.js`). Whether the gate is on and what the password is are controlled from `/admin` (`imright/scripts/site-lock.js`), not an env var — they're stored in `data/site_lock.json`, read fresh on every request so a change from `/admin` takes effect immediately, no restart needed. That file is gitignored and lives only on the running instance; on Railway, without a persistent volume mounted at `data/`, it resets to "open, no password" on every redeploy, so attach a volume there if the lock state should survive deploys.
+The site can optionally sit behind a password gate (`imright/scripts/auth.js`). Whether the gate is on and what the password is are controlled from `/admin` (`imright/scripts/site-lock.js`), not an env var — they're stored in Postgres (`imright/scripts/db.js`, table `site_lock`), read fresh on every request so a change from `/admin` takes effect immediately, no restart needed. This is a real DB rather than a file or in-memory state specifically so it survives redeploys, not just restarts.
+
+Set `DATABASE_URL` to point at Postgres. On Railway, add a Postgres database to the project (New -> Database -> PostgreSQL) — it injects `DATABASE_URL` into linked services automatically. In prod (`SERVE_MODE=prod`) the server refuses to start without it, so the site can never silently come back up unprotected after a deploy. For local dev, either point `DATABASE_URL` at a local/throwaway Postgres instance in `env.local`, or just leave it unset — the server still runs, the site lock just won't persist across restarts (defaults to open).
 
 `/admin` itself is gated by a separate password: set `ADMIN_PASSWORD` in `env.local` for local dev, and as a real environment variable in Railway for prod. Unlike the site gate, the server still starts if it's unset — `/admin` just responds 503 until it's configured. Both gates use signed session cookies with a secret generated fresh per process, so restarting the server logs everyone (site visitors and admin) out; that's fine for a simple gate like this.
 
