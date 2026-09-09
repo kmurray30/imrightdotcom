@@ -56,6 +56,10 @@ Config also holds `verbosityTiers`: the probability that an otherwise-normal int
 
 Every outbound XAI/MediaWiki/Pixabay call goes through a shared wrapper (`utils/grok.js`'s `callGrok`, `utils/external-api.js`'s `callExternalApi`) that counts the attempt, classifies the outcome, and retries transient failures (timeout/429/5xx) with backoff — so "how many calls did our app make" and "how many times did we retry" are always accurate, and comparable against a provider's own dashboard to catch usage happening outside this app's expected flow.
 
+### Dashboards
+
+Four importable Grafana dashboards (Product & Traffic, Cost & LLM, Pipeline & External APIs, Weird Traffic & Anomalies) plus the bookmarked investigative log queries live in `imright/observability/dashboards/` — see that directory's README for import steps and a couple of things worth verifying against your live Grafana Cloud instance before trusting the panels.
+
 ## Run the site (landing page + pipeline)
 
 ```bash

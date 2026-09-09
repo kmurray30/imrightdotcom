@@ -45,6 +45,12 @@ diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.ERROR);
 const SERVICE_NAME = 'imright';
 const HEARTBEAT_INTERVAL_MS = 60_000;
 
+// The OTel SDK's default histogram buckets (0,5,10,25,50,75,100,250,...) are tuned for
+// generic millisecond latencies and would dump nearly all of this app's values (a few
+// seconds to a couple minutes) into one or two buckets, making p50/p90/p95/p99 useless.
+const MS_BUCKETS_SHORT = [200, 500, 1000, 2000, 3000, 5000, 8000, 12000, 20000, 30000, 45000, 60000, 90000];
+const MS_BUCKETS_EXTERNAL = [50, 100, 250, 500, 1000, 2000, 4000, 8000, 15000, 20000];
+
 let loggerProvider = null;
 let otelLogger = null;
 let meterProvider = null;
@@ -153,6 +159,28 @@ export function log(level, message, attributes = {}) {
   });
 }
 
+/**
+ * Like log(), but for records meant to be queried with LogQL `| json` in Grafana
+ * (interaction_summary/interaction_trace). Grafana Cloud's OTLP->Loki ingestion
+ * puts log record attributes into Structured Metadata rather than the log line
+ * text, which is queryable too but is a different LogQL idiom and harder to
+ * verify sight-unseen — so the full record is also JSON-encoded straight into
+ * the log body, guaranteeing `| json` works regardless of how attributes surface.
+ * The record is small (no prompts/responses), so this near-doubling of one log
+ * line's size is a trivial cost for not having to guess.
+ */
+export function logStructured(level, message, record) {
+  const line = JSON.stringify({ message, ...record });
+  console.error(`[${level}] ${message} ${line}`);
+  if (!otelLogger) return;
+  otelLogger.emit({
+    severityNumber: severityFor(level),
+    severityText: level.toUpperCase(),
+    body: line,
+    attributes: record,
+  });
+}
+
 /** Sets up OTLP logging + metrics and starts the heartbeat. Safe to call once at server startup. */
 export function startObservability() {
   const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
@@ -232,8 +260,8 @@ export function startObservability() {
       description: 'Anomaly tags applied to completed interactions (an interaction may contribute to multiple tags).',
     });
     timeToReadyHistogram = meter.createHistogram('imright.pipeline.time_to_ready_ms', {
-      description: 'Time from submit to the article page being ready to view.',
-      unit: 'ms',
+      description: 'Time from submit to the article page being ready to view, in ms.',
+      advice: { explicitBucketBoundaries: MS_BUCKETS_SHORT },
     });
 
     llmCallCounter = meter.createCounter('imright.llm.calls', {
@@ -243,20 +271,19 @@ export function startObservability() {
       description: 'LLM tokens, labeled by provider, model, pipeline_step, token_type (input, output).',
     });
     llmCostCounter = meter.createCounter('imright.llm.cost_usd', {
-      description: 'Estimated LLM spend, labeled by provider, model, pipeline_step.',
-      unit: 'USD',
+      description: 'Estimated LLM spend in USD, labeled by provider, model, pipeline_step.',
     });
     llmLatencyHistogram = meter.createHistogram('imright.llm.latency_ms', {
-      description: 'LLM call latency, labeled by provider, model, pipeline_step.',
-      unit: 'ms',
+      description: 'LLM call latency in ms, labeled by provider, model, pipeline_step.',
+      advice: { explicitBucketBoundaries: MS_BUCKETS_SHORT },
     });
 
     externalCallCounter = meter.createCounter('imright.external.calls', {
       description: 'Outbound calls to external dependencies (MediaWiki, Pixabay, ...), labeled by service, operation, status.',
     });
     externalLatencyHistogram = meter.createHistogram('imright.external.latency_ms', {
-      description: 'External dependency call latency, labeled by service, operation.',
-      unit: 'ms',
+      description: 'External dependency call latency in ms, labeled by service, operation.',
+      advice: { explicitBucketBoundaries: MS_BUCKETS_EXTERNAL },
     });
     externalRateLimitCounter = meter.createCounter('imright.external.rate_limited', {
       description: '429/rate-limit responses from external dependencies, labeled by service, operation.',
@@ -266,24 +293,28 @@ export function startObservability() {
     });
 
     interactionCostHistogram = meter.createHistogram('imright.interaction.cost_usd', {
-      description: 'Total estimated LLM cost per completed interaction (distribution — use for p50/p90/p95/p99).',
-      unit: 'USD',
+      description: 'Total estimated LLM cost in USD per completed interaction (distribution — use for p50/p90/p95/p99).',
+      advice: { explicitBucketBoundaries: [0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 2, 5] },
     });
     interactionTokensHistogram = meter.createHistogram('imright.interaction.tokens_total', {
       description: 'Total LLM tokens (input+output) per completed interaction.',
+      advice: { explicitBucketBoundaries: [1000, 2500, 5000, 10000, 20000, 30000, 50000, 75000, 100000, 150000, 250000] },
     });
     interactionLlmCallsHistogram = meter.createHistogram('imright.interaction.llm_calls', {
       description: 'Number of LLM calls per completed interaction.',
+      advice: { explicitBucketBoundaries: [1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 30] },
     });
     interactionLlmRetriesHistogram = meter.createHistogram('imright.interaction.llm_retries', {
       description: 'Number of LLM retries per completed interaction.',
+      advice: { explicitBucketBoundaries: [0, 1, 2, 3, 4, 5, 8, 12] },
     });
     interactionExternalCallsHistogram = meter.createHistogram('imright.interaction.external_calls', {
       description: 'Number of external-dependency calls per completed interaction.',
+      advice: { explicitBucketBoundaries: [5, 10, 15, 20, 30, 40, 60, 80, 100, 150] },
     });
     interactionDurationHistogram = meter.createHistogram('imright.interaction.duration_ms', {
-      description: 'Wall-clock duration of a completed interaction.',
-      unit: 'ms',
+      description: 'Wall-clock duration of a completed interaction, in ms.',
+      advice: { explicitBucketBoundaries: [10000, 20000, 30000, 45000, 60000, 90000, 120000, 180000, 300000] },
     });
   } catch (setupError) {
     console.error(`[observability] failed to set up Grafana metrics; continuing without metrics: ${setupError.message}`);
@@ -467,7 +498,7 @@ export function recordInteractionComplete(summary) {
     tags,
   };
 
-  log(summary.success ? 'info' : 'error', 'interaction_summary', compactRecord);
+  logStructured(summary.success ? 'info' : 'error', 'interaction_summary', compactRecord);
 
   // A full step/call trace is written when this interaction was pre-selected by the
   // rolling volume-based sampler (imright/scripts/verbosity.js) OR — just as often —
@@ -475,7 +506,7 @@ export function recordInteractionComplete(summary) {
   // predicted before it ran. Either way this is still exactly one extra log write.
   const shouldEmitTrace = summary.verbose || !summary.success || tags.length > 0;
   if (shouldEmitTrace) {
-    log(summary.success ? 'info' : 'error', 'interaction_trace', {
+    logStructured(summary.success ? 'info' : 'error', 'interaction_trace', {
       interaction_id: summary.interactionId,
       claim_text: summary.claimText,
       tags,
