@@ -11,12 +11,18 @@ const PIXABAY_API_BASE = 'https://pixabay.com/api/';
 const PIXABAY_TIMEOUT_MS = 15_000;
 
 /**
- * Fetch first matching image URL from Pixabay for a search query.
+ * Search Pixabay and return the raw ranked hits (metadata only — Pixabay's search
+ * endpoint never returns image bytes, just JSON: id, tags, urls, dims, likes...).
+ * Callers should cache the result rather than re-searching the same query; per
+ * Pixabay's API terms, "requests must be cached for 24 hours".
  *
  * @param {string} query - Search term (e.g. "vaccine vial", "medical documents")
- * @returns {Promise<string|null>} - webformatURL of first hit, or null if no results
+ * @param {object} [options]
+ * @param {number} [options.perPage] - Hits to request (3-200). Higher is free
+ *   metadata for the image-ID cache — same one API call either way.
+ * @returns {Promise<Array<object>|null>} - Ranked hits array, or null on failure/no results
  */
-export async function fetchImage(query) {
+export async function searchImages(query, { perPage = 20 } = {}) {
   const apiKey = process.env.PIXABAY_API_KEY;
   if (!apiKey || !apiKey.trim()) {
     throw new Error(
@@ -26,7 +32,7 @@ export async function fetchImage(query) {
 
   const encodedQuery = encodeURIComponent(query.trim());
   // Never put the API key in a log/error message.
-  const url = `${PIXABAY_API_BASE}?key=${apiKey}&q=${encodedQuery}&image_type=photo&safesearch=true&per_page=3`;
+  const url = `${PIXABAY_API_BASE}?key=${apiKey}&q=${encodedQuery}&image_type=photo&safesearch=true&per_page=${perPage}`;
 
   let data;
   try {
@@ -47,7 +53,7 @@ export async function fetchImage(query) {
     });
   } catch (error) {
     if (error?.status === 429) {
-      console.error('Pixabay rate limit exceeded, skipping image for:', query);
+      console.error('Pixabay rate limit exceeded, skipping image search for:', query);
     } else {
       console.error('Pixabay API error:', error?.status ?? '', error?.message ?? error, 'for query:', query);
     }
@@ -55,10 +61,7 @@ export async function fetchImage(query) {
   }
 
   const hits = data?.hits ?? [];
-  if (hits.length === 0) return null;
-
-  const firstHit = hits[0];
-  return firstHit.webformatURL ?? firstHit.largeImageURL ?? null;
+  return hits.length > 0 ? hits : null;
 }
 
 /**

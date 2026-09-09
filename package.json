@@ -4,6 +4,9 @@
   "version": "1.0.0",
   "description": "imright.com — landing page + full conspiracy-to-tabloid pipeline",
   "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "scripts": {
     "dev": "SERVE_MODE=local node imright/scripts/serve-site.js",
     "dev:lan": "SERVE_MODE=lan node imright/scripts/serve-site.js",
@@ -23,6 +26,7 @@
     "@opentelemetry/sdk-logs": "^0.222.0",
     "@opentelemetry/sdk-metrics": "^2.11.0",
     "minisearch": "^6.0.0",
+    "sharp": "^0.35.4",
     "yaml": "^2.8.2"
   }
 }

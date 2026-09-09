@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 import yaml from 'yaml';
 import { callGrokJson } from '../utils/grok.js';
 import { parseJsonFromLlmResponse } from '../utils/parse-json.js';
-import { downloadImage, fetchImage } from '../utils/pixabay.js';
+import { getCachedImage } from '../utils/image-cache.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -130,13 +130,14 @@ function buildUrlToIndex(citations) {
 }
 
 /**
- * Fetch images from Pixabay for article photo_queries and download to local images dir.
- * Runs fetches concurrently. Returns Map of key -> filename for successfully downloaded images.
+ * Resolve images for article photo_queries via the shared Pixabay cache
+ * (utils/image-cache.js) and copy them into this article's local images dir.
+ * Runs lookups concurrently. Returns Map of key -> filename for successful ones.
  *
  * @param {object} article - Parsed article with photo_query (top-level) and sections[].photo_query
  * @param {string} slug - Filename-safe slug
  * @param {string} projectRoot - Absolute path to project root
- * @returns {Promise<Map<string, string>>} - Map of 'hero'|'section-0'|... -> filename (e.g. 'hero.jpg')
+ * @returns {Promise<Map<string, string>>} - Map of 'hero'|'section-0'|... -> filename (e.g. 'hero.webp')
  */
 export async function fetchAndDownloadImages(article, slug, projectRoot) {
   const imagePaths = new Map();
@@ -159,37 +160,27 @@ export async function fetchAndDownloadImages(article, slug, projectRoot) {
 
   if (queries.length === 0) return imagePaths;
 
-  // Fetch all image URLs concurrently
-  const fetchResults = await Promise.all(
+  // Resolve each query through the shared Pixabay cache (search + metadata +
+  // download/compress are all deduped by image ID there), then copy the
+  // cached file into this article's own images dir.
+  const results = await Promise.all(
     queries.map(async ({ key, query }) => {
       try {
-        const url = await fetchImage(query);
-        return { key, url };
+        const cached = await getCachedImage(query);
+        if (!cached) return null;
+        const filename = `${key}.webp`;
+        const destPath = path.join(imagesDir, filename);
+        fs.mkdirSync(imagesDir, { recursive: true });
+        fs.copyFileSync(cached.filePath, destPath);
+        return { key, filename };
       } catch (err) {
-        console.error(`Pixabay fetch failed for "${query}":`, err.message);
-        return { key, url: null };
+        console.error(`Image cache lookup failed for "${query}":`, err.message);
+        return null;
       }
     })
   );
 
-  // Download all successfully fetched images concurrently
-  const downloadPromises = fetchResults
-    .filter((r) => r.url)
-    .map(async ({ key, url }) => {
-      const ext = url?.match(/\.(jpg|jpeg|png|webp)/i)?.[1] ?? 'jpg';
-      const filename = `${key}.${ext}`;
-      const destPath = path.join(imagesDir, filename);
-      try {
-        await downloadImage(url, destPath);
-        return { key, filename };
-      } catch (err) {
-        console.error(`Download failed for ${key}:`, err.message);
-        return null;
-      }
-    });
-
-  const downloadResults = await Promise.all(downloadPromises);
-  for (const result of downloadResults) {
+  for (const result of results) {
     if (result) imagePaths.set(result.key, result.filename);
   }
 
