@@ -90,8 +90,16 @@ const KNOWN_CRAWLER_UA_PATTERN =
  * Classifies one request into a low-cardinality traffic_class for metrics.
  * Never the sole basis for authorization — UA is spoofable, this is for counting only.
  */
+// The site does have a real /admin and /api/admin/* now (password-lock toggle),
+// so those exact paths are carved out of the /^\/admin/i scanner heuristic below
+// — everything else that merely starts with "/admin" (probes for other apps'
+// admin panels) still counts as scanner_probe.
+const REAL_ADMIN_PATH_PATTERN = /^\/(admin|api\/admin(\/|$))/i;
+
 export function classifyTraffic({ method, urlPath, userAgent, hasVisitorCookie }) {
-  if (SCANNER_PATH_PATTERNS.some((pattern) => pattern.test(urlPath))) return 'scanner_probe';
+  if (!REAL_ADMIN_PATH_PATTERN.test(urlPath) && SCANNER_PATH_PATTERNS.some((pattern) => pattern.test(urlPath))) {
+    return 'scanner_probe';
+  }
   if (KNOWN_CRAWLER_UA_PATTERN.test(userAgent || '')) return 'known_crawler';
   if (method === 'POST' && urlPath === '/api/run') {
     // A real browser always has a visitor cookie by the time it can POST /api/run
