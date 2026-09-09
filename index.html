@@ -620,6 +620,123 @@
       setInfoBlurbOpen(willOpen);
     });
 
+    // Typewriter effect that cycles the belief input's placeholder through a
+    // pool of example beliefs: types one out, holds with a blinking cursor,
+    // backspaces it, then moves to the next. Suggestions are drawn in random
+    // order with no repeats until the whole pool has been shown once.
+    const PLACEHOLDER_SUGGESTIONS = [
+      "EV's destroy the grid",
+      "the moon landing was staged",
+      "cereal is a dessert",
+      "cats are secretly plotting against us",
+      "Mercury retrograde ruins my wifi",
+      "pineapple belongs on pizza",
+      "the earth is flat",
+      "5G towers control the weather",
+      "my ex is a narcissist",
+      "the government is hiding aliens",
+      "hot dogs are sandwiches",
+      "Bigfoot is real and unionized",
+      "Mondays should be illegal",
+      "cereal before milk is correct",
+      "birds aren't real",
+      "the Illuminati runs Hollywood",
+      "my horoscope is always right",
+      "chemtrails are mind control",
+      "Big Pharma is hiding the cure",
+      "Atlantis is still out there",
+    ];
+    const PLACEHOLDER_PREFIX = 'e.g. ';
+    const PLACEHOLDER_CURSOR = '|';
+    const TYPE_DELAY_MS = 45;
+    const DELETE_DELAY_MS = 25;
+    const HOLD_BLINK_COUNT = 5;
+    const BLINK_INTERVAL_MS = 450;
+    const BETWEEN_WORDS_DELAY_MS = 350;
+    const PAUSED_RETRY_MS = 400;
+
+    function shuffle(array) {
+      const result = array.slice();
+      for (let i = result.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [result[i], result[j]] = [result[j], result[i]];
+      }
+      return result;
+    }
+
+    let placeholderQueue = shuffle(PLACEHOLDER_SUGGESTIONS);
+    function nextPlaceholderSuggestion() {
+      if (placeholderQueue.length === 0) {
+        placeholderQueue = shuffle(PLACEHOLDER_SUGGESTIONS);
+      }
+      return placeholderQueue.shift();
+    }
+
+    // Animation only runs while the input is blurred, empty, and enabled —
+    // otherwise it would fight with what the user is looking at or typing.
+    function canAnimatePlaceholder() {
+      return (
+        document.activeElement !== beliefInput &&
+        beliefInput.value === '' &&
+        !beliefInput.disabled
+      );
+    }
+
+    function schedulePlaceholderStep(fn, delay) {
+      setTimeout(fn, delay);
+    }
+
+    function runPlaceholderAnimation() {
+      if (!canAnimatePlaceholder()) {
+        schedulePlaceholderStep(runPlaceholderAnimation, PAUSED_RETRY_MS);
+        return;
+      }
+      const word = PLACEHOLDER_PREFIX + nextPlaceholderSuggestion();
+      typePlaceholderWord(word, 0);
+    }
+
+    function typePlaceholderWord(word, index) {
+      if (!canAnimatePlaceholder()) {
+        schedulePlaceholderStep(runPlaceholderAnimation, PAUSED_RETRY_MS);
+        return;
+      }
+      beliefInput.placeholder = word.slice(0, index) + PLACEHOLDER_CURSOR;
+      if (index < word.length) {
+        schedulePlaceholderStep(() => typePlaceholderWord(word, index + 1), TYPE_DELAY_MS);
+      } else {
+        blinkPlaceholderCursor(word, 0);
+      }
+    }
+
+    function blinkPlaceholderCursor(word, blinkCount) {
+      if (!canAnimatePlaceholder()) {
+        schedulePlaceholderStep(runPlaceholderAnimation, PAUSED_RETRY_MS);
+        return;
+      }
+      const showCursor = blinkCount % 2 === 0;
+      beliefInput.placeholder = word + (showCursor ? PLACEHOLDER_CURSOR : ' ');
+      if (blinkCount < HOLD_BLINK_COUNT) {
+        schedulePlaceholderStep(() => blinkPlaceholderCursor(word, blinkCount + 1), BLINK_INTERVAL_MS);
+      } else {
+        schedulePlaceholderStep(() => deletePlaceholderWord(word, word.length), DELETE_DELAY_MS);
+      }
+    }
+
+    function deletePlaceholderWord(word, index) {
+      if (!canAnimatePlaceholder()) {
+        schedulePlaceholderStep(runPlaceholderAnimation, PAUSED_RETRY_MS);
+        return;
+      }
+      beliefInput.placeholder = word.slice(0, index) + PLACEHOLDER_CURSOR;
+      if (index > 0) {
+        schedulePlaceholderStep(() => deletePlaceholderWord(word, index - 1), DELETE_DELAY_MS);
+      } else {
+        schedulePlaceholderStep(runPlaceholderAnimation, BETWEEN_WORDS_DELAY_MS);
+      }
+    }
+
+    runPlaceholderAnimation();
+
     function handleStreamEvent(event) {
       if (event.type === 'progress') {
         if (event.step > VISIBLE_STAGES) return;
