@@ -297,6 +297,7 @@ export async function runPipeline(claim, options = {}) {
         cost: deltaCosts.totalCost,
         timeMs,
       };
+      stageRows.push(stageRow);
 
       const counterargsDir = path.join(PROJECT_ROOT, 'tabloid_generator', 'counterarguments');
       fs.mkdirSync(counterargsDir, { recursive: true });
@@ -334,6 +335,15 @@ export async function runPipeline(claim, options = {}) {
     } catch (err) {
       console.error('Counterarguments failed:', err.message);
       const timeMs = performance.now() - step7Start;
+      stageRows.push({
+        stage: 7,
+        name: 'Generating counterarguments...',
+        inputTokens: 0,
+        outputTokens: 0,
+        cost: 0,
+        timeMs,
+        error: err.message,
+      });
       onStepComplete(7, totalSteps, 'Generating counterarguments...', {
         inputTokens: 0,
         outputTokens: 0,
@@ -365,6 +375,8 @@ export async function runPipeline(claim, options = {}) {
     extracted,
     html,
     slug,
+    stageRows,
+    refStats,
     tokenUsage: {
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,

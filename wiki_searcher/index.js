@@ -2,8 +2,10 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import yaml from 'yaml';
+import { callExternalApi, HttpStatusError, timeoutSignal } from '../utils/external-api.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const MEDIAWIKI_TIMEOUT_MS = 15_000;
 
 /**
  * Wiki searcher module: fetches Wikipedia articles via MediaWiki API.
@@ -43,15 +45,26 @@ export async function fetchWiki(conspiracyData, options = {}) {
       url.searchParams.append(key, value);
     });
 
-    const response = await fetch(url.toString(), {
-      headers: { 'User-Agent': USER_AGENT },
+    return callExternalApi({
+      service: 'mediawiki',
+      operation: 'search',
+      pipelineStep: 'wiki_search',
+      fn: async () => {
+        const response = await fetch(url.toString(), {
+          headers: { 'User-Agent': USER_AGENT },
+          signal: timeoutSignal(MEDIAWIKI_TIMEOUT_MS),
+        });
+
+        if (!response.ok) {
+          const retryAfterHeader = response.headers.get('retry-after');
+          throw new HttpStatusError(response.status, `MediaWiki API error: ${response.status} ${response.statusText}`, {
+            retryAfterSeconds: retryAfterHeader ? Number(retryAfterHeader) : undefined,
+          });
+        }
+
+        return response.json();
+      },
     });
-
-    if (!response.ok) {
-      throw new Error(`MediaWiki API error: ${response.status} ${response.statusText}`);
-    }
-
-    return response.json();
   }
 
   /**

@@ -4,6 +4,8 @@ import { fileURLToPath } from 'url';
 import yaml from 'yaml';
 import { extractCitationsFromArticleForTerm } from './searchThenExtract.js';
 import { checkUrl, LinkStatus } from '../utils/linkChecker.js';
+import { recordExternalCallMetric } from '../imright/scripts/observability.js';
+import { recordExternalCallAttempt, addTraceEvent } from '../imright/scripts/interaction-context.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -41,6 +43,18 @@ async function checkUrlsConcurrent(urls, options) {
       const start = performance.now();
       const result = await checkUrl(url, options);
       const timeMs = performance.now() - start;
+
+      // Aggregate-only telemetry: these hit arbitrary third-party hosts (not a single
+      // rate-limited dependency we control), so unlike MediaWiki/Pixabay we don't retry
+      // here — just record success/timeout/failure for reliability visibility.
+      const isRateLimited = result.issueType === 'http_429';
+      const isTimeout = result.linkStatus === LinkStatus.TIMEOUT;
+      const isSuccess = result.linkStatus === LinkStatus.PROBABLY_VALID || result.linkStatus === LinkStatus.WHITELISTED;
+      const status = isTimeout ? 'timeout' : isRateLimited ? 'rate_limited' : isSuccess ? 'success' : 'client_error';
+      recordExternalCallMetric({ service: 'link_checker', operation: 'head_check', pipelineStep: 'ref_extraction', status, latencyMs: timeMs });
+      recordExternalCallAttempt('link_checker', { success: isSuccess, isRetry: false, rateLimited: isRateLimited, timedOut: isTimeout });
+      addTraceEvent('external_call', { service: 'link_checker', operation: 'head_check', pipelineStep: 'ref_extraction', status, latencyMs: Math.round(timeMs) });
+
       return { url, ...result, timeMs };
     })
   );
