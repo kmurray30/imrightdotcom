@@ -8,7 +8,9 @@ npm install
 
 Requires `XAI_API_KEY` in env or `env.local`/`.env` in project root.
 
-The whole site sits behind a password gate (`imright/scripts/auth.js`). Set `SITE_PASSWORD` in `env.local` for local dev, and as a real environment variable in Railway for prod — the server refuses to start if it's unset. Sessions are signed with a secret generated fresh per process, so restarting the server logs everyone out; that's fine for a simple gate like this.
+The site can optionally sit behind a password gate (`imright/scripts/auth.js`). Whether the gate is on and what the password is are controlled from `/admin` (`imright/scripts/site-lock.js`), not an env var — they're stored in `data/site_lock.json`, read fresh on every request so a change from `/admin` takes effect immediately, no restart needed. That file is gitignored and lives only on the running instance; on Railway, without a persistent volume mounted at `data/`, it resets to "open, no password" on every redeploy, so attach a volume there if the lock state should survive deploys.
+
+`/admin` itself is gated by a separate password: set `ADMIN_PASSWORD` in `env.local` for local dev, and as a real environment variable in Railway for prod. Unlike the site gate, the server still starts if it's unset — `/admin` just responds 503 until it's configured. Both gates use signed session cookies with a secret generated fresh per process, so restarting the server logs everyone (site visitors and admin) out; that's fine for a simple gate like this.
 
 Server logs + metrics push to Grafana Cloud (Loki + Prometheus, via OTLP) if `OTEL_EXPORTER_OTLP_ENDPOINT`/`OTEL_EXPORTER_OTLP_HEADERS` are set (Grafana Cloud → Connections → OpenTelemetry). Unset, it silently falls back to console-only. Query in Grafana Explore with `{service_name="imright"}` (logs) or the metric names below (Prometheus). `service.version` (deployed git SHA) is attached to every log/metric so a cost/retry/latency change can be correlated with a specific deploy.
 

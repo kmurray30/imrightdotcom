@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>imright.com admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
+  <style id="activeColorScheme">
+    :root {
+      --home-background: ACTIVE_HOME_BACKGROUND_LAYERS;
+    }
+  </style>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      font-family: "Source Sans 3", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(
+        --home-background,
+        radial-gradient(circle at 18% 12%, rgba(255, 196, 120, 0.65), transparent 55%),
+        radial-gradient(circle at 82% 8%, rgba(255, 130, 140, 0.55), transparent 55%),
+        radial-gradient(circle at 90% 90%, rgba(148, 182, 255, 0.55), transparent 55%),
+        radial-gradient(circle at 10% 85%, rgba(178, 240, 200, 0.55), transparent 55%),
+        linear-gradient(180deg, #fff4ea 0%, #f1ebff 55%, #eaf1ff 100%)
+      );
+      background-attachment: fixed;
+      color: #1c1c1c;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 40px 20px;
+    }
+    .panel {
+      width: 100%;
+      max-width: 440px;
+      background: #ffffff;
+      border-radius: 14px;
+      padding: 32px 28px;
+      box-shadow:
+        0 2px 4px rgba(0, 0, 0, 0.1),
+        0 24px 48px rgba(15, 42, 68, 0.08);
+      border: 1px solid rgba(0, 0, 0, 0.06);
+    }
+    .panel h1 {
+      font-size: 20px;
+      margin: 0 0 4px;
+    }
+    .panel p.subtitle {
+      margin: 0 0 24px;
+      font-size: 13px;
+      color: #6b6b6b;
+    }
+    .card {
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      border-radius: 10px;
+      padding: 18px 18px;
+      margin-bottom: 20px;
+    }
+    .card h2 {
+      font-size: 15px;
+      margin: 0 0 12px;
+    }
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .toggle-row .status-text {
+      font-size: 14px;
+    }
+    .toggle-row .status-text .state {
+      font-weight: 700;
+    }
+    .state.on { color: #1a7f37; }
+    .state.off { color: #c0392b; }
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 46px;
+      height: 26px;
+      flex: none;
+    }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      inset: 0;
+      background-color: #ccc;
+      transition: 0.15s;
+      border-radius: 999px;
+    }
+    .slider::before {
+      position: absolute;
+      content: "";
+      height: 20px;
+      width: 20px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: 0.15s;
+      border-radius: 50%;
+    }
+    input:checked + .slider { background-color: #1a7f37; }
+    input:checked + .slider::before { transform: translateX(20px); }
+    input:disabled + .slider { opacity: 0.6; cursor: default; }
+    .field-label {
+      display: block;
+      font-size: 13px;
+      color: #444;
+      margin: 0 0 6px;
+    }
+    input[type="password"] {
+      width: 100%;
+      padding: 10px 12px;
+      font-size: 15px;
+      border-radius: 8px;
+      border: 1px solid rgba(0, 0, 0, 0.15);
+      margin-bottom: 10px;
+      font-family: inherit;
+    }
+    button.primary {
+      width: 100%;
+      padding: 10px 12px;
+      font-size: 15px;
+      font-weight: 600;
+      border: none;
+      border-radius: 8px;
+      background: #1c1c1c;
+      color: #fff;
+      cursor: pointer;
+    }
+    button.primary:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+    button.link {
+      background: none;
+      border: none;
+      color: #6b6b6b;
+      font-size: 13px;
+      cursor: pointer;
+      padding: 0;
+      text-decoration: underline;
+    }
+    .msg {
+      min-height: 18px;
+      margin-top: 10px;
+      font-size: 13px;
+    }
+    .msg.error { color: #c0392b; }
+    .msg.success { color: #1a7f37; }
+    .password-status {
+      font-size: 13px;
+      color: #6b6b6b;
+      margin: 0 0 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <h1>Admin</h1>
+    <p class="subtitle">imright.com</p>
+
+    <div class="card">
+      <h2>Site password protection</h2>
+      <div class="toggle-row">
+        <div class="status-text">
+          Main site is currently <span class="state" id="stateLabel">…</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="protectionToggle">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="msg" id="toggleMsg"></div>
+    </div>
+
+    <div class="card">
+      <h2>Site password</h2>
+      <p class="password-status" id="passwordStatus">…</p>
+      <label class="field-label" for="newPassword">New password</label>
+      <input type="password" id="newPassword" placeholder="New site password" autocomplete="new-password">
+      <label class="field-label" for="confirmPassword">Confirm new password</label>
+      <input type="password" id="confirmPassword" placeholder="Confirm new password" autocomplete="new-password">
+      <button class="primary" id="savePasswordButton" type="button">Save password</button>
+      <div class="msg" id="passwordMsg"></div>
+    </div>
+
+    <button class="link" id="logoutButton" type="button">Log out of admin</button>
+  </div>
+
+  <script>
+    let state = ADMIN_STATE_JSON;
+
+    const stateLabel = document.getElementById('stateLabel');
+    const protectionToggle = document.getElementById('protectionToggle');
+    const toggleMsg = document.getElementById('toggleMsg');
+    const passwordStatus = document.getElementById('passwordStatus');
+    const newPasswordInput = document.getElementById('newPassword');
+    const confirmPasswordInput = document.getElementById('confirmPassword');
+    const savePasswordButton = document.getElementById('savePasswordButton');
+    const passwordMsg = document.getElementById('passwordMsg');
+    const logoutButton = document.getElementById('logoutButton');
+
+    function render() {
+      stateLabel.textContent = state.passwordProtectionEnabled ? 'locked' : 'open to the public';
+      stateLabel.className = 'state ' + (state.passwordProtectionEnabled ? 'on' : 'off');
+      protectionToggle.checked = state.passwordProtectionEnabled;
+      passwordStatus.textContent = state.passwordSet
+        ? 'A site password is set.'
+        : 'No site password is set yet — the login form will reject every attempt until you set one.';
+    }
+    render();
+
+    protectionToggle.addEventListener('change', async () => {
+      const desired = protectionToggle.checked;
+      protectionToggle.disabled = true;
+      toggleMsg.textContent = '';
+      toggleMsg.className = 'msg';
+      try {
+        const response = await fetch('/api/admin/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ passwordProtectionEnabled: desired }),
+        });
+        if (!response.ok) throw new Error('request failed');
+        state = await response.json();
+        render();
+      } catch {
+        protectionToggle.checked = !desired;
+        toggleMsg.textContent = 'Could not update — try again.';
+        toggleMsg.className = 'msg error';
+      } finally {
+        protectionToggle.disabled = false;
+      }
+    });
+
+    savePasswordButton.addEventListener('click', async () => {
+      const newPassword = newPasswordInput.value;
+      const confirmPassword = confirmPasswordInput.value;
+      passwordMsg.textContent = '';
+      passwordMsg.className = 'msg';
+
+      if (!newPassword) {
+        passwordMsg.textContent = 'Enter a new password.';
+        passwordMsg.className = 'msg error';
+        return;
+      }
+      if (newPassword !== confirmPassword) {
+        passwordMsg.textContent = 'Passwords do not match.';
+        passwordMsg.className = 'msg error';
+        return;
+      }
+
+      savePasswordButton.disabled = true;
+      try {
+        const response = await fetch('/api/admin/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ newPassword }),
+        });
+        if (!response.ok) throw new Error('request failed');
+        state = await response.json();
+        render();
+        newPasswordInput.value = '';
+        confirmPasswordInput.value = '';
+        passwordMsg.textContent = 'Password updated.';
+        passwordMsg.className = 'msg success';
+      } catch {
+        passwordMsg.textContent = 'Could not update — try again.';
+        passwordMsg.className = 'msg error';
+      } finally {
+        savePasswordButton.disabled = false;
+      }
+    });
+
+    logoutButton.addEventListener('click', async () => {
+      try {
+        await fetch('/api/admin/logout', { method: 'POST' });
+      } finally {
+        window.location.href = '/admin';
+      }
+    });
+  </script>
+</body>
+</html>

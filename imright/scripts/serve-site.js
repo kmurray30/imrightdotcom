@@ -20,6 +20,8 @@ import { loadEnv } from '../load-env.js';
 import { slugify } from '../utils.js';
 import {
   safeCompare,
+  safeCompareHash,
+  hashPassword,
   isLockedOut,
   recordLoginFailure,
   recordLoginSuccess,
@@ -30,6 +32,7 @@ import {
   buildExpiredCookie,
   getClientIp,
 } from './auth.js';
+import { readSiteLock, writeSiteLock } from './site-lock.js';
 import {
   startObservability,
   shutdownObservability,
@@ -52,12 +55,14 @@ startObservability();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '../..');
 
-const SITE_PASSWORD = process.env.SITE_PASSWORD || '';
-if (!SITE_PASSWORD) {
+// Whether the main site is password-gated at all, and the hash of that
+// password, live in data/site_lock.json (see site-lock.js) so they can be
+// changed from /admin without a restart or a redeploy.
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+if (!ADMIN_PASSWORD) {
   console.error(
-    '[serve-site] SITE_PASSWORD is not set. Refusing to start unprotected — set it in env.local (or the deploy environment) and restart.'
+    '[serve-site] ADMIN_PASSWORD is not set — /admin is disabled until it is set in env.local (or the deploy environment) and the server is restarted.'
   );
-  process.exit(1);
 }
 // Generated fresh per process: signs the login cookie so it can't be forged.
 // Restarting the server invalidates existing sessions, which is fine for a
@@ -65,6 +70,9 @@ if (!SITE_PASSWORD) {
 const SESSION_SECRET = crypto.randomBytes(32).toString('hex');
 const SESSION_COOKIE_NAME = 'imright_session';
 const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const ADMIN_SESSION_SECRET = crypto.randomBytes(32).toString('hex');
+const ADMIN_SESSION_COOKIE_NAME = 'imright_admin_session';
+const ADMIN_SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 /**
  * High-level mode the server runs in. Each mode bundles a set of defaults
  * (bind host, port, and — in the future — things like caching headers,
@@ -242,6 +250,61 @@ function isAuthenticated(request) {
   return verifySessionToken(token, SESSION_SECRET);
 }
 
+function isAdminAuthenticated(request) {
+  const cookies = parseCookies(request.headers.cookie);
+  const token = cookies[ADMIN_SESSION_COOKIE_NAME];
+  if (!token) return false;
+  return verifySessionToken(token, ADMIN_SESSION_SECRET);
+}
+
+/** Render admin-login.html the same way serveLoginPage renders login.html. */
+function serveAdminLoginPage(response, statusCode = 200) {
+  const adminLoginPagePath = path.join(PROJECT_ROOT, 'imright', 'admin-login.html');
+  fs.readFile(adminLoginPagePath, 'utf8', (readError, rawHtml) => {
+    if (readError) {
+      response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      response.end('Failed to read admin-login.html');
+      return;
+    }
+    const activeHomeBackgroundCss = resolveActiveHomeBackground();
+    const renderedHtml = rawHtml.split(ACTIVE_HOME_BACKGROUND_PLACEHOLDER).join(activeHomeBackgroundCss);
+    response.writeHead(statusCode, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    response.end(renderedHtml);
+  });
+}
+
+/**
+ * Render admin.html with the current site-lock state (protection on/off,
+ * whether a password is set — never the password or its hash) inlined as
+ * JSON, so the dashboard shows correct state on first paint.
+ */
+function serveAdminDashboardPage(response) {
+  const adminPagePath = path.join(PROJECT_ROOT, 'imright', 'admin.html');
+  fs.readFile(adminPagePath, 'utf8', (readError, rawHtml) => {
+    if (readError) {
+      response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      response.end('Failed to read admin.html');
+      return;
+    }
+    const activeHomeBackgroundCss = resolveActiveHomeBackground();
+    const siteLock = readSiteLock();
+    const adminStateJson = JSON.stringify({
+      passwordProtectionEnabled: siteLock.passwordProtectionEnabled,
+      passwordSet: Boolean(siteLock.passwordHash),
+    });
+    let renderedHtml = rawHtml.split(ACTIVE_HOME_BACKGROUND_PLACEHOLDER).join(activeHomeBackgroundCss);
+    renderedHtml = renderedHtml.split('ADMIN_STATE_JSON').join(adminStateJson);
+    response.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    response.end(renderedHtml);
+  });
+}
+
 /**
  * Lets Google's crawlers (AdSense review + ad-serving bots) read the site
  * without a session, since the password gate would otherwise 401 them and
@@ -263,8 +326,60 @@ function isGoogleBotRequest(request) {
  */
 async function handleApiLogin(request, response) {
   const clientIp = getClientIp(request);
+  const lockoutKey = `site:${clientIp}`;
 
-  if (isLockedOut(clientIp)) {
+  if (isLockedOut(lockoutKey)) {
+    recordTrafficRequest('blocked');
+    sendJson(response, 429, { error: 'too_many_attempts' });
+    return;
+  }
+
+  let body;
+  try {
+    body = await readJsonBody(request);
+  } catch {
+    sendJson(response, 400, { error: 'invalid_json' });
+    return;
+  }
+
+  const siteLock = readSiteLock();
+  const password = typeof body.password === 'string' ? body.password : '';
+  if (!password || !safeCompareHash(password, siteLock.passwordHash)) {
+    recordLoginFailure(lockoutKey);
+    sendJson(response, 401, { error: 'invalid_password' });
+    return;
+  }
+
+  recordLoginSuccess(lockoutKey);
+  const token = createSessionToken(SESSION_SECRET, SESSION_MAX_AGE_MS);
+  // appendSetCookie (not setHeader) so this doesn't clobber the visitor/session
+  // identity cookies already queued on this response by resolveIdentity().
+  appendSetCookie(response, buildSessionCookie(SESSION_COOKIE_NAME, token, SESSION_MAX_AGE_MS, SERVE_MODE === 'prod'));
+  sendJson(response, 200, { ok: true });
+}
+
+/** POST /api/logout — clears the session cookie. */
+function handleApiLogout(response) {
+  appendSetCookie(response, buildExpiredCookie(SESSION_COOKIE_NAME, SERVE_MODE === 'prod'));
+  sendJson(response, 200, { ok: true });
+}
+
+/**
+ * POST /api/admin/login { password }
+ * Same shape as handleApiLogin, checked against ADMIN_PASSWORD (env) rather
+ * than the site-lock password, with its own session cookie and its own
+ * lockout bucket so guessing one password can't lock out the other.
+ */
+async function handleApiAdminLogin(request, response) {
+  if (!ADMIN_PASSWORD) {
+    sendJson(response, 503, { error: 'admin_disabled' });
+    return;
+  }
+
+  const clientIp = getClientIp(request);
+  const lockoutKey = `admin:${clientIp}`;
+
+  if (isLockedOut(lockoutKey)) {
     recordTrafficRequest('blocked');
     sendJson(response, 429, { error: 'too_many_attempts' });
     return;
@@ -279,24 +394,64 @@ async function handleApiLogin(request, response) {
   }
 
   const password = typeof body.password === 'string' ? body.password : '';
-  if (!password || !safeCompare(password, SITE_PASSWORD)) {
-    recordLoginFailure(clientIp);
+  if (!password || !safeCompare(password, ADMIN_PASSWORD)) {
+    recordLoginFailure(lockoutKey);
     sendJson(response, 401, { error: 'invalid_password' });
     return;
   }
 
-  recordLoginSuccess(clientIp);
-  const token = createSessionToken(SESSION_SECRET, SESSION_MAX_AGE_MS);
-  // appendSetCookie (not setHeader) so this doesn't clobber the visitor/session
-  // identity cookies already queued on this response by resolveIdentity().
-  appendSetCookie(response, buildSessionCookie(SESSION_COOKIE_NAME, token, SESSION_MAX_AGE_MS, SERVE_MODE === 'prod'));
+  recordLoginSuccess(lockoutKey);
+  const token = createSessionToken(ADMIN_SESSION_SECRET, ADMIN_SESSION_MAX_AGE_MS);
+  appendSetCookie(
+    response,
+    buildSessionCookie(ADMIN_SESSION_COOKIE_NAME, token, ADMIN_SESSION_MAX_AGE_MS, SERVE_MODE === 'prod')
+  );
   sendJson(response, 200, { ok: true });
 }
 
-/** POST /api/logout — clears the session cookie. */
-function handleApiLogout(response) {
-  appendSetCookie(response, buildExpiredCookie(SESSION_COOKIE_NAME, SERVE_MODE === 'prod'));
+/** POST /api/admin/logout — clears the admin session cookie. */
+function handleApiAdminLogout(response) {
+  appendSetCookie(response, buildExpiredCookie(ADMIN_SESSION_COOKIE_NAME, SERVE_MODE === 'prod'));
   sendJson(response, 200, { ok: true });
+}
+
+/**
+ * POST /api/admin/settings { passwordProtectionEnabled?, newPassword? }
+ * Requires an admin session. Updates whichever fields are present in
+ * data/site_lock.json and returns the resulting public state (never the
+ * password or its hash).
+ */
+async function handleApiAdminSettings(request, response) {
+  if (!isAdminAuthenticated(request)) {
+    sendJson(response, 401, { error: 'unauthenticated' });
+    return;
+  }
+
+  let body;
+  try {
+    body = await readJsonBody(request);
+  } catch {
+    sendJson(response, 400, { error: 'invalid_json' });
+    return;
+  }
+
+  const patch = {};
+  if (typeof body.passwordProtectionEnabled === 'boolean') {
+    patch.passwordProtectionEnabled = body.passwordProtectionEnabled;
+  }
+  if (typeof body.newPassword === 'string') {
+    if (!body.newPassword) {
+      sendJson(response, 400, { error: 'empty_password' });
+      return;
+    }
+    patch.passwordHash = hashPassword(body.newPassword);
+  }
+
+  const updated = writeSiteLock(patch);
+  sendJson(response, 200, {
+    passwordProtectionEnabled: updated.passwordProtectionEnabled,
+    passwordSet: Boolean(updated.passwordHash),
+  });
 }
 
 const MIME_TYPES = {
@@ -595,7 +750,40 @@ const server = http.createServer(async (request, response) => {
     return;
   }
 
-  if (!isAuthenticated(request)) {
+  // /admin and /api/admin/* are gated by their own admin session (see
+  // isAdminAuthenticated), independent of the main site's password lock —
+  // an admin must be able to reach it whether the site is open or locked.
+  if (request.method === 'POST' && urlPath === '/api/admin/login') {
+    await handleApiAdminLogin(request, response);
+    return;
+  }
+
+  if (request.method === 'POST' && urlPath === '/api/admin/logout') {
+    handleApiAdminLogout(response);
+    return;
+  }
+
+  if (request.method === 'POST' && urlPath === '/api/admin/settings') {
+    await handleApiAdminSettings(request, response);
+    return;
+  }
+
+  if ((request.method === 'GET' || request.method === 'HEAD') && urlPath === '/admin') {
+    if (!ADMIN_PASSWORD) {
+      response.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
+      response.end('Admin panel disabled: ADMIN_PASSWORD is not configured.');
+      return;
+    }
+    if (isAdminAuthenticated(request)) {
+      serveAdminDashboardPage(response);
+    } else {
+      serveAdminLoginPage(response);
+    }
+    return;
+  }
+
+  const siteLock = readSiteLock();
+  if (siteLock.passwordProtectionEnabled && !isAuthenticated(request)) {
     const isBotReadRequest =
       (request.method === 'GET' || request.method === 'HEAD') &&
       (urlPath === '/ads.txt' || isGoogleBotRequest(request));
