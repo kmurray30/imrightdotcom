@@ -151,9 +151,14 @@
       flex-wrap: wrap;
       gap: 8px;
     }
-    .belief-form__input {
+    .belief-form__input-wrap {
       flex: 1;
       min-width: 240px;
+      position: relative;
+    }
+    .belief-form__input {
+      width: 100%;
+      box-sizing: border-box;
       padding: 12px 14px;
       border-radius: 6px;
       border: 1px solid #d1d1d6;
@@ -172,6 +177,29 @@
     .belief-form__input:disabled {
       background: #f5f5f7;
       color: #a0a0a5;
+    }
+    /* Sits directly on top of the (empty) input and renders the animated
+     * placeholder text ourselves, instead of using the placeholder attribute
+     * — a real placeholder can't be scrolled, so long suggestions would get
+     * clipped at the input's right edge. This overlay is kept scrolled to
+     * its own right edge (see setOverlayText in the script below) so it
+     * behaves like real typed text: once it overflows, the view shifts to
+     * keep the end (and the blinking cursor) in view. */
+    .belief-form__placeholder-overlay {
+      position: absolute;
+      inset: 0;
+      box-sizing: border-box;
+      padding: 12px 14px;
+      /* Deliberately not display:flex — a flex container shrinks its
+       * (anonymous) text item to fit instead of letting it overflow, which
+       * would defeat the scrollLeft trick below by keeping scrollWidth
+       * pinned to clientWidth no matter how long the text gets. */
+      color: #a0a0a5;
+      font-size: 1rem;
+      font-family: inherit;
+      white-space: nowrap;
+      overflow: hidden;
+      pointer-events: none;
     }
     .belief-form__button {
       padding: 12px 20px;
@@ -371,15 +399,18 @@
       <form class="belief-form" id="beliefForm">
         <label class="belief-form__label" for="beliefInput">State your belief</label>
         <div class="belief-form__controls">
-          <input
-            id="beliefInput"
-            class="belief-form__input"
-            type="text"
-            name="belief"
-            placeholder="e.g. EV's destroy the grid"
-            autocomplete="off"
-            required
-          >
+          <div class="belief-form__input-wrap">
+            <input
+              id="beliefInput"
+              class="belief-form__input"
+              type="text"
+              name="belief"
+              placeholder="e.g. EV's destroy the grid"
+              autocomplete="off"
+              required
+            >
+            <div class="belief-form__placeholder-overlay" id="beliefPlaceholderOverlay" aria-hidden="true"></div>
+          </div>
           <button type="submit" class="belief-form__button" id="submitButton">Prove me right!</button>
         </div>
       </form>
@@ -435,7 +466,12 @@
   <script>
     const beliefForm = document.getElementById('beliefForm');
     const beliefInput = document.getElementById('beliefInput');
+    const beliefPlaceholderOverlay = document.getElementById('beliefPlaceholderOverlay');
     const submitButton = document.getElementById('submitButton');
+    // The HTML placeholder attribute is a no-JS fallback only — once this
+    // script runs, the overlay above takes over, so clear it to avoid the
+    // two rendering on top of each other.
+    beliefInput.placeholder = '';
     const progressElement = document.getElementById('progress');
     const progressStepElement = document.getElementById('progressStep');
     const progressBarElement = document.getElementById('progressBar');
@@ -677,8 +713,22 @@
       setTimeout(fn, delay);
     }
 
+    // Renders text into the overlay and scrolls it to its own right edge —
+    // exactly what a real input does once typed text overflows its width —
+    // so the end of a long suggestion (and its cursor) is always visible
+    // instead of being clipped.
+    function setOverlayText(text) {
+      beliefPlaceholderOverlay.textContent = text;
+      beliefPlaceholderOverlay.scrollLeft = beliefPlaceholderOverlay.scrollWidth;
+    }
+
+    function clearOverlayText() {
+      beliefPlaceholderOverlay.textContent = '';
+    }
+
     function runPlaceholderAnimation() {
       if (!canAnimatePlaceholder()) {
+        clearOverlayText();
         schedulePlaceholderStep(runPlaceholderAnimation, PAUSED_RETRY_MS);
         return;
       }
@@ -688,10 +738,11 @@
 
     function typePlaceholderWord(word, index) {
       if (!canAnimatePlaceholder()) {
+        clearOverlayText();
         schedulePlaceholderStep(runPlaceholderAnimation, PAUSED_RETRY_MS);
         return;
       }
-      beliefInput.placeholder = word.slice(0, index) + PLACEHOLDER_CURSOR;
+      setOverlayText(word.slice(0, index) + PLACEHOLDER_CURSOR);
       if (index < word.length) {
         schedulePlaceholderStep(() => typePlaceholderWord(word, index + 1), TYPE_DELAY_MS);
       } else {
@@ -701,11 +752,12 @@
 
     function blinkPlaceholderCursor(word, blinkCount) {
       if (!canAnimatePlaceholder()) {
+        clearOverlayText();
         schedulePlaceholderStep(runPlaceholderAnimation, PAUSED_RETRY_MS);
         return;
       }
       const showCursor = blinkCount % 2 === 0;
-      beliefInput.placeholder = word + (showCursor ? PLACEHOLDER_CURSOR : ' ');
+      setOverlayText(word + (showCursor ? PLACEHOLDER_CURSOR : ' '));
       if (blinkCount < HOLD_BLINK_COUNT) {
         schedulePlaceholderStep(() => blinkPlaceholderCursor(word, blinkCount + 1), BLINK_INTERVAL_MS);
       } else {
@@ -715,16 +767,24 @@
 
     function deletePlaceholderWord(word, index) {
       if (!canAnimatePlaceholder()) {
+        clearOverlayText();
         schedulePlaceholderStep(runPlaceholderAnimation, PAUSED_RETRY_MS);
         return;
       }
-      beliefInput.placeholder = word.slice(0, index) + PLACEHOLDER_CURSOR;
+      setOverlayText(word.slice(0, index) + PLACEHOLDER_CURSOR);
       if (index > 0) {
         schedulePlaceholderStep(() => deletePlaceholderWord(word, index - 1), DELETE_DELAY_MS);
       } else {
         schedulePlaceholderStep(runPlaceholderAnimation, BETWEEN_WORDS_DELAY_MS);
       }
     }
+
+    // Clear the overlay the instant the user interacts, rather than waiting
+    // for the next poll (up to PAUSED_RETRY_MS later) in canAnimatePlaceholder
+    // — otherwise stale animated text could briefly sit on top of what the
+    // user just focused or typed.
+    beliefInput.addEventListener('focus', clearOverlayText);
+    beliefInput.addEventListener('input', clearOverlayText);
 
     // Fetches a config text file and returns its non-comment, non-blank
     // lines (config/*.txt files use '#'-prefixed comment lines throughout).
