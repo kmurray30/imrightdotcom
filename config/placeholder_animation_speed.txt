@@ -3,4 +3,4 @@
 # lower = slower (e.g. 2 = twice as fast, 0.5 = half speed). Must be a
 # positive number. Edit freely; changes take effect on the next page
 # load, no restart needed.
-1
+1.5
