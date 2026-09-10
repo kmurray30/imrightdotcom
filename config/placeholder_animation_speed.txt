@@ -1,0 +1,6 @@
+# Speed multiplier for the belief input's animated placeholder (typing,
+# backspacing, and cursor blinking). 1 = normal speed. Higher = faster,
+# lower = slower (e.g. 2 = twice as fast, 0.5 = half speed). Must be a
+# positive number. Edit freely; changes take effect on the next page
+# load, no restart needed.
+1

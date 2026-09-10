@@ -623,37 +623,28 @@
     // Typewriter effect that cycles the belief input's placeholder through a
     // pool of example beliefs: types one out, holds with a blinking cursor,
     // backspaces it, then moves to the next. Suggestions are drawn in random
-    // order with no repeats until the whole pool has been shown once.
-    const PLACEHOLDER_SUGGESTIONS = [
-      "EV's destroy the grid",
-      "the moon landing was staged",
-      "cereal is a dessert",
-      "cats are secretly plotting against us",
-      "Mercury retrograde ruins my wifi",
-      "pineapple belongs on pizza",
-      "the earth is flat",
-      "5G towers control the weather",
-      "my ex is a narcissist",
-      "the government is hiding aliens",
-      "hot dogs are sandwiches",
-      "Bigfoot is real and unionized",
-      "Mondays should be illegal",
-      "cereal before milk is correct",
-      "birds aren't real",
-      "the Illuminati runs Hollywood",
-      "my horoscope is always right",
-      "chemtrails are mind control",
-      "Big Pharma is hiding the cure",
-      "Atlantis is still out there",
-    ];
+    // order with no repeats until the whole pool has been shown once. The
+    // pool itself lives in config/placeholder_suggestions.txt (one belief
+    // per line) so it can be edited without touching this file.
+    const PLACEHOLDER_SUGGESTIONS_URL = 'config/placeholder_suggestions.txt';
+    // Used only if the config file can't be fetched (offline, missing, etc).
+    const FALLBACK_PLACEHOLDER_SUGGESTIONS = ["EV's destroy the grid"];
+    let PLACEHOLDER_SUGGESTIONS = FALLBACK_PLACEHOLDER_SUGGESTIONS;
     const PLACEHOLDER_PREFIX = 'e.g. ';
     const PLACEHOLDER_CURSOR = '|';
-    const TYPE_DELAY_MS = 45;
-    const DELETE_DELAY_MS = 25;
+    const PLACEHOLDER_ANIMATION_SPEED_URL = 'config/placeholder_animation_speed.txt';
+    // Base delays at speed multiplier 1. Actual delays used by the animation
+    // (TYPE_DELAY_MS etc. below) are these divided by the loaded multiplier.
+    const BASE_TYPE_DELAY_MS = 45;
+    const BASE_DELETE_DELAY_MS = 25;
+    const BASE_BLINK_INTERVAL_MS = 450;
+    const BASE_BETWEEN_WORDS_DELAY_MS = 350;
     const HOLD_BLINK_COUNT = 5;
-    const BLINK_INTERVAL_MS = 450;
-    const BETWEEN_WORDS_DELAY_MS = 350;
     const PAUSED_RETRY_MS = 400;
+    let TYPE_DELAY_MS = BASE_TYPE_DELAY_MS;
+    let DELETE_DELAY_MS = BASE_DELETE_DELAY_MS;
+    let BLINK_INTERVAL_MS = BASE_BLINK_INTERVAL_MS;
+    let BETWEEN_WORDS_DELAY_MS = BASE_BETWEEN_WORDS_DELAY_MS;
 
     function shuffle(array) {
       const result = array.slice();
@@ -664,7 +655,7 @@
       return result;
     }
 
-    let placeholderQueue = shuffle(PLACEHOLDER_SUGGESTIONS);
+    let placeholderQueue = [];
     function nextPlaceholderSuggestion() {
       if (placeholderQueue.length === 0) {
         placeholderQueue = shuffle(PLACEHOLDER_SUGGESTIONS);
@@ -735,7 +726,50 @@
       }
     }
 
-    runPlaceholderAnimation();
+    // Fetches a config text file and returns its non-comment, non-blank
+    // lines (config/*.txt files use '#'-prefixed comment lines throughout).
+    async function fetchConfigLines(url) {
+      const response = await fetch(url, { cache: 'no-cache' });
+      if (!response.ok) throw new Error(`fetch failed (${response.status})`);
+      const rawText = await response.text();
+      return rawText
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith('#'));
+    }
+
+    async function loadPlaceholderSuggestions() {
+      try {
+        const suggestions = await fetchConfigLines(PLACEHOLDER_SUGGESTIONS_URL);
+        if (suggestions.length > 0) {
+          PLACEHOLDER_SUGGESTIONS = suggestions;
+        }
+      } catch (loadError) {
+        console.error('Could not load placeholder suggestions, using fallback:', loadError);
+      }
+    }
+
+    async function loadPlaceholderAnimationSpeed() {
+      try {
+        const lines = await fetchConfigLines(PLACEHOLDER_ANIMATION_SPEED_URL);
+        const speedMultiplier = parseFloat(lines[0]);
+        if (Number.isFinite(speedMultiplier) && speedMultiplier > 0) {
+          TYPE_DELAY_MS = BASE_TYPE_DELAY_MS / speedMultiplier;
+          DELETE_DELAY_MS = BASE_DELETE_DELAY_MS / speedMultiplier;
+          BLINK_INTERVAL_MS = BASE_BLINK_INTERVAL_MS / speedMultiplier;
+          BETWEEN_WORDS_DELAY_MS = BASE_BETWEEN_WORDS_DELAY_MS / speedMultiplier;
+        }
+      } catch (loadError) {
+        console.error('Could not load placeholder animation speed, using default:', loadError);
+      }
+    }
+
+    async function loadPlaceholderConfigAndStart() {
+      await Promise.all([loadPlaceholderSuggestions(), loadPlaceholderAnimationSpeed()]);
+      placeholderQueue = shuffle(PLACEHOLDER_SUGGESTIONS);
+      runPlaceholderAnimation();
+    }
+    loadPlaceholderConfigAndStart();
 
     function handleStreamEvent(event) {
       if (event.type === 'progress') {
