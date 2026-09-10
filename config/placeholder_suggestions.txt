@@ -1,0 +1,24 @@
+# One example belief per line — this is what cycles through the belief
+# input's animated placeholder on the landing page (index.html). Lines
+# starting with # are comments and blank lines are ignored. Edit freely;
+# changes take effect on the next page load, no restart needed.
+EV's destroy the grid
+the moon landing was staged
+cereal is a dessert
+cats are secretly plotting against us
+Mercury retrograde ruins my wifi
+pineapple belongs on pizza
+the earth is flat
+5G towers control the weather
+my ex is a narcissist
+the government is hiding aliens
+hot dogs are sandwiches
+Bigfoot is real and unionized
+Mondays should be illegal
+cereal before milk is correct
+birds aren't real
+the Illuminati runs Hollywood
+my horoscope is always right
+chemtrails are mind control
+Big Pharma is hiding the cure
+Atlantis is still out there
