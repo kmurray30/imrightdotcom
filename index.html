@@ -184,7 +184,7 @@
      * clipped at the input's right edge. This overlay is kept scrolled to
      * its own right edge (see setOverlayText in the script below) so it
      * behaves like real typed text: once it overflows, the view shifts to
-     * keep the end (and the blinking cursor) in view. */
+     * keep the end in view. */
     .belief-form__placeholder-overlay {
       position: absolute;
       inset: 0;
@@ -657,29 +657,27 @@
     });
 
     // Typewriter effect that cycles the belief input's placeholder through a
-    // pool of example beliefs: types one out, holds with a blinking cursor,
-    // backspaces it, then moves to the next. Suggestions are drawn in random
-    // order with no repeats until the whole pool has been shown once. The
-    // pool itself lives in config/placeholder_suggestions.txt (one belief
-    // per line) so it can be edited without touching this file.
+    // pool of example beliefs: types one out, holds, backspaces it, then
+    // moves to the next. Suggestions are drawn in random order with no
+    // repeats until the whole pool has been shown once. The pool itself
+    // lives in config/placeholder_suggestions.txt (one belief per line) so
+    // it can be edited without touching this file.
     const PLACEHOLDER_SUGGESTIONS_URL = 'config/placeholder_suggestions.txt';
     // Used only if the config file can't be fetched (offline, missing, etc).
     const FALLBACK_PLACEHOLDER_SUGGESTIONS = ["EV's destroy the grid"];
     let PLACEHOLDER_SUGGESTIONS = FALLBACK_PLACEHOLDER_SUGGESTIONS;
     const PLACEHOLDER_PREFIX = 'e.g. ';
-    const PLACEHOLDER_CURSOR = '|';
     const PLACEHOLDER_ANIMATION_SPEED_URL = 'config/placeholder_animation_speed.txt';
     // Base delays at speed multiplier 1. Actual delays used by the animation
     // (TYPE_DELAY_MS etc. below) are these divided by the loaded multiplier.
     const BASE_TYPE_DELAY_MS = 45;
     const BASE_DELETE_DELAY_MS = 25;
-    const BASE_BLINK_INTERVAL_MS = 450;
+    const BASE_HOLD_DURATION_MS = 2250;
     const BASE_BETWEEN_WORDS_DELAY_MS = 350;
-    const HOLD_BLINK_COUNT = 5;
     const PAUSED_RETRY_MS = 400;
     let TYPE_DELAY_MS = BASE_TYPE_DELAY_MS;
     let DELETE_DELAY_MS = BASE_DELETE_DELAY_MS;
-    let BLINK_INTERVAL_MS = BASE_BLINK_INTERVAL_MS;
+    let HOLD_DURATION_MS = BASE_HOLD_DURATION_MS;
     let BETWEEN_WORDS_DELAY_MS = BASE_BETWEEN_WORDS_DELAY_MS;
 
     function shuffle(array) {
@@ -715,8 +713,8 @@
 
     // Renders text into the overlay and scrolls it to its own right edge —
     // exactly what a real input does once typed text overflows its width —
-    // so the end of a long suggestion (and its cursor) is always visible
-    // instead of being clipped.
+    // so the end of a long suggestion is always visible instead of being
+    // clipped.
     function setOverlayText(text) {
       beliefPlaceholderOverlay.textContent = text;
       beliefPlaceholderOverlay.scrollLeft = beliefPlaceholderOverlay.scrollWidth;
@@ -742,26 +740,11 @@
         schedulePlaceholderStep(runPlaceholderAnimation, PAUSED_RETRY_MS);
         return;
       }
-      setOverlayText(word.slice(0, index) + PLACEHOLDER_CURSOR);
+      setOverlayText(word.slice(0, index));
       if (index < word.length) {
         schedulePlaceholderStep(() => typePlaceholderWord(word, index + 1), TYPE_DELAY_MS);
       } else {
-        blinkPlaceholderCursor(word, 0);
-      }
-    }
-
-    function blinkPlaceholderCursor(word, blinkCount) {
-      if (!canAnimatePlaceholder()) {
-        clearOverlayText();
-        schedulePlaceholderStep(runPlaceholderAnimation, PAUSED_RETRY_MS);
-        return;
-      }
-      const showCursor = blinkCount % 2 === 0;
-      setOverlayText(word + (showCursor ? PLACEHOLDER_CURSOR : ' '));
-      if (blinkCount < HOLD_BLINK_COUNT) {
-        schedulePlaceholderStep(() => blinkPlaceholderCursor(word, blinkCount + 1), BLINK_INTERVAL_MS);
-      } else {
-        schedulePlaceholderStep(() => deletePlaceholderWord(word, word.length), DELETE_DELAY_MS);
+        schedulePlaceholderStep(() => deletePlaceholderWord(word, word.length), HOLD_DURATION_MS);
       }
     }
 
@@ -771,7 +754,7 @@
         schedulePlaceholderStep(runPlaceholderAnimation, PAUSED_RETRY_MS);
         return;
       }
-      setOverlayText(word.slice(0, index) + PLACEHOLDER_CURSOR);
+      setOverlayText(word.slice(0, index));
       if (index > 0) {
         schedulePlaceholderStep(() => deletePlaceholderWord(word, index - 1), DELETE_DELAY_MS);
       } else {
@@ -816,7 +799,7 @@
         if (Number.isFinite(speedMultiplier) && speedMultiplier > 0) {
           TYPE_DELAY_MS = BASE_TYPE_DELAY_MS / speedMultiplier;
           DELETE_DELAY_MS = BASE_DELETE_DELAY_MS / speedMultiplier;
-          BLINK_INTERVAL_MS = BASE_BLINK_INTERVAL_MS / speedMultiplier;
+          HOLD_DURATION_MS = BASE_HOLD_DURATION_MS / speedMultiplier;
           BETWEEN_WORDS_DELAY_MS = BASE_BETWEEN_WORDS_DELAY_MS / speedMultiplier;
         }
       } catch (loadError) {
