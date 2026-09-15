@@ -20,6 +20,25 @@ export function safeCompare(a, b) {
   return crypto.timingSafeEqual(hashA, hashB);
 }
 
+/** One-way hash for a password at rest (e.g. in site-lock.js's JSON store). */
+export function hashPassword(password) {
+  return crypto.createHash('sha256').update(String(password)).digest('hex');
+}
+
+/** Timing-safe check of a plaintext password against a stored hex hash from hashPassword(). */
+export function safeCompareHash(password, hash) {
+  if (typeof hash !== 'string' || !hash) return false;
+  const candidateHash = Buffer.from(hashPassword(password), 'hex');
+  let storedHash;
+  try {
+    storedHash = Buffer.from(hash, 'hex');
+  } catch {
+    return false;
+  }
+  if (candidateHash.length !== storedHash.length) return false;
+  return crypto.timingSafeEqual(candidateHash, storedHash);
+}
+
 export function isLockedOut(ip) {
   const record = attemptsByIp.get(ip);
   return Boolean(record && record.lockedUntil && Date.now() < record.lockedUntil);
