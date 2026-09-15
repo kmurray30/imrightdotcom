@@ -2,16 +2,34 @@
 
 Four importable dashboards built on top of the metrics/logs `imright/scripts/observability.js` emits. This doc also lists the "bookmarked" investigative log queries — Grafana doesn't have an importable "saved query" object, so the canned queries below live as ready-made **Logs panels inside `04-weird-traffic-anomalies.json`**; this file is just a reference for pasting the same queries into Explore directly.
 
-## Before you import: two things to verify (5 minutes)
+## Schema
 
-I generated these against the metric/log names this code produces, and fixed the two issues I could identify for certain (OTel's Prometheus unit-suffix translation, and where log attributes land in Loki — see the code comments in `observability.js` for both). Everything else about the JSON/query structure I'm confident in. Two things I can't verify without your live Grafana Cloud instance:
+These are written in Grafana's newer `dashboard.grafana.app/v2` kind format (elements/layout/vizConfig), not the older flat `schemaVersion` format — matched to a real export from this Grafana Cloud instance. The outer envelope (`apiVersion`/`kind`/`metadata`/`spec`, `elements`, `GridLayout`/`GridLayoutItem` with `width`/`height`, `PanelQuery`/`DataQuery` with `datasource: {name}`, `QueryVariable`/`TextVariable`) is verified against [grafana/grafana's own CUE schema source](https://github.com/grafana/grafana/blob/main/apps/dashboard/kinds/v2/dashboard_spec.cue) plus the real dashboard JSON that was pasted back to me. Each panel's `vizConfig.spec.fieldConfig`/`options` internals are unchanged from a first draft written against the older schema — those belong to each panel plugin (stat, timeseries, table, ...) and are schema-version-agnostic, so v1↔v2 didn't touch them.
 
-1. **Metric names.** After your next deploy, open **Explore → your Prometheus/Mimir datasource → Metrics browser**, type `imright_` and see what autocompletes. It should match exactly what's in the table below (dots become underscores, counters get a `_total` suffix, histograms get `_bucket`/`_sum`/`_count`). If anything differs, it's a find-and-replace across the dashboard JSON files before importing.
-2. **Log query form.** Run one claim through the app, then in **Explore → your Loki datasource** run `{service_name="imright"} |= `interaction_summary`` and open one result's details panel. You should see the full JSON record in the log line itself (I made this the guaranteed path — see `logStructured()` — rather than relying on how Grafana Cloud surfaces OTel log attributes as Structured Metadata, which I couldn't verify sight-unseen). If you *do* see it, every `| json` query below will work as written.
+Two things in this version I couldn't verify against your instance and are worth a quick check:
+
+1. **The Loki datasource's name.** Every query's `datasource.name` is a literal string, not a picker — v2 has no `${DS_...}` import-time placeholder mechanism (confirmed: `DataQuery.datasource` only has an optional `name` field). `grafanacloud-prom` is confirmed from your paste; `grafanacloud-logs` is my best guess by Grafana Cloud's usual naming convention. If your Loki datasource is actually named something else, it's a find-and-replace of `"grafanacloud-logs"` across the 3 files that use it (01, 04).
+2. **The Loki `DataQuery.spec` field names** (`expr`, `queryType`, `resultFormat`) — your pasted example was Prometheus-only, so this part is extrapolated from the classic Loki query shape rather than confirmed against a real v2 example. Fastest check: add one blank Logs panel to any dashboard in the UI, run a query, open its JSON model, and diff the field names against what's in `04-weird-traffic-anomalies.json`.
+
+Also worth a glance: `vizConfig.version` is set to `"13.3.0-34259522365"` on every panel — the exact string from your barchart example. Core panel types (stat/timeseries/table/logs/text/bargauge/piechart) ship as part of Grafana core, so they should all share your instance's build version, but this field is almost certainly non-blocking metadata (like classic schema's `pluginVersion`) rather than something Grafana validates strictly on save.
+
+## Metric names — still worth verifying (5 minutes)
+
+I generated the queries against the metric/log names this code produces, and fixed the two issues I could identify for certain (OTel's Prometheus unit-suffix translation, and where log attributes land in Loki — see the code comments in `observability.js` for both). One thing left that I can't verify without your live instance:
+
+**Metric names.** After your next deploy, open **Explore → your Prometheus/Mimir datasource → Metrics browser**, type `imright_` and see what autocompletes. It should match exactly what's in the table below (dots become underscores, counters get a `_total` suffix, histograms get `_bucket`/`_sum`/`_count`). If anything differs, it's a find-and-replace across the dashboard JSON files.
+
+**Log query form.** Run one claim through the app, then in **Explore → your Loki datasource** run `{service_name="imright"} |= `interaction_summary`` and open one result's details panel. You should see the full JSON record in the log line itself (the guaranteed path — see `logStructured()` — rather than relying on how Grafana Cloud surfaces OTel log attributes as Structured Metadata). If you *do* see it, every `| json` query below will work as written.
 
 ## Importing
 
-Grafana → Dashboards → New → Import → Upload JSON file. Pick each file in `imright/observability/dashboards/`. On import, Grafana will prompt you to map `DS_PROMETHEUS` and `DS_LOKI` to your actual Grafana Cloud datasources (that's what the `${DS_...}` placeholders are for — the dashboards don't hardcode a datasource UID, since I don't have yours).
+This `apiVersion`/`kind`/`metadata`/`spec` envelope is the API/provisioning-native resource format, not necessarily what the classic **Dashboards → New → Import → Upload JSON** screen expects (that flow historically wants the bare classic dashboard object, no envelope). I don't have hands-on access to your instance to confirm which of these actually accepts it — try, in order:
+
+1. **Dashboards → New → Import → Upload JSON file** — if your Grafana version's import flow auto-detects the v2 envelope, this just works.
+2. Create a blank dashboard, open its **Settings → JSON Model** editor, and paste the file's content in directly.
+3. If you provision dashboards as code / via API or a `kubectl`-style workflow, this is exactly the resource shape that path expects.
+
+If (1) rejects the file outright, that's the signal to fall back to (2).
 
 | File | Dashboard |
 | --- | --- |
