@@ -881,8 +881,8 @@
         "kind": "Panel",
         "spec": {
           "id": 15,
-          "title": "Trace a specific interaction (fill in the Interaction ID variable above)",
-          "description": "Set the interaction_id dashboard variable to an interaction_id from any panel above to pull its full step-by-step trace, if one was captured (sampled, error, or anomaly-tagged — see verbosityTiers in config/telemetry_thresholds.json).",
+          "title": "Trace a specific interaction (edit the query below with a real interaction_id)",
+          "description": "Dropped the dashboard-variable version of this panel — this instance's Grafana schema doesn't (yet) accept a TextVariable kind, and rather than guess at another unverified name, this is a template: copy an interaction_id from any panel above, paste it over REPLACE_WITH_INTERACTION_ID in the query, and run it. Pulls the full step-by-step trace, if one was captured (sampled, error, or anomaly-tagged — see verbosityTiers in config/telemetry_thresholds.json).",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -901,7 +901,7 @@
                         "name": "grafanacloud-logs"
                       },
                       "spec": {
-                        "expr": "{service_name=\"imright\"} |= \"$interaction_id\"",
+                        "expr": "{service_name=\"imright\"} |= \"REPLACE_WITH_INTERACTION_ID\"",
                         "queryType": "range"
                       }
                     }
@@ -1169,18 +1169,6 @@
       "to": "now"
     },
     "title": "imright — Weird Traffic & Anomalies",
-    "variables": [
-      {
-        "kind": "TextVariable",
-        "spec": {
-          "name": "interaction_id",
-          "current": {
-            "text": "",
-            "value": ""
-          },
-          "query": ""
-        }
-      }
-    ]
+    "variables": []
   }
 }
