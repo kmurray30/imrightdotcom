@@ -3,3 +3,7 @@ startCommand = "npm start"
 
 [deploy.envVars]
 SERVE_MODE = "prod"
+# Points at a Railway volume mounted at /data (Service -> Settings -> Volumes).
+# Without a volume attached here, this still works but the Pixabay cache
+# (SQLite DB + downloaded images) is wiped on every redeploy.
+IMAGE_CACHE_DIR = "/data/pixabay-cache"
