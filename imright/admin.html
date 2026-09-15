@@ -113,7 +113,7 @@
       color: #444;
       margin: 0 0 6px;
     }
-    input[type="password"] {
+    input[type="text"] {
       width: 100%;
       padding: 10px 12px;
       font-size: 15px;
@@ -183,9 +183,7 @@
       <h2>Site password</h2>
       <p class="password-status" id="passwordStatus">…</p>
       <label class="field-label" for="newPassword">New password</label>
-      <input type="password" id="newPassword" placeholder="New site password" autocomplete="new-password">
-      <label class="field-label" for="confirmPassword">Confirm new password</label>
-      <input type="password" id="confirmPassword" placeholder="Confirm new password" autocomplete="new-password">
+      <input type="text" id="newPassword" placeholder="New site password" autocomplete="off" spellcheck="false">
       <button class="primary" id="savePasswordButton" type="button">Save password</button>
       <div class="msg" id="passwordMsg"></div>
     </div>
@@ -201,7 +199,6 @@
     const toggleMsg = document.getElementById('toggleMsg');
     const passwordStatus = document.getElementById('passwordStatus');
     const newPasswordInput = document.getElementById('newPassword');
-    const confirmPasswordInput = document.getElementById('confirmPassword');
     const savePasswordButton = document.getElementById('savePasswordButton');
     const passwordMsg = document.getElementById('passwordMsg');
     const logoutButton = document.getElementById('logoutButton');
@@ -241,17 +238,11 @@
 
     savePasswordButton.addEventListener('click', async () => {
       const newPassword = newPasswordInput.value;
-      const confirmPassword = confirmPasswordInput.value;
       passwordMsg.textContent = '';
       passwordMsg.className = 'msg';
 
       if (!newPassword) {
         passwordMsg.textContent = 'Enter a new password.';
-        passwordMsg.className = 'msg error';
-        return;
-      }
-      if (newPassword !== confirmPassword) {
-        passwordMsg.textContent = 'Passwords do not match.';
         passwordMsg.className = 'msg error';
         return;
       }
@@ -267,8 +258,9 @@
         state = await response.json();
         render();
         newPasswordInput.value = '';
-        confirmPasswordInput.value = '';
-        passwordMsg.textContent = 'Password updated.';
+        // Shown once, from what the browser just sent — never re-fetchable after
+        // this, since the server only ever stores a hash, not the password itself.
+        passwordMsg.textContent = 'Password updated. New password: ' + newPassword;
         passwordMsg.className = 'msg success';
       } catch {
         passwordMsg.textContent = 'Could not update — try again.';
