@@ -51,28 +51,26 @@ async function main() {
   // memory, but still get useful concurrency within each chunk.
   const CHUNK_SIZE = 2000;
   let chunk = [];
-  let totalArticles = 0;
-  let totalParagraphs = 0;
+  const totals = { articles: 0, paragraphs: 0, alreadyCurrent: 0 };
 
   for await (const line of rl) {
     if (!line.trim()) continue;
     chunk.push(line);
     if (chunk.length >= CHUNK_SIZE) {
-      totalParagraphs += await processChunk(chunk);
-      totalArticles += chunk.length;
+      await processChunk(chunk, totals);
       chunk = [];
     }
   }
   if (chunk.length > 0) {
-    totalParagraphs += await processChunk(chunk);
-    totalArticles += chunk.length;
+    await processChunk(chunk, totals);
   }
 
-  console.log(`\nDone. Indexed ${totalArticles} articles, ${totalParagraphs} paragraphs.`);
+  console.log(
+    `\nDone. Indexed ${totals.articles} articles (${totals.alreadyCurrent} already current, skipped), ${totals.paragraphs} paragraphs.`
+  );
 }
 
-async function processChunk(lines) {
-  let paragraphCount = 0;
+async function processChunk(lines, totals) {
   await processInBatches(
     lines,
     async (line) => {
@@ -89,11 +87,15 @@ async function processChunk(lines) {
         wikitext,
         versionIdentifier: article.version?.identifier,
       });
-      paragraphCount += result.paragraphCount;
+      totals.articles++;
+      totals.paragraphs += result.paragraphCount;
+      if (result.skipped) totals.alreadyCurrent++;
+      if (totals.articles % 500 === 0) {
+        console.log(`  ...${totals.articles} articles processed (${totals.paragraphs} paragraphs, ${totals.alreadyCurrent} already current)`);
+      }
     },
     CONCURRENCY
   );
-  return paragraphCount;
 }
 
 main().catch((error) => {

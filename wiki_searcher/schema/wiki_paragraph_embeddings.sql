@@ -12,9 +12,10 @@ CREATE TABLE IF NOT EXISTS wiki_paragraph_embeddings (
   id                 BIGSERIAL PRIMARY KEY,
   title              TEXT NOT NULL,
   paragraph_index    INT NOT NULL,
-  paragraph_text     TEXT NOT NULL,
+  section            TEXT NOT NULL,        -- section this paragraph came from; also folded into the embedded text (see embeddingIndex.js)
+  paragraph_text     TEXT NOT NULL,        -- cleaned (markup/ref-stripped), unprefixed — the embedding prefix is search-time only, not stored
   embedding          vector(384) NOT NULL,
-  version_identifier BIGINT,              -- Wikimedia's version.identifier, for staleness checks on refresh
+  version_identifier BIGINT,               -- Wikimedia's version.identifier; matched on re-run to skip already-current articles
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (title, paragraph_index)
 );

@@ -99,28 +99,33 @@ async function main() {
   console.log(`Found ${titles.length} changed titles. Re-embedding...`);
 
   let updated = 0;
-  let skipped = 0;
+  let alreadyCurrent = 0;
+  let noMatch = 0;
   await processInBatches(
     titles,
     async (title) => {
       const article = await fetchArticleByTitle(title);
       if (!article) {
-        skipped++; // deleted, moved, or otherwise no longer an exact match
+        noMatch++; // deleted, moved, or otherwise no longer an exact match
         return;
       }
       const page = toWikiPage(article);
-      await upsertArticleEmbeddings({
+      const result = await upsertArticleEmbeddings({
         title: page.title,
         wikitext: page.source,
         versionIdentifier: page.revision_id,
       });
-      updated++;
-      if (updated % 100 === 0) console.log(`  ...${updated} re-embedded`);
+      if (result.skipped) {
+        alreadyCurrent++; // recentchanges listed it, but this exact revision is already indexed
+      } else {
+        updated++;
+        if (updated % 100 === 0) console.log(`  ...${updated} re-embedded`);
+      }
     },
     REFRESH_CONCURRENCY
   );
 
-  console.log(`\nDone. Re-embedded ${updated} articles, skipped ${skipped}.`);
+  console.log(`\nDone. Re-embedded ${updated} articles, ${alreadyCurrent} already current, ${noMatch} no longer found.`);
 }
 
 main().catch((error) => {
