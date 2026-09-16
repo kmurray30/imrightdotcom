@@ -39,6 +39,9 @@ If (1) rejects the file outright, that's the signal to fall back to (2).
 | `03-pipeline-external-apis.json` | Pipeline & External APIs — MediaWiki/Pixabay/link-checker health, latency, rate limits |
 | `04-weird-traffic-anomalies.json` | Weird Traffic & Anomalies — anomaly tag breakdown + all bookmarked log queries |
 | `05-image-cache.json` | Pixabay Image Cache — hit/miss rate per cache tier (search/metadata/file), L1 query-vs-image dedup ratio, L2/L3 size over time, downloaded bytes, and a cross-check against real Pixabay call/rate-limit volume |
+| `06-rate-limits.json` | Rate Limits — tokens/calls over time per dependency (XAI, MediaWiki, Pixabay), each with a solid-red "rate limited" strip stacked directly beneath it |
+
+**Dashboard 06's stacked-panel design.** The activity graph (tokens/calls) and the "rate limited" flare for each dependency are two separate panels, one directly under the other, rather than one panel with a second series on a secondary axis. Grafana can genuinely overlay both on one panel (a field override to color/style one series differently, on its own axis) — but a dedicated full-height red bar chart reads as more "glaring" than a squeezed-in secondary-axis series, and the scales are wildly different (thousands of tokens vs. 0-5 rate-limit events) which makes a shared axis awkward regardless. Since the dashboard already sets `cursorSync: "Crosshair"`, hovering either panel shows a synced vertical line on the other, so lining up "did the call rate drop right when this went red" costs nothing extra despite being two panels. XAI's rate-limit signal comes from `imright_llm_calls_total{status="rate_limited"}`, not `imright_external_rate_limited_total` — XAI has its own retry loop (`utils/grok.js`) rather than going through the shared `callExternalApi` wrapper that MediaWiki/Pixabay use, so it never touches that counter.
 
 ## Bookmarked LogQL queries (Explore-ready)
 
