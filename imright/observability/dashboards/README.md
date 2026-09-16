@@ -46,6 +46,8 @@ All against the Loki datasource, all also live as Logs panels on dashboard 4.
 
 | Answers | Query |
 | --- | --- |
+| **All errors, any source** (broadest safety net) | `{service_name="imright"} \| detected_level="error"` |
+| Warnings (rate-limits etc., not failures) | `{service_name="imright"} \| detected_level="warn"` |
 | Failed interactions | `{service_name="imright"} \|= \`interaction_summary\` \| json \| success=\`false\`` |
 | Interactions costing more than $0.05 | `{service_name="imright"} \|= \`interaction_summary\` \| json \| cost_usd > 0.05` |
 | Interactions with more than 8 LLM calls | `{service_name="imright"} \|= \`interaction_summary\` \| json \| llm_calls > 8` |
@@ -57,6 +59,8 @@ All against the Loki datasource, all also live as Logs panels on dashboard 4.
 | Costs by visitor (needs `| json`'s extracted `visitor_id` field) | `{service_name="imright"} \|= \`interaction_summary\` \| json \| visitor_id="<visitor_id>"` |
 
 Note the `rate_limited`/`suspected_abuse`/`duplicate_request` queries use a plain substring match (`\|=`) rather than `\| json \| tags=~...` — `tags` is a JSON array, and Loki's array handling through `| json` is inconsistent enough that matching the raw JSON text (which `logStructured()` guarantees contains the tag name) is the safer bet.
+
+`detected_level` is Loki's own severity-derived label (populated from the OTel `severityNumber`/`severityText` every log call sets) and is the simplest way to catch *everything* logged at a given severity, structured or plain — but it has documented edge cases specifically for OTLP-sourced severity. As a guaranteed fallback for structured logs specifically, `logStructured()` also puts `level` directly in the JSON body, so `{service_name="imright"} | json | level="error"` works even if `detected_level` ever misbehaves. Plain `log()` calls (heartbeat, page views, submits) have no such fallback — they're not JSON, so `detected_level` is the only lever there, which is fine since none of those are ever error-severity in practice.
 
 ### "What % of spend comes from the top 1% / 5% / 10% of interactions?"
 
