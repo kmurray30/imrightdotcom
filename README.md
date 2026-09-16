@@ -64,7 +64,7 @@ Every outbound XAI/MediaWiki/Pixabay call goes through a shared wrapper (`utils/
 
 ### Dashboards
 
-Four importable Grafana dashboards (Product & Traffic, Cost & LLM, Pipeline & External APIs, Weird Traffic & Anomalies) plus the bookmarked investigative log queries live in `imright/observability/dashboards/` — see that directory's README for import steps and a couple of things worth verifying against your live Grafana Cloud instance before trusting the panels.
+Five importable Grafana dashboards (Product & Traffic, Cost & LLM, Pipeline & External APIs, Weird Traffic & Anomalies, Pixabay Image Cache) plus the bookmarked investigative log queries live in `imright/observability/dashboards/` — see that directory's README for import steps and a couple of things worth verifying against your live Grafana Cloud instance before trusting the panels.
 
 ## Run the site (landing page + pipeline)
 
