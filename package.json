@@ -17,6 +17,7 @@
     "serve-output": "node imright/scripts/serve-output.js"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.0.0",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/api-logs": "^0.222.0",
     "@opentelemetry/core": "^2.11.0",
@@ -27,6 +28,7 @@
     "@opentelemetry/sdk-metrics": "^2.11.0",
     "minisearch": "^6.0.0",
     "pg": "^8.13.1",
+    "pgvector": "^0.2.0",
     "sharp": "^0.35.4",
     "yaml": "^2.8.2"
   }

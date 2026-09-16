@@ -7,3 +7,7 @@ SERVE_MODE = "prod"
 # Without a volume attached here, this still works but the Pixabay cache
 # (SQLite DB + downloaded images) is wiped on every redeploy.
 IMAGE_CACHE_DIR = "/data/pixabay-cache"
+# 'mediawiki' (default) or 'wikimedia' — see wiki_searcher/index.js. Only
+# flip to 'wikimedia' once the pgvector index is built and the WIKIMEDIA_*
+# vars below are set; see README for the full checklist.
+WIKI_SEARCH_PROVIDER = "mediawiki"

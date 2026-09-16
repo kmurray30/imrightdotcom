@@ -14,6 +14,19 @@ Set `DATABASE_URL` to point at Postgres. On Railway, add a Postgres database to 
 
 `/admin` itself is gated by a separate password: set `ADMIN_PASSWORD` in `env.local` for local dev, and as a real environment variable in Railway for prod. Unlike the site gate, the server still starts if it's unset — `/admin` just responds 503 until it's configured. Both gates use signed session cookies with a secret generated fresh per process, so restarting the server logs everyone (site visitors and admin) out; that's fine for a simple gate like this.
 
+### Wiki search provider
+
+`WIKI_SEARCH_PROVIDER` picks how `wiki_searcher` finds and fetches Wikipedia articles (see `wiki_searcher/index.js`): `mediawiki` (default) hits the free, rate-limited MediaWiki Action API directly; `wikimedia` searches a self-hosted pgvector paragraph index and fetches content via Wikimedia Enterprise's On-demand API. Both return the identical shape, so nothing downstream (`wiki_filterer`, `ref_extractor`) needs to know which one ran.
+
+To use `wikimedia`, all of the following need to be in place first:
+
+1. `wiki_searcher/schema/wiki_paragraph_embeddings.sql` run once against `DATABASE_URL` (enables the pgvector extension and creates the index table).
+2. The vector index actually populated — see `wiki_searcher/scripts/build-index-from-snapshot.js` (one-time, needs a downloaded/extracted Wikimedia Enterprise Snapshot) and `wiki_searcher/scripts/refresh-daily.js` (scheduled, keeps it current — see the script header for what it does and why it's safe to run on a schedule with zero impact on live requests).
+3. `wiki_searcher/scripts/wikimedia-login.js` run once to mint `WIKIMEDIA_REFRESH_TOKEN` (see below).
+4. The env vars: `WIKIMEDIA_USERNAME`, `WIKIMEDIA_REFRESH_TOKEN` (and `WIKIMEDIA_PASSWORD` only as a one-time bootstrap for step 3 — safe to remove after).
+
+Only then set `WIKI_SEARCH_PROVIDER=wikimedia`. Until all of the above exists, leave it unset/`mediawiki` — the `wikimedia` provider will throw on the first missing piece (no silent fallback).
+
 Server logs + metrics push to Grafana Cloud (Loki + Prometheus, via OTLP) if `OTEL_EXPORTER_OTLP_ENDPOINT`/`OTEL_EXPORTER_OTLP_HEADERS` are set (Grafana Cloud → Connections → OpenTelemetry). Unset, it silently falls back to console-only. Query in Grafana Explore with `{service_name="imright"}` (logs) or the metric names below (Prometheus). `service.version` (deployed git SHA) is attached to every log/metric so a cost/retry/latency change can be correlated with a specific deploy.
 
 ### Telemetry design
