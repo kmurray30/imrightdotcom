@@ -78,6 +78,8 @@ let externalLatencyHistogram = null;
 let externalRateLimitCounter = null;
 let retryCounter = null;
 
+let imageCacheLookupCounter = null;
+
 let interactionCostHistogram = null;
 let interactionTokensHistogram = null;
 let interactionLlmCallsHistogram = null;
@@ -179,6 +181,18 @@ export function logStructured(level, message, record) {
     body: line,
     attributes: record,
   });
+}
+
+/** Dynamic import (not a top-level one) so this file has no static dependency
+ * on utils/image-cache.js, which itself imports from this file. */
+async function getImageCacheStats() {
+  try {
+    const { getCacheStats } = await import('../../utils/image-cache.js');
+    return getCacheStats();
+  } catch (error) {
+    console.error('[observability] failed to read image cache stats:', error.message);
+    return null;
+  }
 }
 
 /** Sets up OTLP logging + metrics and starts the heartbeat. Safe to call once at server startup. */
@@ -292,6 +306,54 @@ export function startObservability() {
       description: 'Retries of any kind, labeled by kind (llm_transport, llm_json, external), pipeline_step, reason.',
     });
 
+    imageCacheLookupCounter = meter.createCounter('imright.image_cache.lookups', {
+      description: 'Pixabay image-cache lookups, labeled by tier (search, metadata, file) and result (hit, miss).',
+    });
+
+    // Size-over-time gauges for the Pixabay image cache (utils/image-cache.js).
+    // Read via one batched callback per export tick rather than one import/query
+    // per gauge. Dynamic import (not a top-of-file import) deliberately, so this
+    // file never has a static dependency on utils/image-cache.js, which itself
+    // imports recordImageCacheLookup/log from here.
+    const cacheSearchQueriesGauge = meter.createObservableGauge('imright.image_cache.search_cache_queries', {
+      description: 'L1: distinct normalized queries currently cached (the "source" side of the query -> image map).',
+    });
+    const cacheSearchDistinctImagesGauge = meter.createObservableGauge('imright.image_cache.search_cache_distinct_images', {
+      description: 'L1: distinct top-ranked image IDs referenced across all cached queries (the "destination" side) — source/destination is the query dedup ratio.',
+    });
+    const cacheMetadataImagesGauge = meter.createObservableGauge('imright.image_cache.metadata_images', {
+      description: 'L2: distinct Pixabay image IDs with metadata cached.',
+    });
+    const cacheDownloadedImagesGauge = meter.createObservableGauge('imright.image_cache.downloaded_images', {
+      description: 'L3: distinct images actually downloaded + compressed to disk.',
+    });
+    const cacheDownloadedBytesGauge = meter.createObservableGauge('imright.image_cache.downloaded_bytes', {
+      description: 'L3: total bytes of downloaded/compressed image files on disk.',
+    });
+    const cacheDbFileBytesGauge = meter.createObservableGauge('imright.image_cache.db_file_bytes', {
+      description: 'Size of the image-cache SQLite file on disk.',
+    });
+    meter.addBatchObservableCallback(
+      async (result) => {
+        const stats = await getImageCacheStats();
+        if (!stats) return;
+        result.observe(cacheSearchQueriesGauge, stats.searchCacheQueries);
+        result.observe(cacheSearchDistinctImagesGauge, stats.searchCacheDistinctImages);
+        result.observe(cacheMetadataImagesGauge, stats.metadataImages);
+        result.observe(cacheDownloadedImagesGauge, stats.downloadedImages);
+        result.observe(cacheDownloadedBytesGauge, stats.downloadedBytes);
+        result.observe(cacheDbFileBytesGauge, stats.dbFileBytes);
+      },
+      [
+        cacheSearchQueriesGauge,
+        cacheSearchDistinctImagesGauge,
+        cacheMetadataImagesGauge,
+        cacheDownloadedImagesGauge,
+        cacheDownloadedBytesGauge,
+        cacheDbFileBytesGauge,
+      ]
+    );
+
     interactionCostHistogram = meter.createHistogram('imright.interaction.cost_usd', {
       description: 'Total estimated LLM cost in USD per completed interaction (distribution — use for p50/p90/p95/p99).',
       advice: { explicitBucketBoundaries: [0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 2, 5] },
@@ -399,6 +461,12 @@ export function recordRateLimitMetric({ service, operation }) {
 /** kind: 'llm_transport' | 'llm_json' | 'external'. */
 export function recordRetryMetric({ kind, pipelineStep, reason }) {
   retryCounter?.add(1, { kind, pipeline_step: pipelineStep ?? 'unknown', reason: reason ?? 'unknown' });
+}
+
+/** Call once per Pixabay image-cache lookup at any tier (utils/image-cache.js).
+ * tier: 'search' | 'metadata' | 'file'. result: 'hit' | 'miss'. */
+export function recordImageCacheLookup({ tier, result }) {
+  imageCacheLookupCounter?.add(1, { tier, result });
 }
 
 let cachedThresholds = null;

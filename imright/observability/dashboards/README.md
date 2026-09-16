@@ -1,6 +1,6 @@
 # Grafana dashboards for imright
 
-Four importable dashboards built on top of the metrics/logs `imright/scripts/observability.js` emits. This doc also lists the "bookmarked" investigative log queries — Grafana doesn't have an importable "saved query" object, so the canned queries below live as ready-made **Logs panels inside `04-weird-traffic-anomalies.json`**; this file is just a reference for pasting the same queries into Explore directly.
+Five importable dashboards built on top of the metrics/logs `imright/scripts/observability.js` emits. This doc also lists the "bookmarked" investigative log queries — Grafana doesn't have an importable "saved query" object, so the canned queries below live as ready-made **Logs panels inside `04-weird-traffic-anomalies.json`**; this file is just a reference for pasting the same queries into Explore directly.
 
 ## Schema
 
@@ -17,6 +17,8 @@ Also worth a glance: `vizConfig.version` is set to `"13.3.0-34259522365"` on eve
 I generated the queries against the metric/log names this code produces, and fixed the two issues I could identify for certain (OTel's Prometheus unit-suffix translation, and where log attributes land in Loki — see the code comments in `observability.js` for both). One thing left that I can't verify without your live instance:
 
 **Metric names.** After your next deploy, open **Explore → your Prometheus/Mimir datasource → Metrics browser**, type `imright_` and see what autocompletes. It should match exactly what's in the table below (dots become underscores, counters get a `_total` suffix, histograms get `_bucket`/`_sum`/`_count`). If anything differs, it's a find-and-replace across the dashboard JSON files.
+
+**Extra scrutiny for dashboard 05 specifically:** every metric in dashboards 01-04 is a Counter or Histogram, both verified above. Dashboard 05 (`utils/image-cache.js`'s cache size gauges) introduces this codebase's first `ObservableGauge` instruments (`imright_image_cache_search_cache_queries` and friends) — same dot-to-underscore rule, but whether Gauges pick up any suffix at all through this OTLP→Prometheus pipeline (Counters get `_total`; Gauges typically get none) hasn't been checked against a live instance the way everything else here has. Do the Metrics browser check above before trusting dashboard 05's panels, and rename in the JSON if `imright_image_cache_lookups_total` and the six `imright_image_cache_*` gauges don't show up exactly as named.
 
 **Log query form.** Run one claim through the app, then in **Explore → your Loki datasource** run `{service_name="imright"} |= `interaction_summary`` and open one result's details panel. You should see the full JSON record in the log line itself (the guaranteed path — see `logStructured()` — rather than relying on how Grafana Cloud surfaces OTel log attributes as Structured Metadata). If you *do* see it, every `| json` query below will work as written.
 
@@ -36,6 +38,7 @@ If (1) rejects the file outright, that's the signal to fall back to (2).
 | `02-cost-llm.json` | Cost & LLM — spend, tokens, calls, p50/p90/p95/p99, cost by pipeline step/model, retries |
 | `03-pipeline-external-apis.json` | Pipeline & External APIs — MediaWiki/Pixabay/link-checker health, latency, rate limits |
 | `04-weird-traffic-anomalies.json` | Weird Traffic & Anomalies — anomaly tag breakdown + all bookmarked log queries |
+| `05-image-cache.json` | Pixabay Image Cache — hit/miss rate per cache tier (search/metadata/file), L1 query-vs-image dedup ratio, L2/L3 size over time, downloaded bytes, and a cross-check against real Pixabay call/rate-limit volume |
 
 ## Bookmarked LogQL queries (Explore-ready)
 
@@ -68,8 +71,10 @@ Divide (3) by (2). For an exact answer instead of a Loki-side approximation, it'
 ## Metric reference (post the unit-suffix fix)
 
 Counters (`_total` suffix from OTel's monotonic-sum convention):
-`imright_heartbeat_total`, `imright_page_view_total{page}`, `imright_submit_total`, `imright_http_requests_total{traffic_class}`, `imright_visitors_total{type}`, `imright_sessions_total`, `imright_interaction_started_total`, `imright_interaction_completed_total{status}`, `imright_interaction_tags_total{tag}`, `imright_llm_calls_total{provider,model,pipeline_step,status}`, `imright_llm_tokens_total{provider,model,pipeline_step,token_type}`, `imright_llm_cost_usd_total{provider,model,pipeline_step}`, `imright_external_calls_total{service,operation,status}`, `imright_external_rate_limited_total{service,operation}`, `imright_retries_total{kind,pipeline_step,reason}`.
+`imright_heartbeat_total`, `imright_page_view_total{page}`, `imright_submit_total`, `imright_http_requests_total{traffic_class}`, `imright_visitors_total{type}`, `imright_sessions_total`, `imright_interaction_started_total`, `imright_interaction_completed_total{status}`, `imright_interaction_tags_total{tag}`, `imright_llm_calls_total{provider,model,pipeline_step,status}`, `imright_llm_tokens_total{provider,model,pipeline_step,token_type}`, `imright_llm_cost_usd_total{provider,model,pipeline_step}`, `imright_external_calls_total{service,operation,status}`, `imright_external_rate_limited_total{service,operation}`, `imright_retries_total{kind,pipeline_step,reason}`, `imright_image_cache_lookups_total{tier,result}`.
 
 Histograms (`_bucket{le,...}` / `_sum` / `_count`): `imright_pipeline_time_to_ready_ms`, `imright_llm_latency_ms{provider,model,pipeline_step}`, `imright_external_latency_ms{service,operation}`, `imright_interaction_cost_usd`, `imright_interaction_tokens_total`, `imright_interaction_llm_calls`, `imright_interaction_llm_retries`, `imright_interaction_external_calls`, `imright_interaction_duration_ms`.
+
+Gauges (no suffix expected, but unverified — see the callout above): `imright_image_cache_search_cache_queries`, `imright_image_cache_search_cache_distinct_images`, `imright_image_cache_metadata_images`, `imright_image_cache_downloaded_images`, `imright_image_cache_downloaded_bytes`, `imright_image_cache_db_file_bytes`.
 
 Bucket boundaries were hand-picked for this app's actual value ranges (see `MS_BUCKETS_SHORT`/`MS_BUCKETS_EXTERNAL` and the per-histogram `advice.explicitBucketBoundaries` in `observability.js`) rather than left at the SDK default — the default buckets (0,5,10,25,50,75,100,...) would have dumped nearly every cost/call-count value into the first bucket, making `histogram_quantile` meaningless. If real traffic ends up concentrated in one bucket anyway, widen/narrow that histogram's boundaries and redeploy — old data stays queryable, it just has coarser resolution before the change.
