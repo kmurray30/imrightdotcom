@@ -109,6 +109,7 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
   const linkCheckOptions = { timeoutMs: linkCheckTimeoutMs };
 
   const deadLinks = [];
+  const archiveFallbacks = []; // live link failed but an archive_url was available, so we swapped to it
   let retriesUsed = 0;
   const linkAssessments = []; // { url, linkStatus, issueType, detail, timeMs, round }
 
@@ -153,12 +154,26 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
     if (!byTerm[searchTerm]) byTerm[searchTerm] = [];
     byTerm[searchTerm].push({
       link: citation.link,
+      archiveLink: citation.archiveLink ?? null,
       title: citation.title,
       content: citation.content,
       article_title: citation.article_title,
       rank,
     });
     return true;
+  }
+
+  /**
+   * Resolve a checked citation to what should actually be stored: if the live link passed,
+   * keep it (with its archive_url as a backup, when Wikipedia provided one). If it failed but
+   * an archive_url was available, fall back to that instead—there's no reason to keep the dead
+   * live link around once we know it's gone.
+   */
+  function resolveCheckedCitation(citation) {
+    const isLiveValid = validityCache.get(citation.link) === true;
+    if (isLiveValid) return citation;
+    if (citation.archiveLink) return { ...citation, link: citation.archiveLink, archiveLink: null };
+    return null;
   }
 
   // Round 1: collect top k links per term, check all concurrently
@@ -205,14 +220,18 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
           const citation = urlToCitation.get(result.url);
           const termRanks = urlToTermRanks.get(result.url) ?? [];
           for (const { searchTerm, rank } of termRanks) {
-            deadLinks.push({
-              url: result.url,
-              reason: result.detail || result.issueType,
-              searchTerm,
-              rank,
-              title: citation?.title ?? result.url,
-              content: citation?.content ?? '',
-            });
+            if (citation?.archiveLink) {
+              archiveFallbacks.push({ url: result.url, archiveUrl: citation.archiveLink, searchTerm, rank });
+            } else {
+              deadLinks.push({
+                url: result.url,
+                reason: result.detail || result.issueType,
+                searchTerm,
+                rank,
+                title: citation?.title ?? result.url,
+                content: citation?.content ?? '',
+              });
+            }
           }
         }
       }
@@ -227,8 +246,8 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
       const citation = batch[index];
       if (!citation.link) continue;
       const rank = index + 1;
-      const isValid = checkLinks ? validityCache.get(citation.link) : true;
-      if (isValid === true && addCitation(citation, searchTerm, rank)) validAddedForTerm++;
+      const resolved = checkLinks ? resolveCheckedCitation(citation) : citation;
+      if (resolved && addCitation(resolved, searchTerm, rank)) validAddedForTerm++;
     }
     if (checkLinks && validAddedForTerm < minRefsPerTerm && citations.length > topMatchesPerTerm) {
       failedTerms.push({ searchTerm, citations });
@@ -281,14 +300,18 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
           const citation = round2UrlToCitation.get(result.url);
           const termRanks = round2UrlToTermRanks.get(result.url) ?? [];
           for (const { searchTerm, rank } of termRanks) {
-            deadLinks.push({
-              url: result.url,
-              reason: result.detail || result.issueType,
-              searchTerm,
-              rank,
-              title: citation?.title ?? result.url,
-              content: citation?.content ?? '',
-            });
+            if (citation?.archiveLink) {
+              archiveFallbacks.push({ url: result.url, archiveUrl: citation.archiveLink, searchTerm, rank });
+            } else {
+              deadLinks.push({
+                url: result.url,
+                reason: result.detail || result.issueType,
+                searchTerm,
+                rank,
+                title: citation?.title ?? result.url,
+                content: citation?.content ?? '',
+              });
+            }
           }
         }
       }
@@ -300,8 +323,8 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
       for (const citation of batch) {
         if (!citation.link) continue;
         rankOffset++;
-        const isValid = validityCache.get(citation.link);
-        if (isValid === true) addCitation(citation, searchTerm, rankOffset);
+        const resolved = resolveCheckedCitation(citation);
+        if (resolved) addCitation(resolved, searchTerm, rankOffset);
       }
     }
   }
@@ -310,8 +333,8 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
   const rawExtractedCount = termToCitations.reduce((sum, { citations }) => sum + citations.length, 0);
 
   const linkStats = checkLinks
-    ? { retries: retriesUsed, deadLinks, deadLinksCount: deadLinks.length }
-    : { retries: 0, deadLinks: [], deadLinksCount: 0 };
+    ? { retries: retriesUsed, deadLinks, deadLinksCount: deadLinks.length, archiveFallbacks, archiveFallbacksCount: archiveFallbacks.length }
+    : { retries: 0, deadLinks: [], deadLinksCount: 0, archiveFallbacks: [], archiveFallbacksCount: 0 };
 
   // Write link_stats when slug provided and we have assessments
   if (slug && linkAssessments.length > 0) {

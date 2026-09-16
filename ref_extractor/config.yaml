@@ -8,13 +8,13 @@ citation_types:
   - dictionary
   - encyclopedia
 
-# URL patterns to exclude (paywalls, archives, low-quality sources)
+# URL patterns to exclude (paywalls, low-quality sources)
 # Citation link is dropped if any pattern matches (case-insensitive substring)
+# Note: archive.org/web.archive.org are intentionally NOT here—they're the archive_url
+# fallback (see searchThenExtract.js) and are whitelisted (skip-HEAD-check) in linkWhitelist.js.
 exclude_url_patterns:
   - pqarchiver.com
   - pqasb.pqarchiver.com
-  - archive.org
-  - web.archive.org
   # - nytimes.com/archives/
   - scribd.com
   - jstor.org
