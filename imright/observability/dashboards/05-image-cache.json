@@ -30,7 +30,7 @@
     "liveNow": false,
     "preload": false,
     "tags": ["imright"],
-    "title": "imright — Pixabay image cache",
+    "title": "Pixabay Image Cache",
     "variables": [],
     "timeSettings": {
       "autoRefresh": "1m",
