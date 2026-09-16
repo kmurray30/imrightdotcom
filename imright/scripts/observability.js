@@ -170,7 +170,11 @@ export function log(level, message, attributes = {}) {
  * line's size is a trivial cost for not having to guess.
  */
 export function logStructured(level, message, record) {
-  const line = JSON.stringify({ message, ...record });
+  // `level` rides inside the JSON body itself (not just OTel severity) so `| json | level="error"`
+  // works unconditionally — Loki's own severity-derived `detected_level` label is documented to
+  // exist for exactly this, but has known edge cases specifically around OTLP-sourced severity,
+  // so this stays a self-contained guarantee rather than one more thing to hope holds up.
+  const line = JSON.stringify({ level, message, ...record });
   console.error(`[${level}] ${message} ${line}`);
   if (!otelLogger) return;
   otelLogger.emit({
