@@ -134,7 +134,8 @@ function buildUrlToIndex(citations) {
  * (utils/image-cache.js) and copy them into this article's local images dir.
  * Runs lookups concurrently. Returns Map of key -> filename for successful ones.
  *
- * @param {object} article - Parsed article with photo_query (top-level) and sections[].photo_query
+ * @param {object} article - Parsed article with photo_query/photo_description
+ *   (top-level) and sections[].photo_query/photo_description
  * @param {string} slug - Filename-safe slug
  * @param {string} projectRoot - Absolute path to project root
  * @returns {Promise<Map<string, string>>} - Map of 'hero'|'section-0'|... -> filename (e.g. 'hero.webp')
@@ -147,26 +148,31 @@ export async function fetchAndDownloadImages(article, slug, projectRoot) {
 
   const heroQuery = article?.photo_query;
   if (heroQuery && typeof heroQuery === 'string' && heroQuery.trim()) {
-    queries.push({ key: 'hero', query: heroQuery.trim() });
+    queries.push({ key: 'hero', simpleQuery: heroQuery.trim(), richDescription: article?.photo_description });
   }
 
   const sections = article?.sections ?? [];
   sections.forEach((section, index) => {
     const sectionQuery = section?.photo_query;
     if (sectionQuery && typeof sectionQuery === 'string' && sectionQuery.trim()) {
-      queries.push({ key: `section-${index}`, query: sectionQuery.trim() });
+      queries.push({
+        key: `section-${index}`,
+        simpleQuery: sectionQuery.trim(),
+        richDescription: section?.photo_description,
+      });
     }
   });
 
   if (queries.length === 0) return imagePaths;
 
-  // Resolve each query through the shared Pixabay cache (search + metadata +
-  // download/compress are all deduped by image ID there), then copy the
-  // cached file into this article's own images dir.
+  // Resolve each query through the shared Pixabay cache (embedding search +
+  // simple-term search + metadata + download/compress are all deduped by
+  // image ID there), then copy the cached file into this article's own
+  // images dir.
   const results = await Promise.all(
-    queries.map(async ({ key, query }) => {
+    queries.map(async ({ key, simpleQuery, richDescription }) => {
       try {
-        const cached = await getCachedImage(query);
+        const cached = await getCachedImage({ richDescription, simpleQuery });
         if (!cached) return null;
         const filename = `${key}.webp`;
         const destPath = path.join(imagesDir, filename);
@@ -174,7 +180,7 @@ export async function fetchAndDownloadImages(article, slug, projectRoot) {
         fs.copyFileSync(cached.filePath, destPath);
         return { key, filename };
       } catch (err) {
-        console.error(`Image cache lookup failed for "${query}":`, err.message);
+        console.error(`Image cache lookup failed for "${simpleQuery}":`, err.message);
         return null;
       }
     })
