@@ -41,6 +41,8 @@ Every pipeline run is one **interaction**, identified by `interaction_id` (the s
 | counter + histogram | `imright_external_calls_total{service,operation,status}`, `imright_external_latency_ms{...}` | every MediaWiki/Pixabay/link-checker attempt |
 | counter | `imright_external_rate_limited_total{service,operation}` | a 429 from an external dependency |
 | histogram | `imright_interaction_cost_usd`, `_tokens_total`, `_llm_calls`, `_llm_retries`, `_external_calls`, `_duration_ms` | once per completed interaction — use `histogram_quantile(0.9, ...)` etc. for p50/p90/p95/p99 |
+| counter | `imright_image_cache_lookups_total{tier="search"\|"metadata"\|"file",result="hit"\|"miss"}` | every Pixabay image-cache lookup (`utils/image-cache.js`), at each of its three tiers |
+| gauge | `imright_image_cache_search_cache_queries`, `_search_cache_distinct_images`, `_metadata_images`, `_downloaded_images`, `_downloaded_bytes`, `_db_file_bytes` | cache size, sampled once per metrics export tick (L1 query/distinct-image counts, L2 metadata rows, L3 downloaded images/bytes, SQLite file size) |
 
 ### Interaction summary (Loki)
 
