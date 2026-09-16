@@ -19,6 +19,8 @@ import {
   resetTokenUsage,
   computeCost,
 } from '../utils/grok.js';
+import { backfillImageEmbeddings } from '../utils/image-cache.js';
+import { log } from './scripts/observability.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..');
@@ -247,6 +249,19 @@ export async function runPipeline(claim, options = {}) {
   // Page is ready; open browser now so user can read while step 7 runs
   onPageReady(slug);
 
+  // Fire-and-forget, kicked off only now (never before the page is shown):
+  // compute CLIP embeddings for any images this run downloaded but hasn't
+  // embedded yet. Not awaited here — it runs concurrently with step 7's
+  // counterarguments call below (which is itself a multi-second LLM round
+  // trip the visitor isn't blocked on either), and is awaited once at the
+  // very end purely so it can't outlive the process, never on the path to
+  // onPageReady. Failures are caught inside backfillImageEmbeddings itself
+  // (logged, not thrown) — this is a "future lookups benefit" side effect,
+  // never something that should affect this run's outcome.
+  const embeddingBackfillPromise = backfillImageEmbeddings().catch((err) => {
+    log('warn', 'image embedding backfill failed', { error: err?.message ?? String(err) });
+  });
+
   // Write run-stats synchronously so the debug generator can read it
   const runStatsPath = path.join(PROJECT_ROOT, 'run-stats', `${slug}.json`);
   fs.mkdirSync(path.dirname(runStatsPath), { recursive: true });
@@ -353,6 +368,11 @@ export async function runPipeline(claim, options = {}) {
       });
     }
   }
+
+  // Let the embedding backfill finish (it's had the entire step-7 duration to
+  // run concurrently already) so it can't outlive this function/process —
+  // errors were already caught and logged above, so this never throws.
+  await embeddingBackfillPromise;
 
   // Generate debug page once at the end (after table is complete)
   try {

@@ -41,8 +41,9 @@ Every pipeline run is one **interaction**, identified by `interaction_id` (the s
 | counter + histogram | `imright_external_calls_total{service,operation,status}`, `imright_external_latency_ms{...}` | every MediaWiki/Pixabay/link-checker attempt |
 | counter | `imright_external_rate_limited_total{service,operation}` | a 429 from an external dependency |
 | histogram | `imright_interaction_cost_usd`, `_tokens_total`, `_llm_calls`, `_llm_retries`, `_external_calls`, `_duration_ms` | once per completed interaction — use `histogram_quantile(0.9, ...)` etc. for p50/p90/p95/p99 |
-| counter | `imright_image_cache_lookups_total{tier="search"\|"metadata"\|"file",result="hit"\|"miss"}` | every Pixabay image-cache lookup (`utils/image-cache.js`), at each of its three tiers |
-| gauge | `imright_image_cache_search_cache_queries`, `_search_cache_distinct_images`, `_metadata_images`, `_downloaded_images`, `_downloaded_bytes`, `_db_file_bytes` | cache size, sampled once per metrics export tick (L1 query/distinct-image counts, L2 metadata rows, L3 downloaded images/bytes, SQLite file size) |
+| counter | `imright_image_cache_lookups_total{tier="embedding"\|"search"\|"metadata"\|"file",result="hit"\|"miss"}` | every Pixabay image-cache lookup (`utils/image-cache.js`), at each of its four stages |
+| histogram | `imright_image_cache_embedding_similarity{rank="1"\|"2"\|"3"}`, `imright_image_cache_embedding_latency_ms{kind="query"\|"image"}` | cosine similarity of the top 3 embedding-index candidates on every search; CLIP embedding latency (query = search-time text, blocking; image = new-image embedding, deferred until after page-ready) |
+| gauge | `imright_image_cache_search_cache_queries`, `_search_cache_distinct_images`, `_metadata_images`, `_downloaded_images`, `_downloaded_bytes`, `_db_file_bytes`, `_embedded_images` | cache size, sampled once per metrics export tick (stage 1 query/distinct-image counts, stage 2 metadata rows/downloaded images+bytes, SQLite file size, stage 0 embedded-image count) |
 
 ### Interaction summary (Loki)
 
@@ -65,6 +66,8 @@ Every outbound XAI/MediaWiki/Pixabay call goes through a shared wrapper (`utils/
 ### Dashboards
 
 Five importable Grafana dashboards (Product & Traffic, Cost & LLM, Pipeline & External APIs, Weird Traffic & Anomalies, Pixabay Image Cache) plus the bookmarked investigative log queries live in `imright/observability/dashboards/` — see that directory's README for import steps and a couple of things worth verifying against your live Grafana Cloud instance before trusting the panels.
+
+The image cache's embedding-search behavior is tunable via env vars, no redeploy needed for the values themselves (though a code change is needed to point Grafana panels at a new number): `IMAGE_CACHE_SIMILARITY_THRESHOLD` (default `0.28`, unverified placeholder — see `utils/embeddings.js`) is the cosine-similarity cutoff for reusing a locally-embedded image instead of asking Pixabay; `IMAGE_CACHE_SIZE_WARNING_BYTES` (default 2GB) is when a `warn`-level log fires for total downloaded-image bytes, checked at most once per 6h maintenance sweep.
 
 ## Run the site (landing page + pipeline)
 

@@ -48,7 +48,7 @@
         "spec": {
           "id": 1,
           "title": "Hit rate % by tier",
-          "description": "search = L1 (query -> ranked Pixabay IDs, 24h TTL). metadata = L2 (was this image ID already known from a different query?). file = L3 (was the compressed file already on disk?). A dropping line means that tier is doing less work for you.",
+          "description": "embedding = stage 0 (did a rich description score close enough to a stored image's own CLIP embedding?). search = stage 1 (query -> ranked Pixabay IDs, 24h TTL, only reached on an embedding miss). metadata = stage 2 (was this image ID already known from a different query?). file = stage 2 (was the compressed file already on disk?). A dropping line means that tier is doing less work for you.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -384,7 +384,7 @@
         "spec": {
           "id": 7,
           "title": "L3: downloaded bytes on disk (Railway volume usage)",
-          "description": "Sum of compressed WebP file sizes on disk. This, plus the SQLite file size, is what determines how big your Railway volume needs to be.",
+          "description": "Sum of compressed WebP file sizes on disk. This, plus the SQLite file size, is what determines how big your Railway volume needs to be. Red threshold line matches image-cache.js's IMAGE_CACHE_SIZE_WARNING_BYTES default (2GB, env-tunable) — a warn-level log fires at that point too (search Loki for \"image cache size exceeds warning threshold\"), checked at most once per 6h maintenance sweep, not per request.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -422,7 +422,23 @@
             "version": "13.3.0-34259522365",
             "spec": {
               "fieldConfig": {
-                "defaults": { "unit": "bytes", "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" } },
+                "defaults": {
+                  "unit": "bytes",
+                  "custom": {
+                    "drawStyle": "line",
+                    "fillOpacity": 10,
+                    "lineWidth": 1,
+                    "showPoints": "never",
+                    "thresholdsStyle": { "mode": "line" }
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      { "value": null, "color": "green" },
+                      { "value": 2147483648, "color": "red" }
+                    ]
+                  }
+                },
                 "overrides": []
               },
               "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } }
@@ -657,6 +673,249 @@
             }
           }
         }
+      },
+      "panel-12": {
+        "kind": "Panel",
+        "spec": {
+          "id": 12,
+          "title": "Stage 0: embedded images vs downloaded images",
+          "description": "downloaded_images (L3, from panel 6) vs embedded_images (distinct images with a stored CLIP embedding, the actual search-index size). embedded should briefly lag downloaded and then catch up — embeddings are computed after page-ready, not before (see the runPipeline hook in imright/index.js) — not lag forever.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "A",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": { "name": "grafanacloud-prom" },
+                      "spec": {
+                        "editorMode": "code",
+                        "exemplar": false,
+                        "expr": "imright_image_cache_downloaded_images",
+                        "instant": false,
+                        "range": true,
+                        "legendFormat": "downloaded (L3)"
+                      }
+                    }
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "B",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": { "name": "grafanacloud-prom" },
+                      "spec": {
+                        "editorMode": "code",
+                        "exemplar": false,
+                        "expr": "imright_image_cache_embedded_images",
+                        "instant": false,
+                        "range": true,
+                        "legendFormat": "embedded (stage 0 index)"
+                      }
+                    }
+                  }
+                }
+              ],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "vizConfig": {
+            "group": "timeseries",
+            "kind": "VizConfig",
+            "version": "13.3.0-34259522365",
+            "spec": {
+              "fieldConfig": {
+                "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 5, "lineWidth": 1, "showPoints": "never" } },
+                "overrides": []
+              },
+              "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+            }
+          }
+        }
+      },
+      "panel-13": {
+        "kind": "Panel",
+        "spec": {
+          "id": 13,
+          "title": "Embedding-index similarity score by rank (p50)",
+          "description": "Median cosine similarity of the top 3 candidates on every embedding search. The similarity-match threshold (EMBEDDING_SIMILARITY_THRESHOLD, currently 0.28, env-tunable, NOT empirically verified) decides hit vs miss on rank 1 only. If rank-1 sits just under the threshold a lot, the threshold is probably too strict; if rank-2/3 track rank-1 closely, the corpus may have a lot of near-duplicate matches for common queries.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "A",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": { "name": "grafanacloud-prom" },
+                      "spec": {
+                        "editorMode": "code",
+                        "exemplar": false,
+                        "expr": "histogram_quantile(0.5, sum by (le, rank) (rate(imright_image_cache_embedding_similarity_bucket[$__rate_interval])))",
+                        "instant": false,
+                        "range": true,
+                        "legendFormat": "rank {{rank}}"
+                      }
+                    }
+                  }
+                }
+              ],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "vizConfig": {
+            "group": "timeseries",
+            "kind": "VizConfig",
+            "version": "13.3.0-34259522365",
+            "spec": {
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "min": 0,
+                  "max": 1,
+                  "custom": {
+                    "drawStyle": "line",
+                    "fillOpacity": 5,
+                    "lineWidth": 1,
+                    "showPoints": "never",
+                    "thresholdsStyle": { "mode": "line" }
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      { "value": null, "color": "transparent" },
+                      { "value": 0.28, "color": "orange" }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+            }
+          }
+        }
+      },
+      "panel-14": {
+        "kind": "Panel",
+        "spec": {
+          "id": 14,
+          "title": "CLIP embedding latency p95 by kind",
+          "description": "query = embedding the rich description on the request path (blocking — needed before deciding what image to show). image = embedding a newly downloaded image, deferred until after page-ready (imright/index.js), runs concurrently with the counterarguments LLM call. A cold first-ever call also pays model-load time, so an early one-off spike here is expected, not a regression.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "A",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": { "name": "grafanacloud-prom" },
+                      "spec": {
+                        "editorMode": "code",
+                        "exemplar": false,
+                        "expr": "histogram_quantile(0.95, sum by (le, kind) (rate(imright_image_cache_embedding_latency_ms_bucket[$__rate_interval])))",
+                        "instant": false,
+                        "range": true,
+                        "legendFormat": "{{kind}}"
+                      }
+                    }
+                  }
+                }
+              ],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "vizConfig": {
+            "group": "timeseries",
+            "kind": "VizConfig",
+            "version": "13.3.0-34259522365",
+            "spec": {
+              "fieldConfig": {
+                "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "fillOpacity": 5, "lineWidth": 1, "showPoints": "never" } },
+                "overrides": []
+              },
+              "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+            }
+          }
+        }
+      },
+      "panel-15": {
+        "kind": "Panel",
+        "spec": {
+          "id": 15,
+          "title": "Embedding search misses (rate)",
+          "description": "Rate of embedding-index misses — a rich description scored below threshold against everything in the local corpus, and fell back to a live Pixabay search. High and flat over a long period for the same handful of concepts is the \"chronically weak Pixabay result\" edge case discussed when this was designed — worth spot-checking which queries those are (via the interaction_trace logs) rather than just watching the number.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "A",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": { "name": "grafanacloud-prom" },
+                      "spec": {
+                        "editorMode": "code",
+                        "exemplar": false,
+                        "expr": "sum(rate(imright_image_cache_lookups_total{tier=\"embedding\",result=\"miss\"}[$__rate_interval]))",
+                        "instant": false,
+                        "range": true,
+                        "legendFormat": "embedding misses/sec"
+                      }
+                    }
+                  }
+                }
+              ],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "vizConfig": {
+            "group": "timeseries",
+            "kind": "VizConfig",
+            "version": "13.3.0-34259522365",
+            "spec": {
+              "fieldConfig": {
+                "defaults": { "unit": "reqps", "min": 0, "custom": { "drawStyle": "bars", "fillOpacity": 60, "lineWidth": 1, "showPoints": "never" } },
+                "overrides": []
+              },
+              "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } }
+            }
+          }
+        }
       }
     },
     "layout": {
@@ -673,7 +932,11 @@
           { "kind": "GridLayoutItem", "spec": { "x": 16, "y": 32, "width": 8, "height": 8, "element": { "kind": "ElementReference", "name": "panel-8" } } },
           { "kind": "GridLayoutItem", "spec": { "x": 0, "y": 40, "width": 12, "height": 6, "element": { "kind": "ElementReference", "name": "panel-9" } } },
           { "kind": "GridLayoutItem", "spec": { "x": 12, "y": 40, "width": 12, "height": 6, "element": { "kind": "ElementReference", "name": "panel-10" } } },
-          { "kind": "GridLayoutItem", "spec": { "x": 0, "y": 46, "width": 24, "height": 8, "element": { "kind": "ElementReference", "name": "panel-11" } } }
+          { "kind": "GridLayoutItem", "spec": { "x": 0, "y": 46, "width": 24, "height": 8, "element": { "kind": "ElementReference", "name": "panel-11" } } },
+          { "kind": "GridLayoutItem", "spec": { "x": 0, "y": 54, "width": 24, "height": 8, "element": { "kind": "ElementReference", "name": "panel-12" } } },
+          { "kind": "GridLayoutItem", "spec": { "x": 0, "y": 62, "width": 12, "height": 8, "element": { "kind": "ElementReference", "name": "panel-13" } } },
+          { "kind": "GridLayoutItem", "spec": { "x": 12, "y": 62, "width": 12, "height": 8, "element": { "kind": "ElementReference", "name": "panel-14" } } },
+          { "kind": "GridLayoutItem", "spec": { "x": 0, "y": 70, "width": 24, "height": 8, "element": { "kind": "ElementReference", "name": "panel-15" } } }
         ]
       }
     }

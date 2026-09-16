@@ -50,6 +50,13 @@ const HEARTBEAT_INTERVAL_MS = 60_000;
 // seconds to a couple minutes) into one or two buckets, making p50/p90/p95/p99 useless.
 const MS_BUCKETS_SHORT = [200, 500, 1000, 2000, 3000, 5000, 8000, 12000, 20000, 30000, 45000, 60000, 90000];
 const MS_BUCKETS_EXTERNAL = [50, 100, 250, 500, 1000, 2000, 4000, 8000, 15000, 20000];
+// CLIP embedding latency: a warm forward pass is typically tens-to-low-hundreds of ms,
+// but the very first call on a cold process also pays model-load/download time, hence
+// the wide tail up to 6s rather than clipping everything into one overflow bucket.
+const MS_BUCKETS_EMBEDDING = [10, 25, 50, 100, 200, 400, 800, 1500, 3000, 6000];
+// Cosine similarity of two L2-normalized CLIP vectors ranges -1..1, but real matches for
+// this app's use case cluster well inside 0..1 — fine-grained buckets there, coarser above.
+const SIMILARITY_BUCKETS = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
 
 let loggerProvider = null;
 let otelLogger = null;
@@ -79,6 +86,8 @@ let externalRateLimitCounter = null;
 let retryCounter = null;
 
 let imageCacheLookupCounter = null;
+let embeddingSimilarityHistogram = null;
+let embeddingLatencyHistogram = null;
 
 let interactionCostHistogram = null;
 let interactionTokensHistogram = null;
@@ -311,7 +320,15 @@ export function startObservability() {
     });
 
     imageCacheLookupCounter = meter.createCounter('imright.image_cache.lookups', {
-      description: 'Pixabay image-cache lookups, labeled by tier (search, metadata, file) and result (hit, miss).',
+      description: 'Pixabay image-cache lookups, labeled by tier (embedding, search, metadata, file) and result (hit, miss).',
+    });
+    embeddingSimilarityHistogram = meter.createHistogram('imright.image_cache.embedding_similarity', {
+      description: 'Cosine similarity of the embedding-index search, labeled by rank (1, 2, 3 — the top 3 candidates for every search).',
+      advice: { explicitBucketBoundaries: SIMILARITY_BUCKETS },
+    });
+    embeddingLatencyHistogram = meter.createHistogram('imright.image_cache.embedding_latency_ms', {
+      description: 'CLIP embedding latency in ms, labeled by kind (query = embedding search text, image = embedding a newly downloaded image).',
+      advice: { explicitBucketBoundaries: MS_BUCKETS_EMBEDDING },
     });
 
     // Size-over-time gauges for the Pixabay image cache (utils/image-cache.js).
@@ -337,6 +354,9 @@ export function startObservability() {
     const cacheDbFileBytesGauge = meter.createObservableGauge('imright.image_cache.db_file_bytes', {
       description: 'Size of the image-cache SQLite file on disk.',
     });
+    const cacheEmbeddedImagesGauge = meter.createObservableGauge('imright.image_cache.embedded_images', {
+      description: 'Distinct images with a stored CLIP embedding (the embedding-search index size). Lags downloaded_images briefly — embeddings are computed after page-ready, not before.',
+    });
     meter.addBatchObservableCallback(
       async (result) => {
         const stats = await getImageCacheStats();
@@ -347,6 +367,7 @@ export function startObservability() {
         result.observe(cacheDownloadedImagesGauge, stats.downloadedImages);
         result.observe(cacheDownloadedBytesGauge, stats.downloadedBytes);
         result.observe(cacheDbFileBytesGauge, stats.dbFileBytes);
+        result.observe(cacheEmbeddedImagesGauge, stats.embeddedImages);
       },
       [
         cacheSearchQueriesGauge,
@@ -355,6 +376,7 @@ export function startObservability() {
         cacheDownloadedImagesGauge,
         cacheDownloadedBytesGauge,
         cacheDbFileBytesGauge,
+        cacheEmbeddedImagesGauge,
       ]
     );
 
@@ -468,9 +490,24 @@ export function recordRetryMetric({ kind, pipelineStep, reason }) {
 }
 
 /** Call once per Pixabay image-cache lookup at any tier (utils/image-cache.js).
- * tier: 'search' | 'metadata' | 'file'. result: 'hit' | 'miss'. */
+ * tier: 'embedding' | 'search' | 'metadata' | 'file'. result: 'hit' | 'miss'. */
 export function recordImageCacheLookup({ tier, result }) {
   imageCacheLookupCounter?.add(1, { tier, result });
+}
+
+/** Call once per embedding-index search with the top 3 cosine similarity scores
+ * (fewer if the corpus doesn't have 3 images yet) — a hit/miss alone doesn't show
+ * whether a miss was a near-thing (0.29 against a 0.3 threshold) or nothing close. */
+export function recordEmbeddingSearch({ top1, top2, top3 }) {
+  if (top1 != null) embeddingSimilarityHistogram?.record(top1, { rank: '1' });
+  if (top2 != null) embeddingSimilarityHistogram?.record(top2, { rank: '2' });
+  if (top3 != null) embeddingSimilarityHistogram?.record(top3, { rank: '3' });
+}
+
+/** Call once per CLIP embedding computation. kind: 'query' (embedding search text,
+ * on the request path) | 'image' (embedding a newly downloaded image, deferred). */
+export function recordEmbeddingLatency({ kind, ms }) {
+  embeddingLatencyHistogram?.record(ms, { kind });
 }
 
 let cachedThresholds = null;
