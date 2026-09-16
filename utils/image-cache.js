@@ -23,6 +23,7 @@ import { fileURLToPath } from 'url';
 import { DatabaseSync } from 'node:sqlite';
 import sharp from 'sharp';
 import { searchImages, downloadImage } from './pixabay.js';
+import { log, recordImageCacheLookup } from '../imright/scripts/observability.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..');
@@ -62,6 +63,7 @@ function getDb() {
       metadata TEXT NOT NULL,
       metadata_fetched_at INTEGER NOT NULL,
       file_path TEXT,
+      file_size_bytes INTEGER,
       downloaded_at INTEGER,
       last_used_at INTEGER
     );
@@ -93,12 +95,17 @@ function upsertSearchCache(database, query, imageIds) {
 
 function upsertImageMetadata(database, hits) {
   const now = Date.now();
-  const stmt = database.prepare(
+  const existsStmt = database.prepare('SELECT 1 FROM images WHERE id = ?');
+  const upsertStmt = database.prepare(
     `INSERT INTO images (id, tags, metadata, metadata_fetched_at) VALUES (?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET tags = excluded.tags, metadata = excluded.metadata, metadata_fetched_at = excluded.metadata_fetched_at`
   );
   for (const hit of hits) {
-    stmt.run(hit.id, hit.tags ?? '', JSON.stringify(hit), now);
+    // L2 "hit" = this image ID was already known from a previous, different
+    // search — i.e. cross-query dedup actually paying off; "miss" = brand new.
+    const alreadyKnown = !!existsStmt.get(hit.id);
+    recordImageCacheLookup({ tier: 'metadata', result: alreadyKnown ? 'hit' : 'miss' });
+    upsertStmt.run(hit.id, hit.tags ?? '', JSON.stringify(hit), now);
   }
 }
 
@@ -121,9 +128,11 @@ async function ensureImageFile(database, id) {
 
   const now = Date.now();
   if (row.file_path && fs.existsSync(row.file_path)) {
+    recordImageCacheLookup({ tier: 'file', result: 'hit' });
     database.prepare('UPDATE images SET last_used_at = ? WHERE id = ?').run(now, id);
     return { id, filePath: row.file_path };
   }
+  recordImageCacheLookup({ tier: 'file', result: 'miss' });
 
   const metadata = JSON.parse(row.metadata);
   const sourceUrl = metadata.webformatURL ?? metadata.largeImageURL;
@@ -137,9 +146,10 @@ async function ensureImageFile(database, id) {
     return null;
   }
 
+  const fileSizeBytes = fs.statSync(filePath).size;
   database
-    .prepare('UPDATE images SET file_path = ?, downloaded_at = ?, last_used_at = ? WHERE id = ?')
-    .run(filePath, now, now, id);
+    .prepare('UPDATE images SET file_path = ?, file_size_bytes = ?, downloaded_at = ?, last_used_at = ? WHERE id = ?')
+    .run(filePath, fileSizeBytes, now, now, id);
   return { id, filePath };
 }
 
@@ -184,6 +194,7 @@ export async function getCachedImage(rawQuery) {
   const database = getDb();
   const cached = getSearchCacheRow(database, query);
   const isFresh = cached && Date.now() - cached.fetched_at < SEARCH_TTL_MS;
+  recordImageCacheLookup({ tier: 'search', result: isFresh ? 'hit' : 'miss' });
 
   let imageIds = isFresh ? JSON.parse(cached.image_ids) : null;
   if (!imageIds) {
@@ -195,10 +206,56 @@ export async function getCachedImage(rawQuery) {
     } else if (cached) {
       // Pixabay search failed/rate-limited: fall back to this exact query's
       // own stale result rather than returning nothing.
+      log('warn', 'image_cache search fallback to stale', { query, ageMs: Date.now() - cached.fetched_at });
       imageIds = JSON.parse(cached.image_ids);
     }
   }
   if (!imageIds || imageIds.length === 0) return null;
 
   return ensureImageFile(database, imageIds[0]);
+}
+
+/**
+ * Point-in-time cache size stats, for periodic metrics reporting (see
+ * imright/scripts/observability.js). Cheap enough to call every heartbeat:
+ * a handful of COUNT/SUM queries over a small local SQLite file, plus one
+ * fs.statSync for the DB file itself.
+ *
+ * @returns {{
+ *   searchCacheQueries: number,        // L1: distinct cached queries ("source")
+ *   searchCacheDistinctImages: number, // L1: distinct top-ranked images referenced ("destination")
+ *   metadataImages: number,            // L2: distinct Pixabay IDs with metadata cached
+ *   downloadedImages: number,          // L3: distinct images actually downloaded to disk
+ *   downloadedBytes: number,           // L3: total bytes of downloaded/compressed files
+ *   dbFileBytes: number,               // size of the SQLite file itself
+ * }}
+ */
+export function getCacheStats() {
+  const database = getDb();
+
+  const searchRows = database.prepare('SELECT image_ids FROM search_cache').all();
+  const distinctTopImageIds = new Set(
+    searchRows.map((row) => JSON.parse(row.image_ids)[0]).filter((id) => id != null)
+  );
+
+  const metadataImages = database.prepare('SELECT COUNT(*) AS n FROM images').get().n;
+  const fileStats = database
+    .prepare('SELECT COUNT(*) AS n, COALESCE(SUM(file_size_bytes), 0) AS bytes FROM images WHERE file_path IS NOT NULL')
+    .get();
+
+  let dbFileBytes = 0;
+  try {
+    dbFileBytes = fs.statSync(DB_PATH).size;
+  } catch {
+    // DB file doesn't exist yet — fine, report 0.
+  }
+
+  return {
+    searchCacheQueries: searchRows.length,
+    searchCacheDistinctImages: distinctTopImageIds.size,
+    metadataImages,
+    downloadedImages: fileStats.n,
+    downloadedBytes: fileStats.bytes,
+    dbFileBytes,
+  };
 }
