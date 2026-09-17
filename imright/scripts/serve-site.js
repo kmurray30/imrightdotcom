@@ -42,6 +42,13 @@ import {
 } from './auth.js';
 import { readSiteLock, writeSiteLock } from './site-lock.js';
 import {
+  listPlaceholderSuggestionTexts,
+  listPlaceholderSuggestions,
+  addPlaceholderSuggestion,
+  updatePlaceholderSuggestion,
+  deletePlaceholderSuggestion,
+} from './placeholder-suggestions.js';
+import {
   startObservability,
   shutdownObservability,
   recordPageView,
@@ -387,6 +394,73 @@ async function handleApiAdminSettings(request, response) {
 }
 
 // ---------------------------------------------------------------------------
+// Placeholder-ideas admin CRUD — the pool of example beliefs the landing
+// page's animated placeholder cycles through (see placeholder-suggestions.js).
+// The read used by the animation itself (no admin auth needed) is
+// GET /api/placeholder-suggestions, registered alongside /api/run below.
+// ---------------------------------------------------------------------------
+
+async function handleApiAdminListPlaceholderSuggestions(request, response) {
+  if (!isAdminAuthenticated(request)) {
+    response.status(401).json({ error: 'unauthenticated' });
+    return;
+  }
+  const suggestions = await listPlaceholderSuggestions();
+  response.json({ suggestions });
+}
+
+async function handleApiAdminAddPlaceholderSuggestion(request, response) {
+  if (!isAdminAuthenticated(request)) {
+    response.status(401).json({ error: 'unauthenticated' });
+    return;
+  }
+  const text = typeof request.body?.text === 'string' ? request.body.text.trim() : '';
+  if (!text) {
+    response.status(400).json({ error: 'empty_text' });
+    return;
+  }
+  const created = await addPlaceholderSuggestion(text);
+  response.status(201).json({ suggestion: created });
+}
+
+async function handleApiAdminUpdatePlaceholderSuggestion(request, response) {
+  if (!isAdminAuthenticated(request)) {
+    response.status(401).json({ error: 'unauthenticated' });
+    return;
+  }
+  const id = Number.parseInt(request.params.id, 10);
+  const text = typeof request.body?.text === 'string' ? request.body.text.trim() : '';
+  if (!Number.isInteger(id) || !text) {
+    response.status(400).json({ error: 'invalid_request' });
+    return;
+  }
+  const updated = await updatePlaceholderSuggestion(id, text);
+  if (!updated) {
+    response.status(404).json({ error: 'not_found' });
+    return;
+  }
+  response.json({ suggestion: updated });
+}
+
+async function handleApiAdminDeletePlaceholderSuggestion(request, response) {
+  if (!isAdminAuthenticated(request)) {
+    response.status(401).json({ error: 'unauthenticated' });
+    return;
+  }
+  const id = Number.parseInt(request.params.id, 10);
+  if (!Number.isInteger(id)) {
+    response.status(400).json({ error: 'invalid_request' });
+    return;
+  }
+  const deleted = await deletePlaceholderSuggestion(id);
+  if (!deleted) {
+    response.status(404).json({ error: 'not_found' });
+    return;
+  }
+  response.json({ ok: true });
+}
+
+// ---------------------------------------------------------------------------
 // /api/run + SSE progress stream
 // ---------------------------------------------------------------------------
 
@@ -633,6 +707,18 @@ app.post('/api/logout', (req, res) => handleApiLogout(res));
 app.post('/api/admin/login', (req, res, next) => handleApiAdminLogin(req, res).catch(next));
 app.post('/api/admin/logout', (req, res) => handleApiAdminLogout(res));
 app.post('/api/admin/settings', (req, res, next) => handleApiAdminSettings(req, res).catch(next));
+app.get('/api/admin/placeholder-suggestions', (req, res, next) =>
+  handleApiAdminListPlaceholderSuggestions(req, res).catch(next)
+);
+app.post('/api/admin/placeholder-suggestions', (req, res, next) =>
+  handleApiAdminAddPlaceholderSuggestion(req, res).catch(next)
+);
+app.patch('/api/admin/placeholder-suggestions/:id', (req, res, next) =>
+  handleApiAdminUpdatePlaceholderSuggestion(req, res).catch(next)
+);
+app.delete('/api/admin/placeholder-suggestions/:id', (req, res, next) =>
+  handleApiAdminDeletePlaceholderSuggestion(req, res).catch(next)
+);
 
 app.get('/admin', async (request, response, next) => {
   try {
@@ -679,6 +765,18 @@ app.use(async (request, response, next) => {
 app.post('/api/run', (req, res, next) => handleApiRun(req, res).catch(next));
 app.get('/api/stream/:runId', handleApiStream);
 app.post('/api/link-status', (req, res, next) => handleApiLinkStatus(req, res).catch(next));
+// Read-only list of example beliefs for the belief input's animated
+// placeholder (both index.html and the React BeliefForm) — no admin auth
+// needed, same as the config file this replaced; still behind the
+// site-wide password gate above, like every other route down here.
+app.get('/api/placeholder-suggestions', async (req, res, next) => {
+  try {
+    const suggestions = await listPlaceholderSuggestionTexts();
+    res.json({ suggestions });
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.use('/api/account', accountRouter);
 app.use('/api', socialRouter);

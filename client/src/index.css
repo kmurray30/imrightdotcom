@@ -110,8 +110,32 @@ textarea {
   margin: 1.5rem auto 0;
 }
 
-.belief-input {
+.belief-input-wrap {
   flex: 1;
+  position: relative;
+}
+
+.belief-input {
+  width: 100%;
+}
+
+/* Sits on top of the (empty) input and renders the animated placeholder
+ * text ourselves (see useAnimatedPlaceholder.js), instead of using the
+ * placeholder attribute — a real placeholder can't be scrolled, so a long
+ * suggestion would get clipped at the input's right edge. This overlay is
+ * kept scrolled to its own right edge on every update so it behaves like
+ * real typed text: once it overflows, the view shifts to keep the end in
+ * view. */
+.belief-input-placeholder-overlay {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  padding: 0.5rem;
+  border-radius: 6px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  pointer-events: none;
 }
 
 .run-progress {
