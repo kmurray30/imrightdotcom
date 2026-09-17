@@ -11,7 +11,7 @@ startCommand = "node imright/scripts/serve-site.js"
 # force-killed. Paired with the graceful-shutdown handling in serve-site.js,
 # which stops accepting new connections immediately but waits for
 # already-running pipeline runs to complete (bounded by this same window).
-drainingSeconds = "240"
+drainingSeconds = 240
 
 [deploy.envVars]
 SERVE_MODE = "prod"
