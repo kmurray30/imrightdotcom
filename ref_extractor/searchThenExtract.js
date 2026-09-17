@@ -129,15 +129,23 @@ export function extractCitationsFromArticleForTerm(source, articleTitle, searchT
 
       for (const parsed of parsedList) {
         if (!citationTypes.has(parsed.type?.toLowerCase())) continue;
-        if (!parsed.url || !parsed.url.startsWith('http')) continue;
-        const linkLower = parsed.url.toLowerCase();
+
+        // Wikipedia (via InternetArchiveBot) already flags a dead primary link with url_status=dead.
+        // When that's set, or there's no primary url at all, go straight to the archive copy and
+        // treat it as valid (skipped from live-checking below via linkWhitelist). Otherwise, check
+        // the live url as usual and keep the archive url as a candidate fallback.
+        const deadOrMissing = parsed.urlStatus === 'dead' || !parsed.url;
+        const link = deadOrMissing ? parsed.archiveUrl : parsed.url;
+        if (!link || !link.startsWith('http')) continue;
+        const linkLower = link.toLowerCase();
         if (excludeUrlPatterns.some((pattern) => linkLower.includes(pattern))) continue;
 
         const contentSlice = source.slice(paragraph.start, firstRef.start);
         const contentCleaned = stripWikiMarkup(redactAllRefs(contentSlice));
 
         results.push({
-          link: parsed.url,
+          link,
+          archiveLink: deadOrMissing ? null : parsed.archiveUrl,
           title: (parsed.blurb ?? '').slice(0, 500),
           content: contentCleaned,
           article_title: articleTitle,

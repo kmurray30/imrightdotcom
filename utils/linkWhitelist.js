@@ -8,6 +8,8 @@
 /** Hostnames (normalized, no www) to skip HEAD check. */
 export const LINK_WHITELIST_HOSTS = new Set([
   'academic.oup.com',
+  'archive.ph',
+  'archive.today',
   'axios.com',
   'barrons.com',
   'bloomberg.com',
@@ -25,6 +27,7 @@ export const LINK_WHITELIST_HOSTS = new Set([
   'sciencedirect.com',
   'smithsonianmag.com',
   'thehill.com',
+  'web.archive.org',
   'wsj.com',
 ]);
 

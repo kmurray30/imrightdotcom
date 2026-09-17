@@ -76,12 +76,18 @@ async function main() {
 
   let logLine = `Wrote to ${outputPath} (${refCount} refs, ${uniqueCount} unique citations)`;
   if (!noCheckLinks && stats?.linkStats) {
-    const { retries, deadLinksCount, deadLinks } = stats.linkStats;
-    logLine += ` [retries: ${retries}, dead links: ${deadLinksCount}]`;
+    const { retries, deadLinksCount, deadLinks, archiveFallbacksCount, archiveFallbacks } = stats.linkStats;
+    logLine += ` [retries: ${retries}, dead links: ${deadLinksCount}, archive fallbacks: ${archiveFallbacksCount ?? 0}]`;
     if (deadLinks?.length > 0) {
       console.error('Dead links:');
       for (const { url, reason } of deadLinks) {
         console.error(`  ${url} — ${reason}`);
+      }
+    }
+    if (archiveFallbacks?.length > 0) {
+      console.error('Live links replaced with archive fallback:');
+      for (const { url, archiveUrl } of archiveFallbacks) {
+        console.error(`  ${url} -> ${archiveUrl}`);
       }
     }
   }

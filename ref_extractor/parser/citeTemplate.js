@@ -34,7 +34,7 @@ function parseParams(templateBody) {
   for (const part of parts) {
     const eqIndex = part.indexOf('=');
     if (eqIndex <= 0) continue;
-    const key = part.slice(0, eqIndex).trim().toLowerCase().replace(/\s+/g, '_');
+    const key = part.slice(0, eqIndex).trim().toLowerCase().replace(/[\s-]+/g, '_');
     const value = part
       .slice(eqIndex + 1)
       .replace(new RegExp(PIPE_PLACEHOLDER, 'g'), '|')
@@ -74,8 +74,13 @@ function extractTemplateBody(content) {
 
 /**
  * Parse a {{cite X|...}} template.
+ *
+ * Wikipedia's InternetArchiveBot writes archive_url/url_status onto citations it has already
+ * checked, so we surface those alongside the live url rather than collapsing them into one field—
+ * callers decide which link to use (see ref_extractor/searchThenExtract.js).
+ *
  * @param {string} content - Full ref content (may have leading/trailing whitespace)
- * @returns {{ type: string, url: string | null, blurb: string } | null}
+ * @returns {{ type: string, url: string | null, archiveUrl: string | null, urlStatus: string | null, blurb: string } | null}
  */
 function parseCiteTemplate(content) {
   const citeStart = matchCiteStart(content);
@@ -85,8 +90,11 @@ function parseCiteTemplate(content) {
   const body = extractTemplateBody(rest);
   const params = parseParams(body);
 
-  const rawUrl = params.url ?? params.archive_url ?? null;
-  const url = rawUrl && rawUrl.startsWith('http') ? rawUrl : null;
+  const url = params.url && params.url.startsWith('http') ? params.url : null;
+  const archiveUrl = params.archive_url && params.archive_url.startsWith('http') ? params.archive_url : null;
+  const urlStatus = params.url_status ? params.url_status.toLowerCase() : null;
+
+  if (!url && !archiveUrl) return null;
 
   const workBlurb = params.work
     ? params.work + (params.date ? ' - ' + params.date : '')
@@ -102,7 +110,9 @@ function parseCiteTemplate(content) {
 
   return {
     type,
-    url: url || null,
+    url,
+    archiveUrl,
+    urlStatus,
     blurb,
   };
 }
