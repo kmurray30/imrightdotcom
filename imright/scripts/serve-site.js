@@ -862,9 +862,37 @@ const server = app.listen(PORT, SERVE_HOST, () => {
   console.error(`[serve-site] mode=${SERVE_MODE} listening on ${SERVE_HOST}:${PORT} (${reachability}); open ${url}`);
 });
 
+// Paired with railway.toml's drainingSeconds and startCommand (invoking node
+// directly, not through `npm start`, so this handler actually runs at all —
+// see the comments there). Stops accepting new connections immediately, but
+// lets any pipeline run already in flight finish rather than orphaning it
+// mid-run — that's what silently "hangs" the client (its EventSource just
+// gets 404s from the new container's empty activeRuns and can't recover).
+// Bounded so this can never itself become the reason SIGKILL arrives before
+// exit: this must finish comfortably inside drainingSeconds.
+const GRACEFUL_SHUTDOWN_MAX_WAIT_MS = 200 * 1000;
+let isShuttingDown = false;
+
+async function gracefulShutdown(signal) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
+  const runsInFlight = () => [...activeRuns.values()].filter((run) => !run.finished).length;
+  console.error(`[serve-site] ${signal} received; draining ${runsInFlight()} in-flight run(s)...`);
+  server.close(); // stop accepting new connections; open sockets (incl. SSE) are left alone
+
+  const deadline = Date.now() + GRACEFUL_SHUTDOWN_MAX_WAIT_MS;
+  while (runsInFlight() > 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  if (runsInFlight() > 0) {
+    console.error(`[serve-site] shutdown wait exhausted with ${runsInFlight()} run(s) still active; exiting anyway.`);
+  }
+
+  await shutdownObservability();
+  process.exit(0);
+}
+
 for (const signal of ['SIGTERM', 'SIGINT']) {
-  process.on(signal, async () => {
-    await shutdownObservability();
-    process.exit(0);
-  });
+  process.on(signal, () => gracefulShutdown(signal));
 }

@@ -1,5 +1,17 @@
 [deploy]
-startCommand = "npm start"
+# Invoke node directly, not through `npm start` — when npm is the process
+# Railway signals, it can swallow/mishandle SIGTERM before the actual server
+# process underneath ever sees it (a documented Railway/Node gotcha). That
+# mattered in practice: an unrelated deploy killed an in-flight /api/run
+# pipeline run within ~20s of it starting, well before article generation
+# could finish.
+startCommand = "node imright/scripts/serve-site.js"
+# Give an in-flight pipeline run (several sequential LLM calls; can run a
+# couple of minutes) real time to finish before the old deployment is
+# force-killed. Paired with the graceful-shutdown handling in serve-site.js,
+# which stops accepting new connections immediately but waits for
+# already-running pipeline runs to complete (bounded by this same window).
+drainingSeconds = "240"
 
 [deploy.envVars]
 SERVE_MODE = "prod"

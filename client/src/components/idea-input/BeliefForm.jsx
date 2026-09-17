@@ -79,6 +79,20 @@ export function BeliefForm() {
         console.error('Bad SSE payload', parseError);
       }
     };
+    // EventSource auto-reconnects on its own after any drop — including a
+    // server restart mid-run, which orphans this runId (server-side run
+    // state is in-process memory, gone after a restart/deploy). Left alone,
+    // that means silently retrying against a 404 forever with the UI frozen
+    // on whatever step it last showed, which looks exactly like a hang. Stop
+    // it here and tell the user, instead of retrying blind: there's nothing
+    // for a reconnect to recover into once the run is gone server-side.
+    eventSource.onerror = () => {
+      if (eventSourceRef.current !== eventSource) return; // already closed intentionally (ready/done)
+      eventSource.close();
+      eventSourceRef.current = null;
+      setError('Lost connection while generating your article. Please try again.');
+      setIsSubmitting(false);
+    };
   }
 
   return (

@@ -137,6 +137,19 @@ function getDb() {
       value TEXT NOT NULL
     );
   `);
+  // CREATE TABLE IF NOT EXISTS is a no-op on an existing table, so a volume
+  // carrying an `images` table from before a column existed never gets it —
+  // exactly what happened in prod: file_size_bytes postdates some already-
+  // deployed volumes, so getCacheStats()'s SUM(file_size_bytes) query below
+  // failed on every call ("no such column"). Add anything missing.
+  const existingColumns = new Set(db.prepare('PRAGMA table_info(images)').all().map((col) => col.name));
+  for (const [name, type] of [
+    ['file_size_bytes', 'INTEGER'],
+    ['downloaded_at', 'INTEGER'],
+    ['last_used_at', 'INTEGER'],
+  ]) {
+    if (!existingColumns.has(name)) db.exec(`ALTER TABLE images ADD COLUMN ${name} ${type}`);
+  }
   runMaintenanceIfDue();
   return db;
 }
