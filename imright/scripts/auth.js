@@ -100,14 +100,14 @@ export function parseCookies(header) {
   return result;
 }
 
-export function buildSessionCookie(name, value, maxAgeMs, secure) {
-  const parts = [`${name}=${value}`, 'Path=/', 'HttpOnly', 'SameSite=Strict', `Max-Age=${Math.floor(maxAgeMs / 1000)}`];
+export function buildSessionCookie(name, value, maxAgeMs, secure, sameSite = 'Strict') {
+  const parts = [`${name}=${value}`, 'Path=/', 'HttpOnly', `SameSite=${sameSite}`, `Max-Age=${Math.floor(maxAgeMs / 1000)}`];
   if (secure) parts.push('Secure');
   return parts.join('; ');
 }
 
-export function buildExpiredCookie(name, secure) {
-  const parts = [`${name}=`, 'Path=/', 'HttpOnly', 'SameSite=Strict', 'Max-Age=0'];
+export function buildExpiredCookie(name, secure, sameSite = 'Strict') {
+  const parts = [`${name}=`, 'Path=/', 'HttpOnly', `SameSite=${sameSite}`, 'Max-Age=0'];
   if (secure) parts.push('Secure');
   return parts.join('; ');
 }

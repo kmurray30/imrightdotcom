@@ -62,6 +62,19 @@ const DB_PATH = path.join(CACHE_DIR, 'pixabay-cache.sqlite');
 // same volume as everything else, so they're not re-downloaded on every deploy.
 const MODEL_CACHE_DIR = path.join(CACHE_DIR, 'models');
 
+// A per-article article's *chosen* images are copied out of this cache (see
+// fetchAndDownloadImages in tabloid_generator/index.js) into a permanent
+// location this module's own sweep (runMaintenanceIfDue, below) never
+// touches — sibling to CACHE_DIR so it lands on the same mounted volume in
+// prod (IMAGE_CACHE_DIR), not on the ephemeral container filesystem, which
+// is what made those copies non-durable before this existed. Exported so the
+// pipeline doesn't need to know or duplicate this volume-path logic.
+export function getArticleImagesRoot() {
+  return process.env.IMAGE_CACHE_DIR
+    ? path.join(path.dirname(CACHE_DIR), 'article-images')
+    : path.join(PROJECT_ROOT, 'tabloid_generator', 'images');
+}
+
 const SEARCH_TTL_MS = 24 * 60 * 60 * 1000;
 // Disk-cost hygiene only — Pixabay imposes no retention limit on images
 // you've legitimately downloaded. No separate job/service: this just runs
