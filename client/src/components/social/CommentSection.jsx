@@ -1,0 +1,97 @@
+import { useEffect, useMemo, useState } from 'react';
+import { api } from '../../api/client.js';
+import { useAuth } from '../../context/AuthContext.jsx';
+import { GuestPrompt } from '../auth/GuestPrompt.jsx';
+
+function CommentItem({ comment }) {
+  const { isGuest } = useAuth();
+  const [liked, setLiked] = useState(false);
+  const [count, setCount] = useState(comment.likeCount);
+  const [busy, setBusy] = useState(false);
+
+  async function toggleLike() {
+    if (isGuest || busy) return;
+    setBusy(true);
+    const next = !liked;
+    setLiked(next);
+    setCount((c) => c + (next ? 1 : -1));
+    try {
+      if (next) {
+        await api.post(`/api/comments/${comment.id}/like`);
+      } else {
+        await api.delete(`/api/comments/${comment.id}/like`);
+      }
+    } catch {
+      setLiked(!next);
+      setCount((c) => c + (next ? -1 : 1));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <li className="comment-item">
+      <p className="comment-author">{comment.displayName || comment.username || 'Anonymous'}</p>
+      <p className="comment-body">{comment.body}</p>
+      <button type="button" className={`comment-like ${liked ? 'is-liked' : ''}`} onClick={toggleLike} disabled={isGuest || busy}>
+        {liked ? '♥' : '♡'} {count}
+      </button>
+    </li>
+  );
+}
+
+export function CommentSection({ articleId }) {
+  const { isGuest } = useAuth();
+  // One seed per time this section mounts (article page load) — see the
+  // plan's Comment Ranking section: reused across pagination of this view,
+  // regenerated on a fresh page load, so ordering is stable while reading.
+  const seed = useMemo(() => crypto.randomUUID(), [articleId]);
+  const [comments, setComments] = useState([]);
+  const [body, setBody] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    api
+      .get(`/api/articles/${articleId}/comments?seed=${seed}`)
+      .then((data) => setComments(data.comments ?? []))
+      .catch(() => setComments([]));
+  }, [articleId, seed]);
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    const trimmed = body.trim();
+    if (!trimmed) return;
+    setSubmitting(true);
+    try {
+      const { comment } = await api.post(`/api/articles/${articleId}/comments`, { body: trimmed });
+      setComments((prev) => [{ ...comment, likeCount: 0 }, ...prev]);
+      setBody('');
+    } catch {
+      // Leave the draft in the box so the user can retry.
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <section className="comment-section">
+      <h2>Comments</h2>
+      {isGuest ? (
+        <GuestPrompt message="Sign up to comment" />
+      ) : (
+        <form onSubmit={handleSubmit} className="comment-composer">
+          <textarea value={body} onChange={(e) => setBody(e.target.value)} maxLength={2000} placeholder="Add a comment..." />
+          <button type="submit" disabled={submitting || !body.trim()}>
+            Post
+          </button>
+        </form>
+      )}
+      <ul className="comment-list">
+        {comments.map((comment) => (
+          <CommentItem key={comment.id} comment={comment} />
+        ))}
+      </ul>
+      {comments.length === 0 && <p className="empty-state">No comments yet.</p>}
+    </section>
+  );
+}

@@ -1,9 +1,18 @@
 #!/usr/bin/env node
 /**
- * Landing-page server for imright.
- * Serves the static site (index.html, tabloid output, debug pages, counterarguments)
- * and exposes /api/run + /api/stream/:runId so the landing page can drive runPipeline
- * without duplicating any pipeline logic.
+ * Landing-page server for imright — Express app.
+ *
+ * Serves the static site (index.html or, once built, the React SPA in
+ * client/dist), the generated-article assets, and exposes the API routes
+ * that drive runPipeline plus the social layer (accounts, articles,
+ * likes/bookmarks/follows/comments, discover).
+ *
+ * This used to be a hand-rolled `http.createServer` with manual
+ * method+urlPath matching; ported to Express because the route count grew
+ * past what that style could carry cleanly (see the plan's "Express
+ * migration" milestone). Every existing route's behavior is preserved
+ * exactly — this is a framework swap, not a feature change, except where
+ * explicitly noted (handleApiRun's Postgres integration).
  *
  * Usage: node imright/scripts/serve-site.js [port]
  * Default port: 3758 (kept distinct from the CLI's 3757 so the CLI's port-kill
@@ -12,12 +21,11 @@
 
 import crypto from 'crypto';
 import fs from 'fs';
-import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import express from 'express';
 import { runPipeline } from '../index.js';
 import { loadEnv } from '../load-env.js';
-import { slugify } from '../utils.js';
 import {
   safeCompare,
   safeCompareHash,
@@ -48,18 +56,25 @@ import {
 import { resolveIdentity, appendSetCookie, classifyTraffic, checkRunAbuse, decideVerboseSampling } from './identity.js';
 import { runWithInteractionContext, setClaimText, getSummary, addTraceEvent } from './interaction-context.js';
 import { computeCost } from '../../utils/grok.js';
+import { getArticleImagesRoot } from '../../utils/image-cache.js';
 import { resolveLinks } from './backup-links.js';
-import { regenerateFromRaw } from '../../tabloid_generator/index.js';
+import { resolveUser, ensureOwner, sweepExpiredSessions } from './auth-accounts.js';
+import { accountRouter } from './routes/account.js';
+import { socialRouter } from './routes/social.js';
+import { createArticle, mergeArticleData } from './articles.js';
+import { HttpError } from './http-error.js';
+import { runMigrations } from './db/migrate.js';
 
 loadEnv();
 startObservability();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '../..');
+const CLIENT_DIST = path.join(PROJECT_ROOT, 'client', 'dist');
 
 // Whether the main site is password-gated at all, and the hash of that
-// password, live in data/site_lock.json (see site-lock.js) so they can be
-// changed from /admin without a restart or a redeploy.
+// password, live in Postgres (see site-lock.js) so they can be changed from
+// /admin without a restart or a redeploy.
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
 if (!ADMIN_PASSWORD) {
   console.error(
@@ -68,32 +83,21 @@ if (!ADMIN_PASSWORD) {
 }
 // Generated fresh per process: signs the login cookie so it can't be forged.
 // Restarting the server invalidates existing sessions, which is fine for a
-// simple password gate like this one.
+// simple password gate like this one. (Real account sessions, added by this
+// feature, are opaque DB-backed tokens instead — see auth-accounts.js.)
 const SESSION_SECRET = crypto.randomBytes(32).toString('hex');
 const SESSION_COOKIE_NAME = 'imright_session';
 const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const ADMIN_SESSION_SECRET = crypto.randomBytes(32).toString('hex');
 const ADMIN_SESSION_COOKIE_NAME = 'imright_admin_session';
 const ADMIN_SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+
 /**
- * High-level mode the server runs in. Each mode bundles a set of defaults
- * (bind host, port, and — in the future — things like caching headers,
- * logging verbosity, compression, etc.).
- *
+ * High-level mode the server runs in. See MODE_DEFAULTS below for what each
+ * mode implies (bind host, port).
  *   local - 127.0.0.1 (default). Only reachable from this machine.
- *   lan   - 0.0.0.0. Reachable from any host on the local network, handy
- *           for testing on a phone or a second laptop.
- *   prod  - 0.0.0.0. Placeholder for production defaults; extend
- *           MODE_DEFAULTS below as real prod config (caching, logging,
- *           etc.) gets added.
- *
- * Pick a mode in one of three ways:
- *   1) `npm run dev`  /  `npm run dev:lan`  /  `npm run start:prod`
- *   2) SERVE_MODE=lan npm run dev
- *   3) put `SERVE_MODE=lan` in env.local (sticky for this machine)
- *
- * Individual env vars (SERVE_HOST, PORT) still override the mode's
- * defaults, so one-off tweaks don't require inventing a new mode.
+ *   lan   - 0.0.0.0. Reachable from any host on the local network.
+ *   prod  - 0.0.0.0. Production defaults.
  */
 const MODE_DEFAULTS = {
   local: { host: '127.0.0.1', port: 3758 },
@@ -112,32 +116,26 @@ if (SERVE_MODE !== requestedServeMode) {
   );
 }
 const modeConfig = MODE_DEFAULTS[SERVE_MODE];
+const IS_SECURE = SERVE_MODE === 'prod';
 
-// The site-lock state (password protection on/off + password hash, see
-// site-lock.js) lives in Postgres so it survives redeploys — Railway's app
-// filesystem and any in-memory state do not. In prod this is required: an
-// unset DATABASE_URL there previously meant the site could silently come
-// back up unprotected after a deploy, which is exactly what this guards
-// against. Local/LAN dev can still run without it (site-lock just won't
-// persist across restarts), since not everyone hacking on the landing page
-// needs a Postgres instance running.
+// Postgres now backs both the site-lock state (as before) and the whole
+// social layer (accounts/articles/etc.) — required in prod for the same
+// reason as before (Railway's app filesystem doesn't survive redeploys),
+// and now for a second reason too (articles/accounts have nowhere else to live).
 if (!process.env.DATABASE_URL) {
   if (SERVE_MODE === 'prod') {
     console.error(
-      '[serve-site] DATABASE_URL is not set. Refusing to start in prod without it — the site password lock is stored in Postgres so it survives redeploys. Add a Postgres database in Railway (New -> Database -> PostgreSQL; it injects DATABASE_URL automatically) and restart.'
+      '[serve-site] DATABASE_URL is not set. Refusing to start in prod without it — the site password lock and the entire social layer (accounts, articles, likes, etc.) live in Postgres so they survive redeploys. Add a Postgres database in Railway (New -> Database -> PostgreSQL; it injects DATABASE_URL automatically) and restart.'
     );
     process.exit(1);
   }
   console.error(
-    '[serve-site] DATABASE_URL is not set — site-lock state (password protection on/off + password) will not persist across restarts. Fine for local dev; required in prod.'
+    '[serve-site] DATABASE_URL is not set — site-lock state and the entire social layer will not work. Fine for exercising just the idea-input pipeline locally; required for everything else.'
   );
 }
 
 // Precedence: explicit CLI arg (port) > env var > mode default.
-const PORT = parseInt(
-  process.argv[2] || process.env.PORT || String(modeConfig.port),
-  10
-);
+const PORT = parseInt(process.argv[2] || process.env.PORT || String(modeConfig.port), 10);
 const SERVE_HOST = (process.env.SERVE_HOST || modeConfig.host).trim();
 
 const APP_CONFIG_PATH = path.join(PROJECT_ROOT, 'config', 'app_config.json');
@@ -195,9 +193,7 @@ function resolveActiveHomeBackground() {
   }
 
   if (!schemes || typeof schemes !== 'object') {
-    console.error(
-      `[serve-site] ${COLOR_SCHEMES_PATH} has no "schemes" object; using hard-coded fallback layers.`
-    );
+    console.error(`[serve-site] ${COLOR_SCHEMES_PATH} has no "schemes" object; using hard-coded fallback layers.`);
     return FALLBACK_HOME_BACKGROUND_LAYERS.join(', ');
   }
 
@@ -219,49 +215,36 @@ function resolveActiveHomeBackground() {
   return activeScheme.background.join(', ');
 }
 
-/**
- * Render index.html with the placeholder replaced by the active scheme's
- * background. Done per-request (cheap I/O, small file) so editing
- * config/app_config.json or config/color_schemes.json takes effect on the
- * next reload without a server restart.
- */
-function serveLandingPage(response) {
-  const landingPagePath = path.join(PROJECT_ROOT, 'index.html');
-  fs.readFile(landingPagePath, 'utf8', (readError, rawHtml) => {
+/** Renders any of index.html/login.html/admin-login.html the same way: read,
+ * substitute the background placeholder, send. */
+function renderTemplatedPage(pagePath, response, { statusCode = 200, cacheControl = 'no-cache', extraSubstitutions = [] } = {}) {
+  fs.readFile(pagePath, 'utf8', (readError, rawHtml) => {
     if (readError) {
       response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-      response.end('Failed to read index.html');
+      response.end(`Failed to read ${path.basename(pagePath)}`);
       return;
     }
-    const activeHomeBackgroundCss = resolveActiveHomeBackground();
-    const renderedHtml = rawHtml.split(ACTIVE_HOME_BACKGROUND_PLACEHOLDER).join(activeHomeBackgroundCss);
-    response.writeHead(200, {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'no-cache',
-    });
+    let renderedHtml = rawHtml.split(ACTIVE_HOME_BACKGROUND_PLACEHOLDER).join(resolveActiveHomeBackground());
+    for (const [placeholder, value] of extraSubstitutions) {
+      renderedHtml = renderedHtml.split(placeholder).join(value);
+    }
+    response.writeHead(statusCode, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': cacheControl });
     response.end(renderedHtml);
   });
 }
 
-/**
- * Render login.html the same way serveLandingPage renders index.html, so the
- * password gate matches the site's background/branding.
- */
+function serveLandingPage(response) {
+  renderTemplatedPage(path.join(PROJECT_ROOT, 'index.html'), response);
+}
+
 function serveLoginPage(response, statusCode = 200) {
-  const loginPagePath = path.join(PROJECT_ROOT, 'imright', 'login.html');
-  fs.readFile(loginPagePath, 'utf8', (readError, rawHtml) => {
-    if (readError) {
-      response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-      response.end('Failed to read login.html');
-      return;
-    }
-    const activeHomeBackgroundCss = resolveActiveHomeBackground();
-    const renderedHtml = rawHtml.split(ACTIVE_HOME_BACKGROUND_PLACEHOLDER).join(activeHomeBackgroundCss);
-    response.writeHead(statusCode, {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'no-store',
-    });
-    response.end(renderedHtml);
+  renderTemplatedPage(path.join(PROJECT_ROOT, 'imright', 'login.html'), response, { statusCode, cacheControl: 'no-store' });
+}
+
+function serveAdminLoginPage(response, statusCode = 200) {
+  renderTemplatedPage(path.join(PROJECT_ROOT, 'imright', 'admin-login.html'), response, {
+    statusCode,
+    cacheControl: 'no-store',
   });
 }
 
@@ -279,53 +262,21 @@ function isAdminAuthenticated(request) {
   return verifySessionToken(token, ADMIN_SESSION_SECRET);
 }
 
-/** Render admin-login.html the same way serveLoginPage renders login.html. */
-function serveAdminLoginPage(response, statusCode = 200) {
-  const adminLoginPagePath = path.join(PROJECT_ROOT, 'imright', 'admin-login.html');
-  fs.readFile(adminLoginPagePath, 'utf8', (readError, rawHtml) => {
-    if (readError) {
-      response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-      response.end('Failed to read admin-login.html');
-      return;
-    }
-    const activeHomeBackgroundCss = resolveActiveHomeBackground();
-    const renderedHtml = rawHtml.split(ACTIVE_HOME_BACKGROUND_PLACEHOLDER).join(activeHomeBackgroundCss);
-    response.writeHead(statusCode, {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'no-store',
-    });
-    response.end(renderedHtml);
-  });
-}
-
 /**
  * Render admin.html with the current site-lock state (protection on/off,
  * whether a password is set — never the password or its hash) inlined as
  * JSON, so the dashboard shows correct state on first paint.
  */
 async function serveAdminDashboardPage(response) {
-  const adminPagePath = path.join(PROJECT_ROOT, 'imright', 'admin.html');
-  let rawHtml;
-  try {
-    rawHtml = await fs.promises.readFile(adminPagePath, 'utf8');
-  } catch {
-    response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-    response.end('Failed to read admin.html');
-    return;
-  }
-  const activeHomeBackgroundCss = resolveActiveHomeBackground();
   const siteLock = await readSiteLock();
   const adminStateJson = JSON.stringify({
     passwordProtectionEnabled: siteLock.passwordProtectionEnabled,
     passwordSet: Boolean(siteLock.passwordHash),
   });
-  let renderedHtml = rawHtml.split(ACTIVE_HOME_BACKGROUND_PLACEHOLDER).join(activeHomeBackgroundCss);
-  renderedHtml = renderedHtml.split('ADMIN_STATE_JSON').join(adminStateJson);
-  response.writeHead(200, {
-    'Content-Type': 'text/html; charset=utf-8',
-    'Cache-Control': 'no-store',
+  renderTemplatedPage(path.join(PROJECT_ROOT, 'imright', 'admin.html'), response, {
+    cacheControl: 'no-store',
+    extraSubstitutions: [['ADMIN_STATE_JSON', adminStateJson]],
   });
-  response.end(renderedHtml);
 }
 
 /**
@@ -342,60 +293,43 @@ function isGoogleBotRequest(request) {
   return GOOGLE_BOT_USER_AGENT_PATTERN.test(userAgent);
 }
 
-/**
- * POST /api/login { password }
- * On success, sets a signed session cookie; on failure, records the attempt
- * against the caller's IP so repeated wrong guesses eventually get locked out.
- */
+// ---------------------------------------------------------------------------
+// Site-wide password gate + admin dashboard — unrelated to the new account
+// system (see auth-accounts.js) and deliberately left alone.
+// ---------------------------------------------------------------------------
+
 async function handleApiLogin(request, response) {
   const clientIp = getClientIp(request);
   const lockoutKey = `site:${clientIp}`;
 
   if (isLockedOut(lockoutKey)) {
     recordTrafficRequest('blocked');
-    sendJson(response, 429, { error: 'too_many_attempts' });
-    return;
-  }
-
-  let body;
-  try {
-    body = await readJsonBody(request);
-  } catch {
-    sendJson(response, 400, { error: 'invalid_json' });
+    response.status(429).json({ error: 'too_many_attempts' });
     return;
   }
 
   const siteLock = await readSiteLock();
-  const password = typeof body.password === 'string' ? body.password : '';
+  const password = typeof request.body?.password === 'string' ? request.body.password : '';
   if (!password || !safeCompareHash(password, siteLock.passwordHash)) {
     recordLoginFailure(lockoutKey);
-    sendJson(response, 401, { error: 'invalid_password' });
+    response.status(401).json({ error: 'invalid_password' });
     return;
   }
 
   recordLoginSuccess(lockoutKey);
   const token = createSessionToken(SESSION_SECRET, SESSION_MAX_AGE_MS);
-  // appendSetCookie (not setHeader) so this doesn't clobber the visitor/session
-  // identity cookies already queued on this response by resolveIdentity().
-  appendSetCookie(response, buildSessionCookie(SESSION_COOKIE_NAME, token, SESSION_MAX_AGE_MS, SERVE_MODE === 'prod'));
-  sendJson(response, 200, { ok: true });
+  appendSetCookie(response, buildSessionCookie(SESSION_COOKIE_NAME, token, SESSION_MAX_AGE_MS, IS_SECURE));
+  response.json({ ok: true });
 }
 
-/** POST /api/logout — clears the session cookie. */
 function handleApiLogout(response) {
-  appendSetCookie(response, buildExpiredCookie(SESSION_COOKIE_NAME, SERVE_MODE === 'prod'));
-  sendJson(response, 200, { ok: true });
+  appendSetCookie(response, buildExpiredCookie(SESSION_COOKIE_NAME, IS_SECURE));
+  response.json({ ok: true });
 }
 
-/**
- * POST /api/admin/login { password }
- * Same shape as handleApiLogin, checked against ADMIN_PASSWORD (env) rather
- * than the site-lock password, with its own session cookie and its own
- * lockout bucket so guessing one password can't lock out the other.
- */
 async function handleApiAdminLogin(request, response) {
   if (!ADMIN_PASSWORD) {
-    sendJson(response, 503, { error: 'admin_disabled' });
+    response.status(503).json({ error: 'admin_disabled' });
     return;
   }
 
@@ -404,109 +338,67 @@ async function handleApiAdminLogin(request, response) {
 
   if (isLockedOut(lockoutKey)) {
     recordTrafficRequest('blocked');
-    sendJson(response, 429, { error: 'too_many_attempts' });
+    response.status(429).json({ error: 'too_many_attempts' });
     return;
   }
 
-  let body;
-  try {
-    body = await readJsonBody(request);
-  } catch {
-    sendJson(response, 400, { error: 'invalid_json' });
-    return;
-  }
-
-  const password = typeof body.password === 'string' ? body.password : '';
+  const password = typeof request.body?.password === 'string' ? request.body.password : '';
   if (!password || !safeCompare(password, ADMIN_PASSWORD)) {
     recordLoginFailure(lockoutKey);
-    sendJson(response, 401, { error: 'invalid_password' });
+    response.status(401).json({ error: 'invalid_password' });
     return;
   }
 
   recordLoginSuccess(lockoutKey);
   const token = createSessionToken(ADMIN_SESSION_SECRET, ADMIN_SESSION_MAX_AGE_MS);
-  appendSetCookie(
-    response,
-    buildSessionCookie(ADMIN_SESSION_COOKIE_NAME, token, ADMIN_SESSION_MAX_AGE_MS, SERVE_MODE === 'prod')
-  );
-  sendJson(response, 200, { ok: true });
+  appendSetCookie(response, buildSessionCookie(ADMIN_SESSION_COOKIE_NAME, token, ADMIN_SESSION_MAX_AGE_MS, IS_SECURE));
+  response.json({ ok: true });
 }
 
-/** POST /api/admin/logout — clears the admin session cookie. */
 function handleApiAdminLogout(response) {
-  appendSetCookie(response, buildExpiredCookie(ADMIN_SESSION_COOKIE_NAME, SERVE_MODE === 'prod'));
-  sendJson(response, 200, { ok: true });
+  appendSetCookie(response, buildExpiredCookie(ADMIN_SESSION_COOKIE_NAME, IS_SECURE));
+  response.json({ ok: true });
 }
 
-/**
- * POST /api/admin/settings { passwordProtectionEnabled?, newPassword? }
- * Requires an admin session. Updates whichever fields are present in
- * data/site_lock.json and returns the resulting public state (never the
- * password or its hash).
- */
 async function handleApiAdminSettings(request, response) {
   if (!isAdminAuthenticated(request)) {
-    sendJson(response, 401, { error: 'unauthenticated' });
+    response.status(401).json({ error: 'unauthenticated' });
     return;
   }
 
-  let body;
-  try {
-    body = await readJsonBody(request);
-  } catch {
-    sendJson(response, 400, { error: 'invalid_json' });
-    return;
-  }
-
+  const body = request.body ?? {};
   const patch = {};
   if (typeof body.passwordProtectionEnabled === 'boolean') {
     patch.passwordProtectionEnabled = body.passwordProtectionEnabled;
   }
   if (typeof body.newPassword === 'string') {
     if (!body.newPassword) {
-      sendJson(response, 400, { error: 'empty_password' });
+      response.status(400).json({ error: 'empty_password' });
       return;
     }
     patch.passwordHash = hashPassword(body.newPassword);
   }
 
   const updated = await writeSiteLock(patch);
-  sendJson(response, 200, {
+  response.json({
     passwordProtectionEnabled: updated.passwordProtectionEnabled,
     passwordSet: Boolean(updated.passwordHash),
   });
 }
 
-const MIME_TYPES = {
-  '.html': 'text/html; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.svg': 'image/svg+xml',
-  '.css': 'text/css; charset=utf-8',
-  '.js': 'application/javascript; charset=utf-8',
-  '.txt': 'text/plain; charset=utf-8',
-  '.ico': 'image/x-icon',
-};
+// ---------------------------------------------------------------------------
+// /api/run + SSE progress stream
+// ---------------------------------------------------------------------------
 
 /**
- * In-memory map of runId -> run state.
- * Each run has a subscriber array (SSE response streams) plus a buffered event
- * history so a client that connects a moment after POST /api/run still sees
- * every stage event from the beginning.
+ * In-memory map of runId -> run state. Each run has a subscriber array (SSE
+ * response streams) plus a buffered event history so a client that connects
+ * a moment after POST /api/run still sees every stage event from the start.
  */
 const activeRuns = new Map();
 
-function createRunState(slug, articleUrl) {
-  return {
-    slug,
-    articleUrl,
-    events: [],
-    finished: false,
-    subscribers: new Set(),
-  };
+function createRunState() {
+  return { events: [], finished: false, subscribers: new Set() };
 }
 
 function broadcastEvent(runState, event) {
@@ -521,187 +413,72 @@ function broadcastEvent(runState, event) {
   }
 }
 
-function serveStaticFile(requestUrlPath, response) {
-  const urlPath = requestUrlPath === '/' ? '/index.html' : requestUrlPath;
-  const safePath = path.normalize(urlPath).replace(/^(\.\.(\/|$))+/, '');
-  const filePath = path.join(PROJECT_ROOT, safePath);
-
-  fs.stat(filePath, (statError, stat) => {
-    if (statError || !stat.isFile()) {
-      response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-      response.end('Not Found');
-      return;
-    }
-    const extension = path.extname(filePath);
-    const contentType = MIME_TYPES[extension] || 'application/octet-stream';
-    response.writeHead(200, {
-      'Content-Type': contentType,
-      'Cache-Control': 'no-cache',
-    });
-    fs.createReadStream(filePath).pipe(response);
-  });
-}
-
-/**
- * Serves a generated article. The static HTML written at generation time is the fast path and
- * matches today's behavior exactly. If it's ever missing but the durable
- * tabloid_generator/article_data/<slug>.json survives (e.g. output/ was pruned), regenerates the
- * HTML from that on the fly, caches it back to disk so the next request takes the fast path
- * again, and serves it—article_data, not the HTML file, is the actual source of truth.
- */
-async function serveArticle(slug, response) {
-  const outputPath = path.join(PROJECT_ROOT, 'tabloid_generator', 'output', `${slug}.html`);
-  if (fs.existsSync(outputPath)) {
-    serveStaticFile(`/tabloid_generator/output/${slug}.html`, response);
-    return;
-  }
-
-  const articleDataPath = path.join(PROJECT_ROOT, 'tabloid_generator', 'article_data', `${slug}.json`);
-  if (!fs.existsSync(articleDataPath)) {
-    response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-    response.end('Not Found');
-    return;
-  }
-
-  try {
-    const html = await regenerateFromRaw(slug, PROJECT_ROOT);
-    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-    fs.writeFileSync(outputPath, html, 'utf8');
-    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
-    response.end(html);
-  } catch (error) {
-    console.error(`[serve-site] failed to regenerate ${slug} from article_data:`, error.message);
-    response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-    response.end('Internal Server Error');
-  }
-}
-
-/**
- * POST /api/link-status { urls: string[] }
- * Called by the client-side script on every article page after load. Never blocks the page
- * render (it runs after the page is already fully usable)—just batches a backup_links lookup
- * for the citation urls on that page and returns { [url]: resolvedUrl } for any that have a
- * row (see resolveLinks in backup-links.js), so the page can quietly swap in an archive link
- * for anything that's since died. Best-effort: any failure returns an empty object, leaving
- * the page's links exactly as originally rendered.
- */
-async function handleApiLinkStatus(request, response) {
-  let body;
-  try {
-    body = await readJsonBody(request);
-  } catch {
-    sendJson(response, 400, { error: 'invalid_json' });
-    return;
-  }
-
-  const urls = Array.isArray(body.urls) ? body.urls.filter((u) => typeof u === 'string') : [];
-  if (urls.length === 0) {
-    sendJson(response, 200, {});
-    return;
-  }
-
-  const resolved = await resolveLinks(urls);
-  sendJson(response, 200, Object.fromEntries(resolved));
-}
-
-function readJsonBody(request) {
-  return new Promise((resolve, reject) => {
-    let raw = '';
-    request.setEncoding('utf8');
-    request.on('data', (chunk) => {
-      raw += chunk;
-      if (raw.length > 10 * 1024) {
-        request.destroy();
-        reject(new Error('payload too large'));
-      }
-    });
-    request.on('end', () => {
-      if (!raw) return resolve({});
-      try {
-        resolve(JSON.parse(raw));
-      } catch (parseError) {
-        reject(parseError);
-      }
-    });
-    request.on('error', reject);
-  });
-}
-
-function sendJson(response, statusCode, payload) {
-  response.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify(payload));
-}
-
 /**
  * POST /api/run { claim }
- * Starts runPipeline in the background and returns { runId, slug, articleUrl }.
- * Progress + the onPageReady signal are streamed via /api/stream/:runId.
+ * Starts runPipeline in the background and returns { runId }. Progress, and
+ * the onPageReady signal, are streamed via /api/stream/:runId.
+ *
+ * Behavior change from before this feature: the generated article's
+ * permanent identity is now a Postgres `articles` row (owner + real UUID),
+ * not a static HTML file keyed by slug — see the plan's "Deliberate behavior
+ * change" note. ensureOwner() is the one place a guest identity gets
+ * provisioned (see auth-accounts.js).
  */
-async function handleApiRun(request, response, identity) {
-  let body;
-  try {
-    body = await readJsonBody(request);
-  } catch {
-    sendJson(response, 400, { error: 'invalid_json' });
-    return;
-  }
-
-  const claim = typeof body.claim === 'string' ? body.claim.trim() : '';
+async function handleApiRun(request, response) {
+  const claim = typeof request.body?.claim === 'string' ? request.body.claim.trim() : '';
   if (!claim) {
-    sendJson(response, 400, { error: 'missing_claim' });
+    response.status(400).json({ error: 'missing_claim' });
     return;
   }
 
-  const { visitorId, sessionId } = identity;
+  const owner = await ensureOwner(request, response);
+  const { visitorId, sessionId, trafficClassBase } = request.identity;
   const clientIp = getClientIp(request);
   const { suspectedAbuse, duplicateRequest } = checkRunAbuse({ visitorId, ip: clientIp, claim });
   // A visitor tripping the abuse heuristics gets reclassified even if their cookie made
   // them look like a normal browser session — visibility, not enforcement (see README).
-  const trafficClass = suspectedAbuse ? 'suspicious_api' : identity.trafficClass;
+  const trafficClass = suspectedAbuse ? 'suspicious_api' : trafficClassBase;
 
-  const slug = slugify(claim);
-  const articleUrl = `/tabloid_generator/output/${slug}.html`;
   const interactionId = crypto.randomUUID();
-  const runState = createRunState(slug, articleUrl);
+  const runState = createRunState();
   activeRuns.set(interactionId, runState);
-  recordSubmit(slug);
+  recordSubmit(claim);
   recordInteractionStarted();
   const submittedAt = performance.now();
   let pipelineResult = null;
+  let articleRow = null;
+  let articlePersistedPromise = Promise.resolve();
 
   const onProgress = (stepIndex, totalSteps, message) => {
-    broadcastEvent(runState, {
-      type: 'progress',
-      step: stepIndex,
-      total: totalSteps,
-      name: message,
-    });
+    broadcastEvent(runState, { type: 'progress', step: stepIndex, total: totalSteps, name: message });
   };
 
   const onStepComplete = (stepIndex, totalSteps, message, delta) => {
-    // Batched into this interaction's own trace event log (see interaction-context.js) —
-    // still one log write at the end, not a separate permanent line per step.
     addTraceEvent('pipeline_step', { step: stepIndex, total: totalSteps, name: message, ...delta });
-    broadcastEvent(runState, {
-      type: 'stepComplete',
-      step: stepIndex,
-      total: totalSteps,
-      name: message,
-    });
+    broadcastEvent(runState, { type: 'stepComplete', step: stepIndex, total: totalSteps, name: message });
   };
 
-  const onPageReady = (readySlug) => {
+  const onPageReady = (readySlug, articleData) => {
     recordTimeToReady(performance.now() - submittedAt, readySlug);
-    broadcastEvent(runState, {
-      type: 'ready',
-      url: `/tabloid_generator/output/${readySlug}.html`,
-    });
+    // Insert right here, not after runPipeline's whole promise resolves —
+    // that promise doesn't settle until AFTER step 7 (counterarguments), and
+    // onPageReady exists specifically so the user doesn't wait for step 7.
+    // Not awaited here (onPageReady is a synchronous callback into
+    // runPipeline) — but the promise is kept, and awaited below in
+    // .finally(), so the counterarguments merge can never race ahead of it.
+    articlePersistedPromise = createArticle({ ownerUserId: owner.id, claimText: claim, articleData })
+      .then((row) => {
+        articleRow = row;
+        broadcastEvent(runState, { type: 'ready', articleId: row.id, url: `/a/${row.id}` });
+      })
+      .catch((error) => {
+        console.error('[serve-site] failed to persist article:', error?.message ?? error);
+        broadcastEvent(runState, { type: 'error', message: 'Failed to save article' });
+      });
   };
 
-  sendJson(response, 200, { runId: interactionId, slug, articleUrl });
+  response.json({ runId: interactionId });
 
-  /** Builds and ships the Layer 3 interaction summary from whatever the interaction
-   * context accumulated, regardless of how far the pipeline got before success/failure. */
   function completeInteraction(success) {
     const summary = getSummary();
     const costUsd = computeCost(summary.tokenUsage).totalCost;
@@ -726,10 +503,6 @@ async function handleApiRun(request, response, identity) {
     });
   }
 
-  // Run the pipeline detached from the HTTP response so the browser can start
-  // listening to SSE. Errors are broadcast and then logged. Wrapped in its own
-  // interaction context so every LLM/external call inside runPipeline attributes
-  // its tokens/cost/retries back to this one interaction (see interaction-context.js).
   runWithInteractionContext({ interactionId, visitorId, sessionId, trafficClass }, () => {
     setClaimText(claim);
     decideVerboseSampling({ visitorId });
@@ -743,14 +516,22 @@ async function handleApiRun(request, response, identity) {
       .catch((pipelineError) => {
         console.error('[serve-site] pipeline error:', pipelineError);
         completeInteraction(false);
-        broadcastEvent(runState, {
-          type: 'error',
-          message: pipelineError?.message ?? 'Pipeline failed',
-        });
+        broadcastEvent(runState, { type: 'error', message: pipelineError?.message ?? 'Pipeline failed' });
       })
-      .finally(() => {
+      .finally(async () => {
+        // Guarantees articleRow is settled (not just "probably settled by
+        // now" — see articlePersistedPromise above) before deciding whether
+        // there's a row to merge counterarguments into.
+        await articlePersistedPromise;
+        if (articleRow && pipelineResult?.counterarguments) {
+          try {
+            await mergeArticleData(articleRow.id, { counterarguments: pipelineResult.counterarguments });
+            broadcastEvent(runState, { type: 'counterarguments', articleId: articleRow.id });
+          } catch (mergeError) {
+            console.error('[serve-site] failed to merge counterarguments:', mergeError?.message ?? mergeError);
+          }
+        }
         runState.finished = true;
-        // Close all subscribers. Give browsers a moment to process the final event.
         setTimeout(() => {
           for (const subscriberResponse of runState.subscribers) {
             try {
@@ -760,23 +541,17 @@ async function handleApiRun(request, response, identity) {
             }
           }
           runState.subscribers.clear();
-          // Keep runState cached briefly for any late replays, then drop it.
           setTimeout(() => activeRuns.delete(interactionId), 60_000);
         }, 250);
       });
   });
 }
 
-/**
- * GET /api/stream/:runId
- * Server-Sent Events stream. Immediately replays buffered events for the run,
- * then pushes any future events until the run finishes.
- */
-function handleApiStream(runId, response) {
+function handleApiStream(request, response) {
+  const runId = request.params.runId;
   const runState = activeRuns.get(runId);
   if (!runState) {
-    response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-    response.end('Unknown runId');
+    response.status(404).type('text/plain').send('Unknown runId');
     return;
   }
 
@@ -786,6 +561,7 @@ function handleApiStream(runId, response) {
     Connection: 'keep-alive',
     'X-Accel-Buffering': 'no',
   });
+  response.flushHeaders?.();
   response.write(': connected\n\n');
 
   for (const bufferedEvent of runState.events) {
@@ -798,65 +574,70 @@ function handleApiStream(runId, response) {
   }
 
   runState.subscribers.add(response);
-  response.on('close', () => {
+  request.on('close', () => {
     runState.subscribers.delete(response);
   });
 }
 
-const server = http.createServer(async (request, response) => {
-  const urlPath = (request.url ?? '/').split('?')[0] || '/';
-  const cookies = parseCookies(request.headers.cookie);
+/**
+ * POST /api/link-status { urls: string[] }
+ * Best-effort citation-link healing — see backup-links.js. Any failure
+ * returns an empty object, leaving the page's links exactly as rendered.
+ */
+async function handleApiLinkStatus(request, response) {
+  const urls = Array.isArray(request.body?.urls) ? request.body.urls.filter((u) => typeof u === 'string') : [];
+  if (urls.length === 0) {
+    response.json({});
+    return;
+  }
+  const resolved = await resolveLinks(urls);
+  response.json(Object.fromEntries(resolved));
+}
 
-  // Identity + traffic classification happen for every request, before auth/routing,
-  // so scanner noise and unauthenticated probes are counted too — that's the whole
-  // point of distinguishing "harmless scanner" from "real product traffic" from
-  // "suspicious traffic that actually invokes expensive work" (see identity.js).
+// ---------------------------------------------------------------------------
+// App wiring
+// ---------------------------------------------------------------------------
+
+const app = express();
+app.disable('x-powered-by');
+app.use(express.json({ limit: '10kb' }));
+
+// Identity + traffic classification happen for every request, before
+// auth/routing, so scanner noise and unauthenticated probes are counted too.
+app.use(async (request, response, next) => {
+  const urlPath = request.path;
+  const cookies = parseCookies(request.headers.cookie);
   const { visitorId, sessionId, isNewVisitor, isNewSession } = resolveIdentity(request, response, cookies, {
-    secure: SERVE_MODE === 'prod',
+    secure: IS_SECURE,
   });
   recordVisitor(isNewVisitor);
   if (isNewSession) recordSessionStart();
-  const trafficClass = classifyTraffic({
+  const trafficClassBase = classifyTraffic({
     method: request.method,
     urlPath,
     userAgent: request.headers['user-agent'],
     hasVisitorCookie: !isNewVisitor,
   });
-  recordTrafficRequest(trafficClass);
+  recordTrafficRequest(trafficClassBase);
+  request.identity = { visitorId, sessionId, trafficClassBase };
 
-  // Login/logout must be reachable without a session, everything else is gated below.
-  if (request.method === 'POST' && urlPath === '/api/login') {
-    await handleApiLogin(request, response);
-    return;
-  }
+  // Real-account / guest identity (see auth-accounts.js) — read-only here,
+  // never provisions a row (see that module's docstring for why).
+  await resolveUser(request, response);
+  next();
+});
 
-  if (request.method === 'POST' && urlPath === '/api/logout') {
-    handleApiLogout(response);
-    return;
-  }
+// Login/logout must be reachable without a session; everything else below is gated.
+app.post('/api/login', (req, res, next) => handleApiLogin(req, res).catch(next));
+app.post('/api/logout', (req, res) => handleApiLogout(res));
+app.post('/api/admin/login', (req, res, next) => handleApiAdminLogin(req, res).catch(next));
+app.post('/api/admin/logout', (req, res) => handleApiAdminLogout(res));
+app.post('/api/admin/settings', (req, res, next) => handleApiAdminSettings(req, res).catch(next));
 
-  // /admin and /api/admin/* are gated by their own admin session (see
-  // isAdminAuthenticated), independent of the main site's password lock —
-  // an admin must be able to reach it whether the site is open or locked.
-  if (request.method === 'POST' && urlPath === '/api/admin/login') {
-    await handleApiAdminLogin(request, response);
-    return;
-  }
-
-  if (request.method === 'POST' && urlPath === '/api/admin/logout') {
-    handleApiAdminLogout(response);
-    return;
-  }
-
-  if (request.method === 'POST' && urlPath === '/api/admin/settings') {
-    await handleApiAdminSettings(request, response);
-    return;
-  }
-
-  if ((request.method === 'GET' || request.method === 'HEAD') && urlPath === '/admin') {
+app.get('/admin', async (request, response, next) => {
+  try {
     if (!ADMIN_PASSWORD) {
-      response.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
-      response.end('Admin panel disabled: ADMIN_PASSWORD is not configured.');
+      response.status(503).type('text/plain').send('Admin panel disabled: ADMIN_PASSWORD is not configured.');
       return;
     }
     if (isAdminAuthenticated(request)) {
@@ -864,75 +645,123 @@ const server = http.createServer(async (request, response) => {
     } else {
       serveAdminLoginPage(response);
     }
-    return;
+  } catch (error) {
+    next(error);
   }
-
-  const siteLock = await readSiteLock();
-  if (siteLock.passwordProtectionEnabled && !isAuthenticated(request)) {
-    const isBotReadRequest =
-      (request.method === 'GET' || request.method === 'HEAD') &&
-      (urlPath === '/ads.txt' || isGoogleBotRequest(request));
-
-    if (!isBotReadRequest) {
-      if (request.method === 'GET' || request.method === 'HEAD') {
-        serveLoginPage(response);
-      } else {
-        sendJson(response, 401, { error: 'unauthenticated' });
-      }
-      return;
-    }
-    // Google crawler (or a request for /ads.txt): fall through to normal
-    // GET/HEAD routing below without a session.
-  }
-
-  if (request.method === 'POST' && urlPath === '/api/run') {
-    await handleApiRun(request, response, { visitorId, sessionId, trafficClass });
-    return;
-  }
-
-  if (request.method === 'POST' && urlPath === '/api/link-status') {
-    await handleApiLinkStatus(request, response);
-    return;
-  }
-
-  if (request.method === 'GET' && urlPath.startsWith('/api/stream/')) {
-    const runId = urlPath.slice('/api/stream/'.length);
-    handleApiStream(runId, response);
-    return;
-  }
-
-  if (request.method !== 'GET' && request.method !== 'HEAD') {
-    response.writeHead(405, { 'Content-Type': 'text/plain; charset=utf-8' });
-    response.end('Method Not Allowed');
-    return;
-  }
-
-  if (urlPath === '/' || urlPath === '/index.html') {
-    recordPageView('landing');
-    serveLandingPage(response);
-    return;
-  }
-
-  const articleMatch = urlPath.match(/^\/tabloid_generator\/output\/([^/]+)\.html$/);
-  if (articleMatch) {
-    recordPageView('article', { slug: articleMatch[1] });
-    await serveArticle(articleMatch[1], response);
-    return;
-  }
-
-  serveStaticFile(urlPath, response);
 });
 
-server.listen(PORT, SERVE_HOST, () => {
+// Site-wide password gate — everything past this point requires a session
+// when protection is enabled, except a couple of narrow, read-only carve-outs.
+app.use(async (request, response, next) => {
+  try {
+    const siteLock = await readSiteLock();
+    if (!siteLock.passwordProtectionEnabled || isAuthenticated(request)) {
+      next();
+      return;
+    }
+    const isBotReadRequest =
+      (request.method === 'GET' || request.method === 'HEAD') &&
+      (request.path === '/ads.txt' || isGoogleBotRequest(request));
+    if (isBotReadRequest) {
+      next();
+      return;
+    }
+    if (request.method === 'GET' || request.method === 'HEAD') {
+      serveLoginPage(response);
+    } else {
+      response.status(401).json({ error: 'unauthenticated' });
+    }
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/run', (req, res, next) => handleApiRun(req, res).catch(next));
+app.get('/api/stream/:runId', handleApiStream);
+app.post('/api/link-status', (req, res, next) => handleApiLinkStatus(req, res).catch(next));
+
+app.use('/api/account', accountRouter);
+app.use('/api', socialRouter);
+
+// Stable URL namespace for an article's permanent images, decoupled from
+// where getArticleImagesRoot() actually points (a project-relative dev path,
+// or a sibling of the mounted volume in prod) — see the plan's image
+// durability fix. article_data.slug + the filenames in article_data.images
+// are what the frontend combines into these URLs.
+app.use(
+  '/article-images',
+  express.static(getArticleImagesRoot(), {
+    cacheControl: false,
+    setHeaders: (res) => res.set('Cache-Control', 'no-cache'),
+  })
+);
+
+if (fs.existsSync(path.join(CLIENT_DIST, 'index.html'))) {
+  // React SPA build exists: serve it (and its assets) for '/', falling back
+  // to it for any unmatched GET so React Router's client-side routes work on
+  // a direct load/refresh. Legacy static assets (config/, tabloid_generator
+  // images, etc.) are still served by the PROJECT_ROOT static mount below.
+  app.use(express.static(CLIENT_DIST, { cacheControl: false }));
+} else {
+  app.get(['/', '/index.html'], (req, res) => {
+    recordPageView('landing');
+    serveLandingPage(res);
+  });
+}
+
+// Legacy static file serving (config/, tabloid_generator output/images,
+// debug pages, etc.) — kept for anything not superseded by the API/SPA above.
+app.use(
+  express.static(PROJECT_ROOT, {
+    cacheControl: false,
+    setHeaders: (res) => res.set('Cache-Control', 'no-cache'),
+  })
+);
+
+if (fs.existsSync(path.join(CLIENT_DIST, 'index.html'))) {
+  app.get('/*splat', (req, res) => {
+    if (req.method !== 'GET') {
+      res.status(405).type('text/plain').send('Method Not Allowed');
+      return;
+    }
+    res.sendFile(path.join(CLIENT_DIST, 'index.html'));
+  });
+}
+
+app.use((request, response) => {
+  response.status(404).type('text/plain').send('Not Found');
+});
+
+// Central error handler: HttpError -> its status/code; a JSON parse error
+// from express.json() -> 400 invalid_json (matching the old hand-rolled
+// readJsonBody's behavior); anything else -> 500, logged.
+app.use((error, request, response, next) => {
+  if (response.headersSent) {
+    next(error);
+    return;
+  }
+  if (error instanceof HttpError) {
+    response.status(error.status).json({ error: error.code });
+    return;
+  }
+  if (error?.type === 'entity.parse.failed' || error?.type === 'entity.too.large' || error instanceof SyntaxError) {
+    // Matches the old hand-rolled readJsonBody's behavior: any malformed or
+    // oversized body just comes back as 400 invalid_json, not a 413.
+    response.status(400).json({ error: 'invalid_json' });
+    return;
+  }
+  console.error('[serve-site] unhandled error:', error);
+  response.status(500).json({ error: 'internal_error' });
+});
+
+await runMigrations();
+await sweepExpiredSessions();
+
+const server = app.listen(PORT, SERVE_HOST, () => {
   const url = `http://127.0.0.1:${PORT}`;
   process.stdout.write(`${url}\n`);
-  const reachability =
-    SERVE_HOST === '0.0.0.0'
-      ? 'reachable on the local network'
-      : 'local machine only';
-  console.error(
-    `[serve-site] mode=${SERVE_MODE} listening on ${SERVE_HOST}:${PORT} (${reachability}); open ${url}`
-  );
+  const reachability = SERVE_HOST === '0.0.0.0' ? 'reachable on the local network' : 'local machine only';
+  console.error(`[serve-site] mode=${SERVE_MODE} listening on ${SERVE_HOST}:${PORT} (${reachability}); open ${url}`);
 });
 
 for (const signal of ['SIGTERM', 'SIGINT']) {

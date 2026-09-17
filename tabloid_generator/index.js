@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 import yaml from 'yaml';
 import { callGrokJson } from '../utils/grok.js';
 import { parseJsonFromLlmResponse } from '../utils/parse-json.js';
-import { getCachedImage } from '../utils/image-cache.js';
+import { getCachedImage, getArticleImagesRoot } from '../utils/image-cache.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -87,7 +87,7 @@ function parseJsonResponse(rawContent) {
  * @param {Array<{link, archiveLink, title}>} params.condensed - Same list idToUrl was built from
  * @returns {object} - The compact article data, version-tagged
  */
-function buildArticleData({ slug, topic, article, condensed }) {
+export function buildArticleData({ slug, topic, article, condensed, images }) {
   return {
     version: ARTICLE_DATA_VERSION,
     slug,
@@ -99,6 +99,7 @@ function buildArticleData({ slug, topic, article, condensed }) {
       archiveLink: citation.archiveLink ?? null,
       title: citation.title ?? '',
     })),
+    ...(images ? { images } : {}),
   };
 }
 
@@ -202,7 +203,11 @@ function buildUrlToIndex(citations) {
  */
 export async function fetchAndDownloadImages(article, slug, projectRoot) {
   const imagePaths = new Map();
-  const imagesDir = path.join(projectRoot, 'tabloid_generator', 'images', slug);
+  // Permanent, per-article location — a sibling of the shared Pixabay cache
+  // on the same mounted volume in prod (IMAGE_CACHE_DIR), not the ephemeral
+  // container filesystem, and never a path the cache's own 90-day sweep
+  // (runMaintenanceIfDue in utils/image-cache.js) walks. See getArticleImagesRoot().
+  const imagesDir = path.join(getArticleImagesRoot(), slug);
 
   const queries = [];
 
@@ -878,13 +883,16 @@ ${JSON.stringify(candidateArguments, null, 2)}`;
  * @param {object} articleResult - From generateArticle: { article, condensed, idToUrl, topic }
  * @param {string} slug - Filename-safe slug
  * @param {string} projectRoot - Absolute path to project root
- * @returns {Promise<string>} - HTML string
+ * @returns {Promise<{ html: string, imagePaths: Map<string, string> }>} - HTML plus the
+ *   key->filename map (needed by callers that persist article_data with images, e.g.
+ *   imright/index.js's Postgres integration — generateHtml alone can't reconstruct this).
  */
 export async function renderWithImages(articleResult, slug, projectRoot) {
   const { article, condensed, idToUrl, topic } = articleResult;
   const imagePaths = await fetchAndDownloadImages(article, slug, projectRoot);
   const bunkyDataUrl = (slug && (article?.sections ?? []).length > 0) ? getBunkyDataUrl(projectRoot) : null;
-  return generateHtml(article, topic, slug, condensed, idToUrl, imagePaths, bunkyDataUrl);
+  const html = generateHtml(article, topic, slug, condensed, idToUrl, imagePaths, bunkyDataUrl);
+  return { html, imagePaths };
 }
 
 /**
@@ -894,7 +902,7 @@ export async function renderWithImages(articleResult, slug, projectRoot) {
  * @param {object} extractedByTerm - Output from ref_extractor
  * @param {string} [slug] - Filename-safe slug
  * @param {string} [projectRoot] - Project root (required for image fetching)
- * @returns {Promise<string>} - HTML string
+ * @returns {Promise<{ html: string, imagePaths: Map<string, string> }>}
  */
 export async function generate(claim, extractedByArticle, slug = null, projectRoot = null) {
   const articleResult = await generateArticle(claim, extractedByArticle, slug);
