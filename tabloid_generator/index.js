@@ -162,7 +162,7 @@ function processParagraphWithLinks(text, idToUrl = null, urlToIndex = null, debu
       // If numeric id but not in map, render as plain text (invalid ref)
       const isValidLink = resolvedUrl && (resolvedUrl.startsWith('http') || resolvedUrl.startsWith('//'));
       const linkHtml = isValidLink
-        ? `<a href="${escapeHtml(resolvedUrl)}" target="_blank" rel="noopener">${escapeHtml(part.anchor)}</a>`
+        ? `<a href="${escapeHtml(resolvedUrl)}" class="citation-link" target="_blank" rel="noopener">${escapeHtml(part.anchor)}</a>`
         : escapeHtml(part.anchor);
       const refNum = urlToIndex?.get(resolvedUrl);
       if (refNum != null && debugPageUrl) {
@@ -789,6 +789,31 @@ ${conclusionHtml}
     <p>${slug ? `<a class="site-footer__how-link" href="../../imright/debug/${escapeHtml(slug)}.html" target="_blank" rel="noopener">Find out how this works</a>` : ''}</p>
     <p>imright.com &middot; Published ${publishedDate}</p>
   </footer>
+  <script>
+  (function() {
+    // Best-effort, non-blocking: the page above is already fully usable with the original
+    // links. This just asks the backend "are any of these still good?" and quietly swaps in
+    // an archive copy for any that have since died. Any failure here is silently ignored—
+    // worst case, links stay exactly as originally rendered.
+    var links = Array.prototype.slice.call(document.querySelectorAll('a.citation-link'));
+    if (links.length === 0) return;
+    var urls = links.map(function(a) { return a.href; });
+    fetch('/api/link-status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ urls: urls }),
+    })
+      .then(function(res) { return res.ok ? res.json() : null; })
+      .then(function(data) {
+        if (!data) return;
+        links.forEach(function(a) {
+          var resolved = data[a.href];
+          if (resolved && resolved !== a.href) a.href = resolved;
+        });
+      })
+      .catch(function() {});
+  })();
+  </script>
 </body>
 </html>`;
 }
