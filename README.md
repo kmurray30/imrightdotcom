@@ -20,10 +20,10 @@ Set `DATABASE_URL` to point at Postgres. On Railway, add a Postgres database to 
 
 To use `wikimedia`, all of the following need to be in place first:
 
-1. `wiki_searcher/schema/wiki_paragraph_embeddings.sql` run once against `DATABASE_URL` (enables the pgvector extension and creates the index table).
+1. `wiki_searcher/schema/wiki_paragraph_embeddings.sql` and `wiki_searcher/schema/wiki_refresh_checkpoint.sql` run once against `DATABASE_URL` (pgvector extension, the index table, and the checkpoint `refresh-daily.js` uses so a missed run doesn't create a permanent gap).
 2. The vector index actually populated — see `wiki_searcher/scripts/build-index-from-snapshot.js` (one-time, needs a downloaded/extracted Wikimedia Enterprise Snapshot) and `wiki_searcher/scripts/refresh-daily.js` (scheduled, keeps it current — see the script header for what it does and why it's safe to run on a schedule with zero impact on live requests).
 3. `wiki_searcher/scripts/wikimedia-login.js` run once to mint `WIKIMEDIA_REFRESH_TOKEN` (see below).
-4. The env vars: `WIKIMEDIA_USERNAME`, `WIKIMEDIA_REFRESH_TOKEN` (and `WIKIMEDIA_PASSWORD` only as a one-time bootstrap for step 3 — safe to remove after).
+4. The env vars: `WIKIMEDIA_USERNAME`, `WIKIMEDIA_REFRESH_TOKEN`. `WIKIMEDIA_PASSWORD` is needed for step 3's bootstrap either way — keep it set permanently as a Railway env var if you want the ~90-day refresh-token renewal to happen automatically, or remove it after step 3 if you'd rather do that renewal by hand (re-run `wikimedia-login.js`, update the env var) and not store the password long-term.
 
 Only then set `WIKI_SEARCH_PROVIDER=wikimedia`. Until all of the above exists, leave it unset/`mediawiki` — the `wikimedia` provider will throw on the first missing piece (no silent fallback).
 
