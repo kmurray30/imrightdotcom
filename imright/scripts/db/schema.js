@@ -204,3 +204,36 @@ export const commentLikes = pgTable(
     index('comment_likes_comment_id_idx').on(table.commentId),
   ]
 );
+
+/**
+ * Durable status for a /api/run pipeline execution — the id here is the same
+ * runId used in /api/stream/:runId and returned from POST /api/run.
+ *
+ * Exists specifically so a deploy or crash mid-run doesn't strand the
+ * client: run state used to live only in the process's in-memory `activeRuns`
+ * Map, so a browser reconnecting to a fresh process (after the old one was
+ * killed) got a bare 404 from GET /api/stream/:runId and its EventSource
+ * would retry that forever with no feedback — a silent, permanent hang.
+ * Now the stream handler falls back to this table when a runId isn't in the
+ * current process's memory: 'ready'/'done' replays the real outcome as if
+ * nothing happened; 'running' with no in-memory record only happens if the
+ * process that was running it died, so it's reported as an interrupted run
+ * rather than retried forever against nothing.
+ */
+export const pipelineRuns = pgTable(
+  'pipeline_runs',
+  {
+    id: uuid('id').primaryKey(),
+    ownerUserId: uuid('owner_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    status: text('status').notNull().default('running'), // running | ready | done | error
+    articleId: uuid('article_id').references(() => articles.id, { onDelete: 'set null' }),
+    errorMessage: text('error_message'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check('pipeline_runs_status_check', sql`${table.status} IN ('running', 'ready', 'done', 'error')`),
+  ]
+);

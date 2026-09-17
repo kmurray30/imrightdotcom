@@ -69,6 +69,13 @@ import { resolveUser, ensureOwner, sweepExpiredSessions } from './auth-accounts.
 import { accountRouter } from './routes/account.js';
 import { socialRouter } from './routes/social.js';
 import { createArticle, mergeArticleData } from './articles.js';
+import {
+  createPipelineRun,
+  markPipelineRunReady,
+  markPipelineRunDone,
+  markPipelineRunError,
+  getPipelineRun,
+} from './pipeline-runs.js';
 import { HttpError } from './http-error.js';
 import { runMigrations } from './db/migrate.js';
 
@@ -516,6 +523,15 @@ async function handleApiRun(request, response) {
   const interactionId = crypto.randomUUID();
   const runState = createRunState();
   activeRuns.set(interactionId, runState);
+  try {
+    // Durable record of this run, so a reconnect that lands on a different
+    // process (this one restarted mid-run — a deploy, a crash) can be
+    // answered honestly instead of a bare 404 the client retries forever.
+    // See handleApiStream's DB fallback and schema.js's pipelineRuns docstring.
+    await createPipelineRun({ id: interactionId, ownerUserId: owner.id });
+  } catch (error) {
+    console.error('[serve-site] failed to record pipeline run:', error?.message ?? error);
+  }
   recordSubmit(claim);
   recordInteractionStarted();
   const submittedAt = performance.now();
@@ -541,12 +557,16 @@ async function handleApiRun(request, response) {
     // runPipeline) — but the promise is kept, and awaited below in
     // .finally(), so the counterarguments merge can never race ahead of it.
     articlePersistedPromise = createArticle({ ownerUserId: owner.id, claimText: claim, articleData })
-      .then((row) => {
+      .then(async (row) => {
         articleRow = row;
+        await markPipelineRunReady({ id: interactionId, articleId: row.id }).catch((error) =>
+          console.error('[serve-site] failed to mark pipeline run ready:', error?.message ?? error)
+        );
         broadcastEvent(runState, { type: 'ready', articleId: row.id, url: `/a/${row.id}` });
       })
-      .catch((error) => {
+      .catch(async (error) => {
         console.error('[serve-site] failed to persist article:', error?.message ?? error);
+        await markPipelineRunError({ id: interactionId, errorMessage: 'Failed to save article' }).catch(() => {});
         broadcastEvent(runState, { type: 'error', message: 'Failed to save article' });
       });
   };
@@ -582,15 +602,22 @@ async function handleApiRun(request, response) {
     decideVerboseSampling({ visitorId });
 
     return runPipeline(claim, { onProgress, onStepComplete, onPageReady })
-      .then((result) => {
+      .then(async (result) => {
         pipelineResult = result;
         completeInteraction(true);
+        await markPipelineRunDone(interactionId).catch((error) =>
+          console.error('[serve-site] failed to mark pipeline run done:', error?.message ?? error)
+        );
         broadcastEvent(runState, { type: 'done' });
       })
-      .catch((pipelineError) => {
+      .catch(async (pipelineError) => {
         console.error('[serve-site] pipeline error:', pipelineError);
         completeInteraction(false);
-        broadcastEvent(runState, { type: 'error', message: pipelineError?.message ?? 'Pipeline failed' });
+        const message = pipelineError?.message ?? 'Pipeline failed';
+        await markPipelineRunError({ id: interactionId, errorMessage: message }).catch((error) =>
+          console.error('[serve-site] failed to mark pipeline run error:', error?.message ?? error)
+        );
+        broadcastEvent(runState, { type: 'error', message });
       })
       .finally(async () => {
         // Guarantees articleRow is settled (not just "probably settled by
@@ -621,11 +648,56 @@ async function handleApiRun(request, response) {
   });
 }
 
-function handleApiStream(request, response) {
+/**
+ * Reached when this process has no memory of runId — either it never
+ * existed, or (the case this exists for) it was running on a process that's
+ * since died (a deploy, a crash) and this is a fresh one. Answers from the
+ * durable pipeline_runs row instead of a bare 404, which is what used to
+ * send the client's EventSource into a silent, permanent retry loop against
+ * a run that no longer exists anywhere. 'running' with no in-memory record
+ * can only mean the run was interrupted — singleton deploys mean there's
+ * never a second live process that could still legitimately own it.
+ */
+async function streamFromPersistedRun(runId, response) {
+  let run;
+  try {
+    run = await getPipelineRun(runId);
+  } catch (error) {
+    console.error('[serve-site] failed to look up persisted pipeline run:', error?.message ?? error);
+    run = null;
+  }
+  if (!run) {
+    response.status(404).type('text/plain').send('Unknown runId');
+    return;
+  }
+
+  response.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  response.flushHeaders?.();
+  response.write(': connected\n\n');
+
+  if (run.status === 'ready' || run.status === 'done') {
+    response.write(`data: ${JSON.stringify({ type: 'ready', articleId: run.articleId, url: `/a/${run.articleId}` })}\n\n`);
+    response.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+  } else if (run.status === 'error') {
+    response.write(`data: ${JSON.stringify({ type: 'error', message: run.errorMessage || 'Pipeline failed' })}\n\n`);
+  } else {
+    response.write(
+      `data: ${JSON.stringify({ type: 'error', message: 'This run was interrupted by a deploy or restart. Please try again.' })}\n\n`
+    );
+  }
+  response.end();
+}
+
+async function handleApiStream(request, response) {
   const runId = request.params.runId;
   const runState = activeRuns.get(runId);
   if (!runState) {
-    response.status(404).type('text/plain').send('Unknown runId');
+    await streamFromPersistedRun(runId, response);
     return;
   }
 
@@ -763,7 +835,7 @@ app.use(async (request, response, next) => {
 });
 
 app.post('/api/run', (req, res, next) => handleApiRun(req, res).catch(next));
-app.get('/api/stream/:runId', handleApiStream);
+app.get('/api/stream/:runId', (req, res, next) => handleApiStream(req, res).catch(next));
 app.post('/api/link-status', (req, res, next) => handleApiLinkStatus(req, res).catch(next));
 // Read-only list of example beliefs for the belief input's animated
 // placeholder (both index.html and the React BeliefForm) — no admin auth
