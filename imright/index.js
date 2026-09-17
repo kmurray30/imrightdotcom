@@ -20,6 +20,7 @@ import {
   computeCost,
 } from '../utils/grok.js';
 import { backfillImageEmbeddings } from '../utils/image-cache.js';
+import { upsertBackupLinks } from './scripts/backup-links.js';
 import { log } from './scripts/observability.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -194,6 +195,9 @@ export async function runPipeline(claim, options = {}) {
     extracted,
     'yaml'
   );
+  // Fire-and-forget, same spirit as saveToDisk: seeds backup_links for the not-yet-built
+  // render-time link healing, but must never slow down or fail article generation.
+  upsertBackupLinks(extracted);
 
   onProgress(5, totalSteps, 'Generating tabloid article...');
   const step5Start = performance.now();

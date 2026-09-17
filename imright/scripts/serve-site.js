@@ -48,6 +48,8 @@ import {
 import { resolveIdentity, appendSetCookie, classifyTraffic, checkRunAbuse, decideVerboseSampling } from './identity.js';
 import { runWithInteractionContext, setClaimText, getSummary, addTraceEvent } from './interaction-context.js';
 import { computeCost } from '../../utils/grok.js';
+import { resolveLinks } from './backup-links.js';
+import { regenerateFromRaw } from '../../tabloid_generator/index.js';
 
 loadEnv();
 startObservability();
@@ -540,6 +542,68 @@ function serveStaticFile(requestUrlPath, response) {
   });
 }
 
+/**
+ * Serves a generated article. The static HTML written at generation time is the fast path and
+ * matches today's behavior exactly. If it's ever missing but the durable
+ * tabloid_generator/article_data/<slug>.json survives (e.g. output/ was pruned), regenerates the
+ * HTML from that on the fly, caches it back to disk so the next request takes the fast path
+ * again, and serves it—article_data, not the HTML file, is the actual source of truth.
+ */
+async function serveArticle(slug, response) {
+  const outputPath = path.join(PROJECT_ROOT, 'tabloid_generator', 'output', `${slug}.html`);
+  if (fs.existsSync(outputPath)) {
+    serveStaticFile(`/tabloid_generator/output/${slug}.html`, response);
+    return;
+  }
+
+  const articleDataPath = path.join(PROJECT_ROOT, 'tabloid_generator', 'article_data', `${slug}.json`);
+  if (!fs.existsSync(articleDataPath)) {
+    response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    response.end('Not Found');
+    return;
+  }
+
+  try {
+    const html = await regenerateFromRaw(slug, PROJECT_ROOT);
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    fs.writeFileSync(outputPath, html, 'utf8');
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
+    response.end(html);
+  } catch (error) {
+    console.error(`[serve-site] failed to regenerate ${slug} from article_data:`, error.message);
+    response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+    response.end('Internal Server Error');
+  }
+}
+
+/**
+ * POST /api/link-status { urls: string[] }
+ * Called by the client-side script on every article page after load. Never blocks the page
+ * render (it runs after the page is already fully usable)—just batches a backup_links lookup
+ * for the citation urls on that page and returns { [url]: resolvedUrl } for any that have a
+ * row (see resolveLinks in backup-links.js), so the page can quietly swap in an archive link
+ * for anything that's since died. Best-effort: any failure returns an empty object, leaving
+ * the page's links exactly as originally rendered.
+ */
+async function handleApiLinkStatus(request, response) {
+  let body;
+  try {
+    body = await readJsonBody(request);
+  } catch {
+    sendJson(response, 400, { error: 'invalid_json' });
+    return;
+  }
+
+  const urls = Array.isArray(body.urls) ? body.urls.filter((u) => typeof u === 'string') : [];
+  if (urls.length === 0) {
+    sendJson(response, 200, {});
+    return;
+  }
+
+  const resolved = await resolveLinks(urls);
+  sendJson(response, 200, Object.fromEntries(resolved));
+}
+
 function readJsonBody(request) {
   return new Promise((resolve, reject) => {
     let raw = '';
@@ -826,6 +890,11 @@ const server = http.createServer(async (request, response) => {
     return;
   }
 
+  if (request.method === 'POST' && urlPath === '/api/link-status') {
+    await handleApiLinkStatus(request, response);
+    return;
+  }
+
   if (request.method === 'GET' && urlPath.startsWith('/api/stream/')) {
     const runId = urlPath.slice('/api/stream/'.length);
     handleApiStream(runId, response);
@@ -847,6 +916,8 @@ const server = http.createServer(async (request, response) => {
   const articleMatch = urlPath.match(/^\/tabloid_generator\/output\/([^/]+)\.html$/);
   if (articleMatch) {
     recordPageView('article', { slug: articleMatch[1] });
+    await serveArticle(articleMatch[1], response);
+    return;
   }
 
   serveStaticFile(urlPath, response);

@@ -15,6 +15,7 @@ ref_extractor/extracted/
 ref_extractor/link_stats/
 tabloid_generator/output/
 tabloid_generator/output_raw/
+tabloid_generator/article_data/
 tabloid_generator/counterarguments/
 tabloid_generator/images/
 run-stats/
