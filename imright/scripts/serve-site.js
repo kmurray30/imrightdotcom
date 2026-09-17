@@ -75,6 +75,8 @@ import {
   markPipelineRunDone,
   markPipelineRunError,
   getPipelineRun,
+  claimPipelineRunRetry,
+  MAX_PIPELINE_RUN_RETRIES,
 } from './pipeline-runs.js';
 import { HttpError } from './http-error.js';
 import { runMigrations } from './db/migrate.js';
@@ -495,43 +497,18 @@ function broadcastEvent(runState, event) {
 }
 
 /**
- * POST /api/run { claim }
- * Starts runPipeline in the background and returns { runId }. Progress, and
- * the onPageReady signal, are streamed via /api/stream/:runId.
- *
- * Behavior change from before this feature: the generated article's
- * permanent identity is now a Postgres `articles` row (owner + real UUID),
- * not a static HTML file keyed by slug — see the plan's "Deliberate behavior
- * change" note. ensureOwner() is the one place a guest identity gets
- * provisioned (see auth-accounts.js).
+ * Registers a run in activeRuns and kicks off runPipeline for it, wiring
+ * progress/ready/done/error broadcasting, article persistence, and the
+ * durable pipeline_runs row. Shared between a fresh POST /api/run and the
+ * automatic-retry path in handleApiStream (claimPipelineRunRetry) — both
+ * need identical wiring; the only difference is who decided to call this
+ * and whether runId already had a pipeline_runs row (either way, this
+ * function's UPDATEs just find it and don't care how it got there).
  */
-async function handleApiRun(request, response) {
-  const claim = typeof request.body?.claim === 'string' ? request.body.claim.trim() : '';
-  if (!claim) {
-    response.status(400).json({ error: 'missing_claim' });
-    return;
-  }
-
-  const owner = await ensureOwner(request, response);
-  const { visitorId, sessionId, trafficClassBase } = request.identity;
-  const clientIp = getClientIp(request);
-  const { suspectedAbuse, duplicateRequest } = checkRunAbuse({ visitorId, ip: clientIp, claim });
-  // A visitor tripping the abuse heuristics gets reclassified even if their cookie made
-  // them look like a normal browser session — visibility, not enforcement (see README).
-  const trafficClass = suspectedAbuse ? 'suspicious_api' : trafficClassBase;
-
-  const interactionId = crypto.randomUUID();
+function startPipelineRun({ runId, ownerUserId, claim, visitorId, sessionId, trafficClass, suspectedAbuse = false, duplicateRequest = false }) {
   const runState = createRunState();
-  activeRuns.set(interactionId, runState);
-  try {
-    // Durable record of this run, so a reconnect that lands on a different
-    // process (this one restarted mid-run — a deploy, a crash) can be
-    // answered honestly instead of a bare 404 the client retries forever.
-    // See handleApiStream's DB fallback and schema.js's pipelineRuns docstring.
-    await createPipelineRun({ id: interactionId, ownerUserId: owner.id });
-  } catch (error) {
-    console.error('[serve-site] failed to record pipeline run:', error?.message ?? error);
-  }
+  activeRuns.set(runId, runState);
+
   recordSubmit(claim);
   recordInteractionStarted();
   const submittedAt = performance.now();
@@ -556,22 +533,20 @@ async function handleApiRun(request, response) {
     // Not awaited here (onPageReady is a synchronous callback into
     // runPipeline) — but the promise is kept, and awaited below in
     // .finally(), so the counterarguments merge can never race ahead of it.
-    articlePersistedPromise = createArticle({ ownerUserId: owner.id, claimText: claim, articleData })
+    articlePersistedPromise = createArticle({ ownerUserId, claimText: claim, articleData })
       .then(async (row) => {
         articleRow = row;
-        await markPipelineRunReady({ id: interactionId, articleId: row.id }).catch((error) =>
+        await markPipelineRunReady({ id: runId, articleId: row.id }).catch((error) =>
           console.error('[serve-site] failed to mark pipeline run ready:', error?.message ?? error)
         );
         broadcastEvent(runState, { type: 'ready', articleId: row.id, url: `/a/${row.id}` });
       })
       .catch(async (error) => {
         console.error('[serve-site] failed to persist article:', error?.message ?? error);
-        await markPipelineRunError({ id: interactionId, errorMessage: 'Failed to save article' }).catch(() => {});
+        await markPipelineRunError({ id: runId, errorMessage: 'Failed to save article' }).catch(() => {});
         broadcastEvent(runState, { type: 'error', message: 'Failed to save article' });
       });
   };
-
-  response.json({ runId: interactionId });
 
   function completeInteraction(success) {
     const summary = getSummary();
@@ -597,7 +572,7 @@ async function handleApiRun(request, response) {
     });
   }
 
-  runWithInteractionContext({ interactionId, visitorId, sessionId, trafficClass }, () => {
+  runWithInteractionContext({ interactionId: runId, visitorId, sessionId, trafficClass }, () => {
     setClaimText(claim);
     decideVerboseSampling({ visitorId });
 
@@ -605,7 +580,7 @@ async function handleApiRun(request, response) {
       .then(async (result) => {
         pipelineResult = result;
         completeInteraction(true);
-        await markPipelineRunDone(interactionId).catch((error) =>
+        await markPipelineRunDone(runId).catch((error) =>
           console.error('[serve-site] failed to mark pipeline run done:', error?.message ?? error)
         );
         broadcastEvent(runState, { type: 'done' });
@@ -614,7 +589,7 @@ async function handleApiRun(request, response) {
         console.error('[serve-site] pipeline error:', pipelineError);
         completeInteraction(false);
         const message = pipelineError?.message ?? 'Pipeline failed';
-        await markPipelineRunError({ id: interactionId, errorMessage: message }).catch((error) =>
+        await markPipelineRunError({ id: runId, errorMessage: message }).catch((error) =>
           console.error('[serve-site] failed to mark pipeline run error:', error?.message ?? error)
         );
         broadcastEvent(runState, { type: 'error', message });
@@ -642,35 +617,71 @@ async function handleApiRun(request, response) {
             }
           }
           runState.subscribers.clear();
-          setTimeout(() => activeRuns.delete(interactionId), 60_000);
+          setTimeout(() => activeRuns.delete(runId), 60_000);
         }, 250);
       });
   });
+
+  return runState;
 }
 
 /**
- * Reached when this process has no memory of runId — either it never
- * existed, or (the case this exists for) it was running on a process that's
- * since died (a deploy, a crash) and this is a fresh one. Answers from the
- * durable pipeline_runs row instead of a bare 404, which is what used to
- * send the client's EventSource into a silent, permanent retry loop against
- * a run that no longer exists anywhere. 'running' with no in-memory record
- * can only mean the run was interrupted — singleton deploys mean there's
- * never a second live process that could still legitimately own it.
+ * POST /api/run { claim }
+ * Starts runPipeline in the background and returns { runId }. Progress, and
+ * the onPageReady signal, are streamed via /api/stream/:runId.
+ *
+ * Behavior change from before this feature: the generated article's
+ * permanent identity is now a Postgres `articles` row (owner + real UUID),
+ * not a static HTML file keyed by slug — see the plan's "Deliberate behavior
+ * change" note. ensureOwner() is the one place a guest identity gets
+ * provisioned (see auth-accounts.js).
  */
-async function streamFromPersistedRun(runId, response) {
-  let run;
-  try {
-    run = await getPipelineRun(runId);
-  } catch (error) {
-    console.error('[serve-site] failed to look up persisted pipeline run:', error?.message ?? error);
-    run = null;
-  }
-  if (!run) {
-    response.status(404).type('text/plain').send('Unknown runId');
+async function handleApiRun(request, response) {
+  const claim = typeof request.body?.claim === 'string' ? request.body.claim.trim() : '';
+  if (!claim) {
+    response.status(400).json({ error: 'missing_claim' });
     return;
   }
 
+  const owner = await ensureOwner(request, response);
+  const { visitorId, sessionId, trafficClassBase } = request.identity;
+  const clientIp = getClientIp(request);
+  const { suspectedAbuse, duplicateRequest } = checkRunAbuse({ visitorId, ip: clientIp, claim });
+  // A visitor tripping the abuse heuristics gets reclassified even if their cookie made
+  // them look like a normal browser session — visibility, not enforcement (see README).
+  const trafficClass = suspectedAbuse ? 'suspicious_api' : trafficClassBase;
+
+  const interactionId = crypto.randomUUID();
+  try {
+    // Durable record of this run, so a reconnect that lands on a different
+    // process (this one restarted mid-run — a deploy, a crash) can be
+    // recovered instead of stranded on a bare 404 the client retries
+    // forever. See handleApiStream's DB fallback and schema.js's
+    // pipelineRuns docstring — claimText is kept specifically so an
+    // interrupted run can be auto-retried from scratch, not just reported.
+    await createPipelineRun({ id: interactionId, ownerUserId: owner.id, claimText: claim });
+  } catch (error) {
+    console.error('[serve-site] failed to record pipeline run:', error?.message ?? error);
+  }
+
+  response.json({ runId: interactionId });
+
+  startPipelineRun({
+    runId: interactionId,
+    ownerUserId: owner.id,
+    claim,
+    visitorId,
+    sessionId,
+    trafficClass,
+    suspectedAbuse,
+    duplicateRequest,
+  });
+}
+
+/** Writes SSE headers, replays the given terminal event(s), and ends the
+ * response — for the two DB-fallback cases that have nothing left to
+ * stream live (already finished, or genuinely failed). */
+function respondWithSynthesizedEvents(response, events) {
   response.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -679,26 +690,83 @@ async function streamFromPersistedRun(runId, response) {
   });
   response.flushHeaders?.();
   response.write(': connected\n\n');
-
-  if (run.status === 'ready' || run.status === 'done') {
-    response.write(`data: ${JSON.stringify({ type: 'ready', articleId: run.articleId, url: `/a/${run.articleId}` })}\n\n`);
-    response.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
-  } else if (run.status === 'error') {
-    response.write(`data: ${JSON.stringify({ type: 'error', message: run.errorMessage || 'Pipeline failed' })}\n\n`);
-  } else {
-    response.write(
-      `data: ${JSON.stringify({ type: 'error', message: 'This run was interrupted by a deploy or restart. Please try again.' })}\n\n`
-    );
+  for (const event of events) {
+    response.write(`data: ${JSON.stringify(event)}\n\n`);
   }
   response.end();
 }
 
 async function handleApiStream(request, response) {
   const runId = request.params.runId;
-  const runState = activeRuns.get(runId);
+  let runState = activeRuns.get(runId);
+
   if (!runState) {
-    await streamFromPersistedRun(runId, response);
-    return;
+    // Not in this process's memory — either runId never existed, or (the
+    // case this exists for) it was running on a process that's since died
+    // (a deploy, a crash) and this is a fresh one. Falls back to the
+    // durable pipeline_runs row instead of a bare 404, which is what used
+    // to send the client's EventSource into a silent, permanent retry loop.
+    let run;
+    try {
+      run = await getPipelineRun(runId);
+    } catch (error) {
+      console.error('[serve-site] failed to look up persisted pipeline run:', error?.message ?? error);
+    }
+    if (!run) {
+      response.status(404).type('text/plain').send('Unknown runId');
+      return;
+    }
+
+    if (run.status === 'ready' || run.status === 'done') {
+      respondWithSynthesizedEvents(response, [
+        { type: 'ready', articleId: run.articleId, url: `/a/${run.articleId}` },
+        { type: 'done' },
+      ]);
+      return;
+    }
+
+    if (run.status === 'error') {
+      respondWithSynthesizedEvents(response, [{ type: 'error', message: run.errorMessage || 'Pipeline failed' }]);
+      return;
+    }
+
+    // status === 'running' with nobody's activeRuns owning it: singleton
+    // deploys mean there's never a second live process that could still
+    // legitimately own it, so this can only mean it was interrupted.
+    // Recover automatically rather than just reporting that: restart the
+    // whole pipeline from scratch under the same runId. claimPipelineRunRetry
+    // is one atomic UPDATE, so if several reconnects land at once (multiple
+    // tabs, the browser's own EventSource retry racing a manual refresh),
+    // only one of them actually restarts it.
+    const claimed = await claimPipelineRunRetry(runId).catch((error) => {
+      console.error('[serve-site] failed to claim pipeline run retry:', error?.message ?? error);
+      return null;
+    });
+
+    if (claimed) {
+      console.error(`[serve-site] auto-retrying interrupted run ${runId} (attempt ${claimed.retryCount + 1})`);
+      runState = startPipelineRun({
+        runId,
+        ownerUserId: claimed.ownerUserId,
+        claim: claimed.claimText,
+        visitorId: request.identity.visitorId,
+        sessionId: request.identity.sessionId,
+        trafficClass: request.identity.trafficClassBase,
+      });
+      // Falls through to the live-streaming path below with the freshly
+      // started runState, exactly as if it had been found in activeRuns.
+    } else {
+      // Retries exhausted (or another concurrent reconnect just claimed
+      // this attempt — vanishingly small window; worst case this request
+      // reports an error while that one silently succeeds for whichever
+      // tab stays connected).
+      const message =
+        run.retryCount >= MAX_PIPELINE_RUN_RETRIES
+          ? 'This article could not be generated after several attempts. Please try again later.'
+          : 'This run was interrupted. Please try again.';
+      respondWithSynthesizedEvents(response, [{ type: 'error', message }]);
+      return;
+    }
   }
 
   response.writeHead(200, {

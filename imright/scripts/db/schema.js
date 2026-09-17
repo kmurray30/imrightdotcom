@@ -217,8 +217,11 @@ export const commentLikes = pgTable(
  * Now the stream handler falls back to this table when a runId isn't in the
  * current process's memory: 'ready'/'done' replays the real outcome as if
  * nothing happened; 'running' with no in-memory record only happens if the
- * process that was running it died, so it's reported as an interrupted run
- * rather than retried forever against nothing.
+ * process that was running it died — rather than just reporting that as a
+ * failure, the stream handler automatically restarts the pipeline from
+ * scratch under the same runId (claimText is kept for exactly this), bounded
+ * by retryCount so a claim that deterministically fails can't retry forever
+ * and rack up LLM cost.
  */
 export const pipelineRuns = pgTable(
   'pipeline_runs',
@@ -227,9 +230,11 @@ export const pipelineRuns = pgTable(
     ownerUserId: uuid('owner_user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
+    claimText: text('claim_text').notNull(),
     status: text('status').notNull().default('running'), // running | ready | done | error
     articleId: uuid('article_id').references(() => articles.id, { onDelete: 'set null' }),
     errorMessage: text('error_message'),
+    retryCount: integer('retry_count').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
