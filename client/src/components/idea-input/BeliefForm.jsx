@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { RunProgress, VISIBLE_STAGES } from './RunProgress.jsx';
+import { useAnimatedPlaceholder } from './useAnimatedPlaceholder.js';
 
 /** Port of index.html's belief-form submit flow: POST /api/run, then an SSE
  * stream of progress until `ready`. The one deliberate behavior change from
@@ -10,11 +11,15 @@ import { RunProgress, VISIBLE_STAGES } from './RunProgress.jsx';
 export function BeliefForm() {
   const [claim, setClaim] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
   const [stepName, setStepName] = useState('');
   const [percent, setPercent] = useState(0);
   const [error, setError] = useState(null);
   const eventSourceRef = useRef(null);
+  const placeholderOverlayRef = useRef(null);
   const navigate = useNavigate();
+
+  useAnimatedPlaceholder(placeholderOverlayRef, isFocused || claim !== '' || isSubmitting);
 
   function handleStreamEvent(event) {
     if (event.type === 'progress') {
@@ -79,14 +84,18 @@ export function BeliefForm() {
   return (
     <div className="belief-form-wrapper">
       <form className="belief-form" onSubmit={handleSubmit}>
-        <input
-          className="belief-input"
-          value={claim}
-          onChange={(e) => setClaim(e.target.value)}
-          placeholder="State your belief..."
-          disabled={isSubmitting}
-          required
-        />
+        <div className="belief-input-wrap">
+          <input
+            className="belief-input"
+            value={claim}
+            onChange={(e) => setClaim(e.target.value)}
+            onFocus={() => setIsFocused(true)}
+            onBlur={() => setIsFocused(false)}
+            disabled={isSubmitting}
+            required
+          />
+          <div className="belief-input-placeholder-overlay" ref={placeholderOverlayRef} aria-hidden="true" />
+        </div>
         <button type="submit" disabled={isSubmitting}>
           {isSubmitting ? 'Working…' : 'Prove me right!'}
         </button>
