@@ -5,14 +5,19 @@ Exhaustive inventory of the social-layer UI, grounded in the actual
 Playwright test(s) that exercise it. Run with `npm run test:e2e`.
 
 ## A. Global / header nav
+All nav options fold into a single "Menu" dropdown (folded together per a
+real request — the previous flat row of links also had no responsive
+handling and overlapped/ran off-screen at phone width).
 | # | Feature | Test |
 |---|---|---|
 | 1 | Logo links back to home | header-nav.spec.js A1 |
-| 2 | History link visible to guests | header-nav.spec.js A2 |
+| 2 | History link visible to guests, inside the menu | header-nav.spec.js A2 |
 | 3 | Bookmarks link hidden for guests, shown when logged in | header-nav.spec.js A3+A4 |
 | 4 | Profile link (display name) hidden for guests, shown when logged in | header-nav.spec.js A3+A4 |
 | 5 | Log in / Sign up links shown for guests | header-nav.spec.js A5 |
 | 6 | Log out button shown when logged in; clears session | header-nav.spec.js A3+A4+A6 |
+| 59 | Menu closes on an outside click and after following a link | header-nav.spec.js "menu closes..." |
+| 60 | Header never overflows/overlaps at phone width | header-nav.spec.js "mobile viewport..." |
 
 ## B. Home page / idea generation
 | # | Feature | Test |
@@ -25,6 +30,8 @@ Playwright test(s) that exercise it. Run with `npm run test:e2e`.
 | 12 | Dropped SSE connection shows a clear error (no silent hang) | home.spec.js B12 |
 | 13 | Empty/whitespace claim can't be submitted | home.spec.js B13 |
 | 14 | Discover feed renders below the idea-input form | home.spec.js B14 |
+| 15 | Home page doesn't repeat the "imright.com" heading already in the header | home.spec.js B15 |
+| 61 | Submit button is a legible, visually prominent primary action | home.spec.js "B7 style..." |
 
 ## C. Discover feed
 | # | Feature | Test |
@@ -60,6 +67,8 @@ Playwright test(s) that exercise it. Run with `npm run test:e2e`.
 | 39 | Posting a comment prepends it and clears the composer | article.spec.js D39+D40 |
 | 40 | Comment like toggles for a logged-in user | article.spec.js D39+D40 |
 | 41 | Empty state when there are no comments | article.spec.js D38+D41 |
+| 42 | Article page shows the owner byline (linked when they have an account) and like/comment/bookmark stats | article.spec.js D42 |
+| 62 | On mobile, Enter submits a comment (Shift+Enter for a newline) without needing the Post button visible | article.spec.js D39 mobile |
 
 ## Visual legibility (found from real user reports, not covered by the areas above)
 | # | Feature | Test |

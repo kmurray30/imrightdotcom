@@ -118,7 +118,7 @@ export function BeliefForm() {
           />
           <div className="belief-input-placeholder-overlay" ref={placeholderOverlayRef} aria-hidden="true" />
         </div>
-        <button type="submit" disabled={isSubmitting}>
+        <button type="submit" className="button-primary" disabled={isSubmitting}>
           {isSubmitting ? 'Working…' : 'Prove me right!'}
         </button>
       </form>

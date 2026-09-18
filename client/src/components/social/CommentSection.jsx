@@ -73,6 +73,18 @@ export function CommentSection({ articleId }) {
     }
   }
 
+  // On a phone, the on-screen keyboard commonly covers the Post button
+  // below the textarea (a real report: "still no way to submit comments on
+  // mobile") — Enter-to-submit means the keyboard's own return/send key
+  // works without the button ever needing to be visible. Shift+Enter still
+  // inserts a newline, the standard chat-input convention.
+  function handleKeyDown(event) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      handleSubmit(event);
+    }
+  }
+
   return (
     <section className="comment-section">
       <h2>Comments</h2>
@@ -80,8 +92,15 @@ export function CommentSection({ articleId }) {
         <GuestPrompt message="Sign up to comment" />
       ) : (
         <form onSubmit={handleSubmit} className="comment-composer">
-          <textarea value={body} onChange={(e) => setBody(e.target.value)} maxLength={2000} placeholder="Add a comment..." />
-          <button type="submit" disabled={submitting || !body.trim()}>
+          <textarea
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            onKeyDown={handleKeyDown}
+            maxLength={2000}
+            placeholder="Add a comment..."
+            enterKeyHint="send"
+          />
+          <button type="submit" className="button-primary" disabled={submitting || !body.trim()}>
             Post
           </button>
         </form>

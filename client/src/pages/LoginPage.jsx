@@ -45,7 +45,7 @@ export function LoginPage() {
           />
         </label>
         {error && <p className="form-error">{error}</p>}
-        <button type="submit" disabled={submitting}>
+        <button type="submit" className="button-primary" disabled={submitting}>
           {submitting ? 'Logging in…' : 'Log in'}
         </button>
       </form>

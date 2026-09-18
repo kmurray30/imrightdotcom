@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { api } from '../api/client.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { ArticleBody } from '../components/article/ArticleBody.jsx';
@@ -40,6 +40,21 @@ export function ArticlePage() {
 
   return (
     <div className="article-page">
+      <div className="article-meta">
+        <p className="article-byline">
+          by{' '}
+          {article.ownerUsername ? (
+            <Link to={`/u/${article.ownerUsername}`}>{article.ownerDisplayName}</Link>
+          ) : (
+            article.ownerDisplayName || 'Anonymous'
+          )}
+        </p>
+        <div className="article-stats">
+          <span>♥ {article.likeCount}</span>
+          <span>💬 {article.commentCount}</span>
+          <span>🔖 {article.bookmarkCount}</span>
+        </div>
+      </div>
       <div className="article-actions">
         {isOwner && (
           <VisibilityToggle

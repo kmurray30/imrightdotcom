@@ -10,6 +10,7 @@
 // on a real, renderable article page.
 import { test, expect } from '@playwright/test';
 import { seedGuestUser, seedArticle } from './helpers/db.js';
+import { minContrastRatio } from './helpers/contrast.js';
 
 function sseBody(events) {
   return events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('');
@@ -20,6 +21,19 @@ test.describe('Home page: idea-input form', () => {
     await page.goto('/');
     await expect(page.locator('.belief-input')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Prove me right!' })).toBeVisible();
+  });
+
+  test('B7 style: the submit button is a clearly legible, prominent primary action', async ({ page }) => {
+    // Real report: "submit buttons area still just white with no visible
+    // text" — the button was technically legible (see the earlier
+    // button:disabled contrast fix) but visually identical to every
+    // secondary button (Share, etc.), with nothing marking it as *the*
+    // primary action. It, and the other form-submit buttons like it
+    // (Login/Signup/Post), now use a distinct accent-colored style.
+    await page.goto('/');
+    const submitButton = page.getByRole('button', { name: 'Prove me right!' });
+    await expect(submitButton).toHaveClass(/button-primary/);
+    expect(await minContrastRatio(submitButton)).toBeGreaterThan(3);
   });
 
   test('B13: an empty claim cannot be submitted (client-side required check)', async ({ page }) => {
@@ -134,5 +148,14 @@ test.describe('Home page: idea-input form', () => {
     expect(formBox).toBeTruthy();
     expect(feedBox).toBeTruthy();
     expect(feedBox.y).toBeGreaterThan(formBox.y);
+  });
+
+  test('B15: the home page does not repeat the "imright.com" heading already in the header', async ({ page }) => {
+    // Real report: the hero's big <h1>imright.com</h1> was pure duplication
+    // of the header logo right above it. The header logo itself (outside
+    // .home-page) is untouched and still expected.
+    await page.goto('/');
+    await expect(page.locator('.home-page').getByText('imright.com')).toHaveCount(0);
+    await expect(page.locator('.site-header').getByText('imright.com')).toBeVisible();
   });
 });
