@@ -30,8 +30,34 @@ export async function createArticle({ ownerUserId, claimText, articleData }) {
   return row;
 }
 
+/** Unlike getArticleRow (the internal existence-check helper used inside
+ * transactions elsewhere in this file), this is what GET /api/articles/:id
+ * actually returns — it joins the owner's username/displayName so the
+ * article page can show a byline without a second request, the same
+ * information Discover/search/profile listings already include per row. */
 export async function getArticleById(id) {
-  return getArticleRow(getDb(), id);
+  if (!UUID_PATTERN.test(id)) return null;
+  const db = getDb();
+  const rows = await db
+    .select({
+      id: schema.articles.id,
+      ownerUserId: schema.articles.ownerUserId,
+      claimText: schema.articles.claimText,
+      isPublic: schema.articles.isPublic,
+      articleData: schema.articles.articleData,
+      likeCount: schema.articles.likeCount,
+      commentCount: schema.articles.commentCount,
+      bookmarkCount: schema.articles.bookmarkCount,
+      createdAt: schema.articles.createdAt,
+      updatedAt: schema.articles.updatedAt,
+      ownerUsername: schema.users.username,
+      ownerDisplayName: schema.users.displayName,
+    })
+    .from(schema.articles)
+    .innerJoin(schema.users, eq(schema.users.id, schema.articles.ownerUserId))
+    .where(eq(schema.articles.id, id))
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 /** Shallow-merges `patch` into article_data (e.g. adding counterarguments

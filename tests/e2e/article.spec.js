@@ -299,4 +299,54 @@ test.describe('Article page', () => {
     await commentLike.click();
     await expect(commentLike).toContainText('♥ 1');
   });
+
+  test('D39 mobile: Enter submits a comment without needing the Post button visible', async ({ page }) => {
+    // Real report: "still no way to submit comments on mobile" — the phone
+    // keyboard commonly covers the Post button sitting right below the
+    // textarea. Enter-to-submit (Shift+Enter for a newline) means the
+    // keyboard's own return/send key works regardless of what's visible.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await signupViaApi(page);
+    const owner = await seedGuestUser();
+    const article = await seedArticle({ ownerUserId: owner.id });
+    await page.goto(article.url);
+
+    const composer = page.locator('.comment-composer textarea');
+    await expect(composer).toHaveAttribute('enterkeyhint', 'send');
+
+    await composer.fill('Line one');
+    await composer.press('Shift+Enter');
+    await composer.type('Line two');
+    await expect(composer).toHaveValue('Line one\nLine two');
+
+    await composer.press('Enter');
+    await expect(page.locator('.comment-item').first()).toContainText('Line one');
+    await expect(page.locator('.comment-item').first()).toContainText('Line two');
+    await expect(composer).toHaveValue('');
+  });
+
+  test('D42: the article page shows the owner byline and like/comment/bookmark stats', async ({ page }) => {
+    // Real report: "doesn't show stats or owner when on an article page" —
+    // confirmed: ArticlePage rendered neither at all (the owner, in
+    // particular, never saw a like count, since LikeButton hides entirely
+    // on your own article).
+    const owner = await seedGuestUser({ displayName: 'Stats Owner' });
+    const article = await seedArticle({ ownerUserId: owner.id });
+    await page.goto(article.url);
+
+    await expect(page.locator('.article-byline')).toContainText('Stats Owner');
+    const stats = page.locator('.article-stats');
+    await expect(stats).toContainText('♥ 0');
+    await expect(stats).toContainText('💬 0');
+    await expect(stats).toContainText('🔖 0');
+  });
+
+  test('D42: the byline links to the owner\'s profile when they have an account', async ({ page }) => {
+    const { user, username, displayName } = await signupViaApi(page);
+    const article = await seedArticle({ ownerUserId: user.id });
+    await page.goto(article.url);
+
+    const bylineLink = page.locator('.article-byline a', { hasText: displayName });
+    await expect(bylineLink).toHaveAttribute('href', `/u/${username}`);
+  });
 });

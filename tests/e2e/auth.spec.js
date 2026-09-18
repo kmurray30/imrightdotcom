@@ -2,6 +2,7 @@
 import { test, expect } from '@playwright/test';
 import { signupViaApi, uniqueUsername } from './helpers/auth.js';
 import { seedArticle } from './helpers/db.js';
+import { openMenu } from './helpers/nav.js';
 
 test.describe('Signup', () => {
   test('E42: rejects a duplicate username with a clear error', async ({ page, browser }) => {
@@ -74,7 +75,8 @@ test.describe('Signup', () => {
     await page.getByRole('button', { name: 'Sign up' }).click();
 
     await expect(page).toHaveURL('/');
-    await expect(page.locator('.site-nav a', { hasText: 'Carryover Test' })).toBeVisible();
+    await openMenu(page);
+    await expect(page.locator('.site-nav-dropdown a', { hasText: 'Carryover Test' })).toBeVisible();
 
     await page.goto('/history');
     await expect(page.locator('.history-list')).toContainText('pre-signup guest article');
@@ -92,7 +94,8 @@ test.describe('Login / logout', () => {
     await page.getByRole('button', { name: 'Log in' }).click();
 
     await expect(page).toHaveURL('/');
-    await expect(page.locator('.site-nav a', { hasText: displayName })).toBeVisible();
+    await openMenu(page);
+    await expect(page.locator('.site-nav-dropdown a', { hasText: displayName })).toBeVisible();
   });
 
   test('E44: wrong password shows "wrong username or password"', async ({ page }) => {
@@ -124,10 +127,12 @@ test.describe('Login / logout', () => {
   test('E46: logging out clears the session and reverts the header to guest state', async ({ page }) => {
     const { displayName } = await signupViaApi(page);
     await page.goto('/');
-    await expect(page.locator('.site-nav a', { hasText: displayName })).toBeVisible();
+    await openMenu(page);
+    await expect(page.locator('.site-nav-dropdown a', { hasText: displayName })).toBeVisible();
 
     await page.getByRole('button', { name: 'Log out' }).click();
     await expect(page).toHaveURL('/');
+    await openMenu(page);
     await expect(page.getByRole('link', { name: 'Log in' })).toBeVisible();
 
     const me = await (await page.request.get('/api/account/me')).json();

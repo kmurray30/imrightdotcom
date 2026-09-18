@@ -5,7 +5,6 @@ export function HomePage() {
   return (
     <div className="home-page">
       <section className="hero">
-        <h1>imright.com</h1>
         <p className="tagline">State any belief. We'll prove you right.</p>
         <BeliefForm />
       </section>

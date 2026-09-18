@@ -47,6 +47,26 @@ button:disabled {
   color: var(--muted);
 }
 
+/* The main call-to-action in a form (submit a belief, log in, sign up, post
+ * a comment) previously used the same plain white/bordered style as every
+ * other button, including secondary ones like Share — technically legible,
+ * but with nothing to make it read as *the* primary action, easy to miss
+ * entirely (a real report: "submit buttons area still just white with no
+ * visible text"). Matches the accent-pill treatment already used for the
+ * header's "Sign up" link. */
+.button-primary,
+a.button-primary {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.button-primary:disabled {
+  background: var(--border);
+  border-color: var(--border);
+  color: var(--muted);
+}
+
 button.link-button {
   border: none;
   background: none;
@@ -87,18 +107,37 @@ textarea {
   color: var(--text);
 }
 
-.site-nav {
-  display: flex;
-  gap: 1rem;
-  align-items: center;
+.site-nav-menu {
+  position: relative;
 }
 
-.site-nav-cta {
-  background: var(--accent);
-  color: white;
-  padding: 0.4rem 0.9rem;
-  border-radius: 999px;
+.site-nav-toggle {
+  background: var(--card-bg);
+}
+
+.site-nav-dropdown {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 160px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  z-index: 50;
+}
+
+.site-nav-dropdown a {
+  color: var(--text);
   text-decoration: none;
+}
+
+.site-nav-dropdown a:hover {
+  text-decoration: underline;
 }
 
 /* Home / idea input */
@@ -244,12 +283,38 @@ textarea {
 }
 
 /* Article page */
+.article-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 1.5rem;
+}
+
+.article-byline {
+  color: var(--muted);
+  margin: 0;
+}
+
+.article-byline a {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.article-stats {
+  display: flex;
+  gap: 0.75rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .article-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
   align-items: center;
-  margin: 1.5rem 0;
+  margin: 1rem 0 1.5rem;
 }
 
 .article-headline {
