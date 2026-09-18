@@ -23,3 +23,6 @@ misc_scripts/link_validation_output/
 imright/debug/
 counterarguer/input/
 counterarguer/output/
+test-results/
+playwright-report/
+blob-report/

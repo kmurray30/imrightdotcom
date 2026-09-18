@@ -7,13 +7,19 @@ export function BookmarkFolderModal({ articleId, folders, onChange, onClose }) {
   const [error, setError] = useState(null);
 
   async function toggleFolder(folder) {
+    const next = !folder.checked;
+    // Optimistic update: without this, the checkbox's `checked` prop stays
+    // at its old value for the whole round-trip, and `setBusy(true)` alone
+    // triggers a re-render — which, for a controlled input, reasserts that
+    // stale `checked` and visibly snaps the checkbox back right after the
+    // click, only jumping to the real state once the request resolves.
+    onChange(folders.map((f) => (f.id === folder.id ? { ...f, checked: next } : f)));
     setBusy(true);
     try {
-      const data = await api.put(`/api/articles/${articleId}/bookmark-folders/${folder.id}`, {
-        checked: !folder.checked,
-      });
+      const data = await api.put(`/api/articles/${articleId}/bookmark-folders/${folder.id}`, { checked: next });
       onChange(data.folders);
     } catch {
+      onChange(folders); // roll back to the pre-click state
       setError('Could not update that folder.');
     } finally {
       setBusy(false);

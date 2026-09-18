@@ -16,11 +16,21 @@ export function VisibilityToggle({ articleId, initialIsPublic, onChange }) {
 
   async function toggle() {
     if (busy) return;
+    const next = !isPublic;
+    // Optimistic update: setBusy(true) alone triggers a re-render, and
+    // without this a controlled checkbox's `checked` prop would still be
+    // the old value for the whole round-trip — visibly snapping back right
+    // after the click, only reaching the new state once the request
+    // resolves (same bug class fixed in BookmarkFolderModal's toggleFolder).
+    setIsPublic(next);
     setBusy(true);
     try {
-      const { article } = await api.patch(`/api/articles/${articleId}/visibility`, { isPublic: !isPublic });
+      const { article } = await api.patch(`/api/articles/${articleId}/visibility`, { isPublic: next });
       setIsPublic(article.isPublic);
       onChange?.(article.isPublic);
+    } catch (error) {
+      setIsPublic(!next); // roll back to the pre-click state
+      throw error;
     } finally {
       setBusy(false);
     }
