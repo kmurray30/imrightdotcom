@@ -112,7 +112,16 @@ export async function resolveUser(req, res) {
 
   const guestCookieId = cookies[GUEST_COOKIE_NAME];
   if (guestCookieId) {
-    const rows = await db.select().from(schema.users).where(eq(schema.users.guestCookieId, guestCookieId)).limit(1);
+    // isGuest=true here is defense in depth, not the primary fix: signup()
+    // nulls out guestCookieId when it claims a row, specifically so this
+    // lookup can never find a claimed (real) account by its old guest
+    // cookie. Keeping this filter means that invariant only has to hold
+    // approximately, not perfectly, for logout to still work.
+    const rows = await db
+      .select()
+      .from(schema.users)
+      .where(and(eq(schema.users.guestCookieId, guestCookieId), eq(schema.users.isGuest, true)))
+      .limit(1);
     if (rows[0]) {
       req.user = toPublicUser(rows[0]);
       return req.user;
@@ -185,6 +194,12 @@ export async function signup(req, res, { username, email, password, displayName 
     username,
     email,
     passwordHash,
+    // Sever the imright_guest cookie's link to this row now that it's a real
+    // account reached via session instead: left set, a browser that still
+    // holds that cookie (every claimed account's, since ensureOwner sets it
+    // before signup ever runs) would have resolveUser's guest-cookie
+    // fallback resurrect this account after logout, making logout a no-op.
+    guestCookieId: null,
     claimedAt: new Date(),
     updatedAt: new Date(),
   };

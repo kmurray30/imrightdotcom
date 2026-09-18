@@ -17,7 +17,8 @@
     "serve-output": "node imright/scripts/serve-output.js",
     "migrate": "node imright/scripts/db/migrate.js",
     "db:generate": "drizzle-kit generate",
-    "build": "npm --prefix client install && npm --prefix client run build"
+    "build": "npm --prefix client install && npm --prefix client run build",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",
@@ -38,6 +39,7 @@
     "yaml": "^2.8.2"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "drizzle-kit": "^0.31.10"
   }
 }

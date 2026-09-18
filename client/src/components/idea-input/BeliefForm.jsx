@@ -35,6 +35,14 @@ export function BeliefForm() {
       eventSourceRef.current = null;
       navigate(event.url);
     } else if (event.type === 'error') {
+      // Close deliberately, same as the 'ready' branch: the server ends this
+      // SSE response shortly after any terminal event (see serve-site.js's
+      // startPipelineRun), and leaving eventSourceRef set lets that routine
+      // close reach the onerror handler below, which would silently
+      // overwrite this specific, useful failure reason with a generic
+      // "lost connection" message.
+      eventSourceRef.current?.close();
+      eventSourceRef.current = null;
       setError(event.message || 'Pipeline failed.');
       setIsSubmitting(false);
     }
