@@ -42,7 +42,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { loadEnv } from '../../imright/load-env.js';
 import { getAccessToken } from '../../utils/wikimediaAuth.js';
-import { timeoutSignal } from '../../utils/external-api.js';
+import { callExternalApi, HttpStatusError, timeoutSignal } from '../../utils/external-api.js';
 
 loadEnv();
 const execFileAsync = promisify(execFile);
@@ -114,34 +114,58 @@ function createProgressTracker(totalBytes) {
   };
 }
 
-async function fetchJson(url, accessToken, method = 'GET') {
-  const response = await fetch(url, {
-    method,
-    headers: { Authorization: `Bearer ${accessToken}` },
-    signal: timeoutSignal(METADATA_TIMEOUT_MS),
+function throwForBadResponse(response, message) {
+  const retryAfterHeader = response.headers.get('retry-after');
+  throw new HttpStatusError(response.status, message, {
+    retryAfterSeconds: retryAfterHeader ? Number(retryAfterHeader) : undefined,
   });
-  if (!response.ok) throw new Error(`${method} ${url} failed: ${response.status} ${response.statusText}`);
-  return response.json();
+}
+
+/** Wraps a metadata call (HEAD/info) in the project's standard retry-with-backoff, so a 429 slows down and retries instead of killing the run. */
+function withRetry(operation, fn, maxRetries = 4) {
+  return callExternalApi({ service: 'wikimedia_enterprise', operation, pipelineStep: 'wiki_snapshot_download', fn, maxRetries });
+}
+
+async function fetchJson(url, accessToken, method = 'GET') {
+  return withRetry('snapshot_info', async () => {
+    const response = await fetch(url, {
+      method,
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: timeoutSignal(METADATA_TIMEOUT_MS),
+    });
+    if (!response.ok) throwForBadResponse(response, `${method} ${url} failed: ${response.status} ${response.statusText}`);
+    return response.json();
+  });
 }
 
 async function headDownload(url, accessToken) {
-  const response = await fetch(url, {
-    method: 'HEAD',
-    headers: { Authorization: `Bearer ${accessToken}` },
-    signal: timeoutSignal(METADATA_TIMEOUT_MS),
+  return withRetry('snapshot_head', async () => {
+    const response = await fetch(url, {
+      method: 'HEAD',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: timeoutSignal(METADATA_TIMEOUT_MS),
+    });
+    if (!response.ok) throwForBadResponse(response, `HEAD ${url} failed: ${response.status} ${response.statusText}`);
+    return {
+      contentLength: Number(response.headers.get('content-length')),
+      etag: response.headers.get('etag'),
+      acceptsRanges: response.headers.get('accept-ranges') === 'bytes',
+    };
   });
-  if (!response.ok) throw new Error(`HEAD ${url} failed: ${response.status} ${response.statusText}`);
-  return {
-    contentLength: Number(response.headers.get('content-length')),
-    etag: response.headers.get('etag'),
-    acceptsRanges: response.headers.get('accept-ranges') === 'bytes',
-  };
 }
 
-/** Downloads one chunk resumably, reporting newly-streamed bytes to `tracker` (pre-existing bytes are credited by the caller before this runs). */
-async function downloadOne(url, filePath, accessToken, tracker) {
+/**
+ * Downloads one chunk resumably, reporting newly-streamed bytes to `tracker`
+ * (pre-existing bytes are credited by the caller before this runs).
+ * `metadata` ({ contentLength, etag, acceptsRanges }) comes from the sizing
+ * pass in downloadAllChunks — deliberately not re-HEAD-ing here, since
+ * every chunk was already HEAD'd once for its total size; doing it again
+ * per chunk doubled the request volume for no reason and was a real
+ * contributor to hitting the rate limit.
+ */
+async function downloadOne(url, filePath, accessToken, tracker, metadata) {
+  const { contentLength, etag, acceptsRanges } = metadata;
   const etagSidecarPath = `${filePath}.etag`;
-  const { contentLength, etag, acceptsRanges } = await headDownload(url, accessToken);
 
   let startByte = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
   if (startByte > 0) {
@@ -159,40 +183,55 @@ async function downloadOne(url, filePath, accessToken, tracker) {
   const isResuming = startByte > 0 && acceptsRanges;
   if (isResuming) headers.Range = `bytes=${startByte}-`;
 
-  // Guards against a silent hang mid-transfer too, not just on connect: the
-  // timer resets on every chunk received, so it only fires if bytes stop
-  // arriving for STALL_TIMEOUT_MS, not because the whole download is slow.
-  const controller = new AbortController();
-  let stallTimer = setTimeout(() => controller.abort(), STALL_TIMEOUT_MS);
-  const resetStallTimer = () => {
-    clearTimeout(stallTimer);
-    stallTimer = setTimeout(() => controller.abort(), STALL_TIMEOUT_MS);
-  };
+  let alreadyComplete = false;
+  await withRetry('snapshot_chunk_download', async () => {
+    // Re-check on every retry attempt — a prior attempt may have written
+    // some bytes before failing, so isResuming/startByte-equivalent state
+    // needs to reflect what's on disk right now, not what it was initially.
+    const currentSize = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
+    const attemptHeaders = { ...headers };
+    if (currentSize > 0 && acceptsRanges) attemptHeaders.Range = `bytes=${currentSize}-`;
 
-  try {
-    const response = await fetch(url, { headers, signal: controller.signal });
-    if (response.status === 416) return; // already complete
-    if (!response.ok && response.status !== 206) {
-      throw new Error(`Download failed: ${response.status} ${response.statusText}`);
-    }
+    // Guards against a silent hang mid-transfer too, not just on connect:
+    // the timer resets on every chunk received, so it only fires if bytes
+    // stop arriving for STALL_TIMEOUT_MS, not because the transfer is slow.
+    const controller = new AbortController();
+    let stallTimer = setTimeout(() => controller.abort(), STALL_TIMEOUT_MS);
+    const resetStallTimer = () => {
+      clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => controller.abort(), STALL_TIMEOUT_MS);
+    };
 
-    const writeStream = fs.createWriteStream(filePath, { flags: isResuming ? 'a' : 'w' });
-    for await (const chunk of Readable.fromWeb(response.body)) {
-      resetStallTimer();
-      tracker.addBytes(chunk.length);
-      if (!writeStream.write(chunk)) {
-        await new Promise((resolve) => writeStream.once('drain', resolve));
+    try {
+      const response = await fetch(url, { headers: attemptHeaders, signal: controller.signal });
+      if (response.status === 416) {
+        alreadyComplete = true;
+        return;
       }
+      if (!response.ok && response.status !== 206) {
+        throwForBadResponse(response, `Download failed: ${response.status} ${response.statusText}`);
+      }
+
+      const writeStream = fs.createWriteStream(filePath, { flags: currentSize > 0 ? 'a' : 'w' });
+      for await (const chunk of Readable.fromWeb(response.body)) {
+        resetStallTimer();
+        tracker.addBytes(chunk.length);
+        if (!writeStream.write(chunk)) {
+          await new Promise((resolve) => writeStream.once('drain', resolve));
+        }
+      }
+      await new Promise((resolve, reject) => writeStream.end((error) => (error ? reject(error) : resolve())));
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        throw new Error(`Chunk stalled — no data received for ${STALL_TIMEOUT_MS / 1000}s (${path.basename(filePath)}).`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(stallTimer);
     }
-    await new Promise((resolve, reject) => writeStream.end((error) => (error ? reject(error) : resolve())));
-  } catch (error) {
-    if (error.name === 'AbortError') {
-      throw new Error(`Chunk stalled — no data received for ${STALL_TIMEOUT_MS / 1000}s (${path.basename(filePath)}).`);
-    }
-    throw error;
-  } finally {
-    clearTimeout(stallTimer);
-  }
+  });
+
+  if (alreadyComplete) return;
 
   const finalSize = fs.statSync(filePath).size;
   if (Number.isFinite(contentLength) && contentLength > 0 && finalSize !== contentLength) {
@@ -231,8 +270,10 @@ async function downloadAllChunks(accessToken) {
   await runWithConcurrency(
     chunks,
     async (chunk) => {
-      const { contentLength } = await headDownload(chunk.url, accessToken);
+      const { contentLength, etag, acceptsRanges } = await headDownload(chunk.url, accessToken);
       chunk.contentLength = contentLength;
+      chunk.etag = etag;
+      chunk.acceptsRanges = acceptsRanges;
       totalBytes += contentLength;
       checked++;
       if (checked % 25 === 0 || checked === chunks.length) {
@@ -252,7 +293,16 @@ async function downloadAllChunks(accessToken) {
     tracker.addBytes(Math.min(existingSize, chunk.contentLength));
   }
 
-  await runWithConcurrency(chunks, (chunk) => downloadOne(chunk.url, chunk.filePath, accessToken, tracker), CONCURRENCY);
+  await runWithConcurrency(
+    chunks,
+    (chunk) =>
+      downloadOne(chunk.url, chunk.filePath, accessToken, tracker, {
+        contentLength: chunk.contentLength,
+        etag: chunk.etag,
+        acceptsRanges: chunk.acceptsRanges,
+      }),
+    CONCURRENCY
+  );
   tracker.finish();
 
   return chunks.map((c) => c.filePath);
