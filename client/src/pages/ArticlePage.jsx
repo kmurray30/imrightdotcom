@@ -40,35 +40,37 @@ export function ArticlePage() {
 
   return (
     <div className="article-page">
-      <div className="article-meta">
-        <p className="article-byline">
-          by{' '}
-          {article.ownerUsername ? (
-            <Link to={`/u/${article.ownerUsername}`}>{article.ownerDisplayName}</Link>
-          ) : (
-            article.ownerDisplayName || 'Anonymous'
-          )}
-        </p>
-        <div className="article-stats">
-          <span>♥ {article.likeCount}</span>
-          <span>💬 {article.commentCount}</span>
-          <span>🔖 {article.bookmarkCount}</span>
+      <div className="article-card-surface">
+        <div className="article-meta">
+          <p className="article-byline">
+            by{' '}
+            {article.ownerUsername ? (
+              <Link to={`/u/${article.ownerUsername}`}>{article.ownerDisplayName}</Link>
+            ) : (
+              article.ownerDisplayName || 'Anonymous'
+            )}
+          </p>
+          <div className="article-stats">
+            <span>♥ {article.likeCount}</span>
+            <span>💬 {article.commentCount}</span>
+            <span>🔖 {article.bookmarkCount}</span>
+          </div>
         </div>
+        <div className="article-actions">
+          {isOwner && (
+            <VisibilityToggle
+              articleId={article.id}
+              initialIsPublic={article.isPublic}
+              onChange={(isPublic) => setArticle((a) => ({ ...a, isPublic }))}
+            />
+          )}
+          <LikeButton articleId={article.id} initialCount={article.likeCount} isOwnArticle={isOwner} />
+          <BookmarkButton articleId={article.id} />
+          <FollowButton userId={article.ownerUserId} />
+          <ShareButton />
+        </div>
+        <ArticleBody articleId={article.id} articleData={article.articleData} />
       </div>
-      <div className="article-actions">
-        {isOwner && (
-          <VisibilityToggle
-            articleId={article.id}
-            initialIsPublic={article.isPublic}
-            onChange={(isPublic) => setArticle((a) => ({ ...a, isPublic }))}
-          />
-        )}
-        <LikeButton articleId={article.id} initialCount={article.likeCount} isOwnArticle={isOwner} />
-        <BookmarkButton articleId={article.id} />
-        <FollowButton userId={article.ownerUserId} />
-        <ShareButton />
-      </div>
-      <ArticleBody articleId={article.id} articleData={article.articleData} />
       <CommentSection articleId={article.id} />
     </div>
   );
