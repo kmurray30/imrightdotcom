@@ -39,3 +39,6 @@ const data = await response.json();
 console.log('\nLogin succeeded. Set this as WIKIMEDIA_REFRESH_TOKEN:\n');
 console.log(data.refresh_token);
 console.log('\n(Good for 90 days / 90 refreshes — re-run this script to mint a new one when it expires.)');
+
+console.log('\nShort-lived access token (24h) — use this for a one-off curl, e.g. downloading a Snapshot directly:\n');
+console.log(data.access_token);
