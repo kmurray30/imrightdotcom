@@ -1,13 +1,35 @@
+/* Design tokens restored from imright.com's original static landing/article
+ * pages (see index.html / tabloid_generator/index.js's generateHtml() in
+ * git history before the Express+React rewrite) — that design had a warm,
+ * illustrated gradient backdrop, floating white cards with real shadow, and
+ * Source Sans 3 typography; the rewrite's first pass landed on a flatter,
+ * system-font placeholder look in order to ship the social features first.
+ * This reapplies the original identity across both the old pages and the
+ * new ones (Discover, comments, profile, etc.) that didn't exist before it. */
 :root {
   color-scheme: light;
-  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --bg: #fdf8f2;
+  font-family: 'Source Sans 3', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --bg: #f5f5f7;
   --card-bg: #ffffff;
-  --text: #23202b;
-  --muted: #6b6577;
-  --accent: #d4457a;
-  --accent-dark: #a72f5c;
-  --border: #e7e0d8;
+  --text: #1d1d1f;
+  --text-secondary: #424245;
+  --muted: #8e8e93;
+  --accent: #ee3322;
+  --accent-dark: #c4291c;
+  --link: #0f65ef;
+  --link-dark: #0047ab;
+  --border: #e5e5e7;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.06);
+  --shadow-float: 0 2px 4px rgba(0, 0, 0, 0.1), 0 24px 48px rgba(15, 42, 68, 0.08);
+  --shadow-dropdown: 0 4px 16px rgba(0, 0, 0, 0.1);
+  --hero-gradient: radial-gradient(circle at 18% 12%, rgba(255, 196, 120, 0.65), transparent 55%),
+    radial-gradient(circle at 82% 8%, rgba(255, 130, 140, 0.55), transparent 55%),
+    radial-gradient(circle at 90% 90%, rgba(148, 182, 255, 0.55), transparent 55%),
+    radial-gradient(circle at 10% 85%, rgba(178, 240, 200, 0.55), transparent 55%),
+    linear-gradient(180deg, #fff4ea 0%, #f1ebff 55%, #eaf1ff 100%);
 }
 
 * {
@@ -16,13 +38,28 @@
 
 body {
   margin: 0;
-  background: var(--bg);
+  background: var(--hero-gradient);
+  background-attachment: fixed;
   color: var(--text);
-  line-height: 1.5;
+  line-height: 1.6;
+  font-size: 17px;
 }
 
 a {
-  color: var(--accent-dark);
+  color: var(--link);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--link-dark);
+  text-decoration: underline;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0 0 0.75rem;
+  letter-spacing: -0.01em;
 }
 
 button {
@@ -30,8 +67,17 @@ button {
   cursor: pointer;
   border: 1px solid var(--border);
   background: var(--card-bg);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 0.5rem 1rem;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
+}
+
+button:hover:not(:disabled) {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 button:disabled {
@@ -45,6 +91,7 @@ button:disabled {
    * stays legible enough to actually see it's disabled, not just invisible. */
   cursor: default;
   color: var(--muted);
+  box-shadow: none;
 }
 
 /* The main call-to-action in a form (submit a belief, log in, sign up, post
@@ -52,13 +99,17 @@ button:disabled {
  * other button, including secondary ones like Share — technically legible,
  * but with nothing to make it read as *the* primary action, easy to miss
  * entirely (a real report: "submit buttons area still just white with no
- * visible text"). Matches the accent-pill treatment already used for the
- * header's "Sign up" link. */
+ * visible text"). Uses the site's original brand red. */
 .button-primary,
 a.button-primary {
   background: var(--accent);
   color: white;
   border-color: var(--accent);
+}
+
+.button-primary:hover:not(:disabled) {
+  background: var(--accent-dark);
+  border-color: var(--accent-dark);
 }
 
 .button-primary:disabled {
@@ -71,23 +122,43 @@ button.link-button {
   border: none;
   background: none;
   padding: 0;
-  color: var(--accent-dark);
+  color: var(--link);
   text-decoration: underline;
 }
 
 input,
 textarea {
   font: inherit;
-  padding: 0.5rem;
+  padding: 0.6rem 0.7rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   width: 100%;
+  background: var(--card-bg);
+  color: var(--text);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+input:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(238, 51, 34, 0.15);
 }
 
 .app-main {
   max-width: 900px;
   margin: 0 auto;
-  padding: 0 1rem 3rem;
+  padding: 1.5rem 1rem 3rem;
+}
+
+/* A shared "floating card on the gradient" surface — the same treatment the
+ * original site used for its one landing card, now applied consistently to
+ * every content surface across the app (hero, article, auth forms, etc.). */
+.surface-card {
+  background: var(--card-bg);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-float);
+  border: 1px solid rgba(0, 0, 0, 0.06);
 }
 
 /* Header */
@@ -97,14 +168,26 @@ textarea {
   justify-content: space-between;
   padding: 1rem 1.5rem;
   border-bottom: 1px solid var(--border);
-  background: var(--card-bg);
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
 .site-logo {
   font-weight: 700;
-  font-size: 1.25rem;
+  font-size: 1.35rem;
+  letter-spacing: -0.02em;
   text-decoration: none;
-  color: var(--text);
+  color: var(--accent);
+}
+
+.site-logo:hover {
+  color: var(--accent-dark);
+  text-decoration: none;
 }
 
 .site-nav-menu {
@@ -122,12 +205,12 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  min-width: 160px;
+  min-width: 170px;
   background: var(--card-bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.75rem 1rem;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1.1rem;
+  box-shadow: var(--shadow-dropdown);
   z-index: 50;
 }
 
@@ -137,13 +220,20 @@ textarea {
 }
 
 .site-nav-dropdown a:hover {
-  text-decoration: underline;
+  color: var(--accent);
+  text-decoration: none;
 }
 
-/* Home / idea input */
+/* Home / idea input — the floating "landing card" from the original site */
 .hero {
   text-align: center;
-  padding: 3rem 0 2rem;
+  max-width: 620px;
+  margin: 2.5rem auto 2rem;
+  padding: 2.25rem 2rem 2rem;
+  background: var(--card-bg);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-float);
+  border: 1px solid rgba(0, 0, 0, 0.06);
 }
 
 .tagline {
@@ -177,8 +267,8 @@ textarea {
   position: absolute;
   inset: 0;
   box-sizing: border-box;
-  padding: 0.5rem;
-  border-radius: 6px;
+  padding: 0.6rem 0.7rem;
+  border-radius: var(--radius-sm);
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
@@ -191,16 +281,40 @@ textarea {
 }
 
 .run-progress-bar-track {
-  height: 6px;
-  background: var(--border);
+  position: relative;
+  height: 10px;
+  background: rgba(15, 42, 68, 0.08);
   border-radius: 999px;
   overflow: hidden;
 }
 
+/* Shimmer lives on the track (not the fill) so it's always visible — even
+ * at 0% fill — and naturally brightens the fill as it sweeps across. */
+.run-progress-bar-track::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.55) 50%, transparent 100%);
+  transform: translateX(-100%);
+  animation: run-progress-shimmer 1.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes run-progress-shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
 .run-progress-bar-fill {
+  position: relative;
   height: 100%;
-  background: var(--accent);
-  transition: width 0.3s ease;
+  background: linear-gradient(90deg, var(--accent) 0%, #ff6a3d 100%);
+  border-radius: 999px;
+  transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .run-progress-label {
@@ -246,16 +360,26 @@ textarea {
 .article-card {
   display: block;
   background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 1rem;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: var(--radius-md);
+  padding: 1.1rem;
   text-decoration: none;
   color: var(--text);
+  box-shadow: var(--shadow-card);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.article-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+  text-decoration: none;
 }
 
 .article-card h3 {
   margin: 0 0 0.5rem;
   font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 .article-card-byline {
@@ -282,14 +406,27 @@ textarea {
   padding: 2rem 0;
 }
 
-/* Article page */
+/* Article page — a floating card, same treatment as the original static
+ * site's .article, restored via .article-card-surface (ArticlePage.jsx). */
+.article-page {
+  padding-top: 0.5rem;
+}
+
+.article-card-surface {
+  background: var(--card-bg);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  padding: 2rem 1.75rem;
+  margin-bottom: 1.5rem;
+}
+
 .article-meta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  margin-top: 1.5rem;
 }
 
 .article-byline {
@@ -300,6 +437,10 @@ textarea {
 .article-byline a {
   color: var(--muted);
   font-weight: 600;
+}
+
+.article-byline a:hover {
+  color: var(--accent);
 }
 
 .article-stats {
@@ -314,21 +455,72 @@ textarea {
   flex-wrap: wrap;
   gap: 0.75rem;
   align-items: center;
-  margin: 1rem 0 1.5rem;
+  margin: 1rem 0 1.75rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border);
 }
 
 .article-headline {
-  font-size: 2rem;
+  font-size: 2.25rem;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  margin: 0 0 1rem;
+}
+
+.article-section {
+  margin-bottom: 2rem;
+  padding-bottom: 2rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.article-section:last-of-type {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.article-section h2 {
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+}
+
+.article-intro {
+  font-size: 1.15rem;
+}
+
+.article-paragraph,
+.article-intro,
+.article-conclusion {
+  color: var(--text-secondary);
+  line-height: 1.65;
+}
+
+.article-conclusion {
+  font-size: 1.15rem;
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+  color: var(--text);
 }
 
 .article-hero-image,
 .article-section-image {
   max-width: 100%;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   margin: 1rem 0;
 }
 
 .citation-link {
+  color: var(--link);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.citation-link:hover {
+  color: var(--link-dark);
   text-decoration: underline;
 }
 
@@ -336,12 +528,31 @@ textarea {
   margin: 0.5rem 0 1rem;
 }
 
+.bunky-callout-toggle {
+  background: #fff9e6;
+  border-color: #e6d9a8;
+}
+
+.bunky-callout-toggle:hover {
+  background: #fff3cc;
+  border-color: #d4c76a;
+}
+
 .bunky-bubble {
-  background: #fff7e6;
-  border: 1px solid #f0d68a;
-  border-radius: 8px;
-  padding: 0.75rem;
+  background: #fff9e6;
+  border: 1px solid #e6d9a8;
+  border-radius: var(--radius-sm);
+  padding: 0.85rem 1rem;
   margin-top: 0.5rem;
+}
+
+.bunky-blurb {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.bunky-analysis {
+  color: var(--text-secondary);
 }
 
 .like-button.is-liked,
@@ -357,7 +568,15 @@ textarea {
   font-size: 0.9rem;
 }
 
-/* Comments */
+/* Comments — its own floating card below the article */
+.comment-section {
+  background: var(--card-bg);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  padding: 1.75rem;
+}
+
 .comment-composer {
   display: flex;
   flex-direction: column;
@@ -372,7 +591,7 @@ textarea {
 
 .comment-item {
   border-top: 1px solid var(--border);
-  padding: 0.75rem 0;
+  padding: 0.85rem 0;
 }
 
 .comment-author {
@@ -381,7 +600,8 @@ textarea {
 }
 
 .comment-body {
-  margin: 0.25rem 0;
+  margin: 0.3rem 0;
+  color: var(--text-secondary);
 }
 
 /* Modal */
@@ -397,7 +617,8 @@ textarea {
 
 .modal {
   background: var(--card-bg);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-float);
   padding: 1.5rem;
   min-width: 280px;
   max-width: 90vw;
@@ -414,10 +635,26 @@ textarea {
   margin-top: 0.75rem;
 }
 
-/* Auth pages */
+/* Auth pages — the same floating landing-card treatment as .hero */
 .auth-page {
   max-width: 380px;
-  margin: 2rem auto;
+  margin: 2.5rem auto;
+  padding: 2rem 2.25rem 2.25rem;
+  background: var(--card-bg);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-float);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.auth-page h1 {
+  font-size: 1.5rem;
+  letter-spacing: -0.01em;
+}
+
+.auth-subtitle {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin-top: -0.5rem;
 }
 
 .auth-form {
@@ -431,6 +668,7 @@ textarea {
   flex-direction: column;
   gap: 0.3rem;
   font-size: 0.9rem;
+  color: var(--text-secondary);
 }
 
 .visibility-toggle {
@@ -442,7 +680,7 @@ textarea {
   align-items: center;
   gap: 0.4rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 0.5rem 1rem;
   background: var(--card-bg);
   cursor: pointer;
@@ -451,6 +689,33 @@ textarea {
 .visibility-toggle input {
   width: auto;
   cursor: pointer;
+}
+
+/* History / Bookmarks / Profile — plain content pages get the same
+ * floating-card surface as everything else, instead of sitting bare on the
+ * gradient background. */
+.history-page,
+.bookmarks-page,
+.profile-page {
+  background: var(--card-bg);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  padding: 1.75rem 2rem;
+  margin-top: 0.5rem;
+}
+
+.history-page h1,
+.bookmarks-page h1,
+.profile-header h1 {
+  font-size: 1.5rem;
+  letter-spacing: -0.01em;
+  margin-bottom: 0.25rem;
+}
+
+.page-subtitle {
+  color: var(--muted);
+  margin-top: 0;
 }
 
 .history-list,
@@ -463,7 +728,12 @@ textarea {
   display: flex;
   justify-content: space-between;
   border-top: 1px solid var(--border);
-  padding: 0.6rem 0;
+  padding: 0.75rem 0;
+}
+
+.history-list a {
+  color: var(--text);
+  font-weight: 500;
 }
 
 .visibility-badge {
@@ -471,8 +741,26 @@ textarea {
   padding: 0.1rem 0.5rem;
   border-radius: 999px;
   background: var(--border);
+  color: var(--text-secondary);
 }
 
 .visibility-badge.is-public {
   background: #d7f0d8;
+  color: #1f5c2b;
+}
+
+.folder-summary-list li {
+  border-top: 1px solid var(--border);
+  padding: 0.75rem 0;
+}
+
+.profile-header {
+  margin-bottom: 1.5rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.profile-username {
+  color: var(--muted);
+  margin: 0 0 0.75rem;
 }
