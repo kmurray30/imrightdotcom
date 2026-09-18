@@ -42,6 +42,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { loadEnv } from '../../imright/load-env.js';
 import { getAccessToken } from '../../utils/wikimediaAuth.js';
+import { timeoutSignal } from '../../utils/external-api.js';
 
 loadEnv();
 const execFileAsync = promisify(execFile);
@@ -50,6 +51,8 @@ const API_BASE = 'https://api.enterprise.wikimedia.com';
 const identifier = process.argv[2] || 'enwiki_namespace_0';
 const destDir = process.argv[3] || './wiki-snapshots';
 const CONCURRENCY = 6; // raise if you're on a paid plan with a higher QPS limit
+const METADATA_TIMEOUT_MS = 15_000; // HEAD/info calls should be fast; don't hang forever if one stalls
+const STALL_TIMEOUT_MS = 30_000; // abort a chunk download if no bytes arrive for this long
 
 const PROGRESS_BAR_WIDTH = 30;
 const PROGRESS_RENDER_INTERVAL_MS = 200;
@@ -112,13 +115,21 @@ function createProgressTracker(totalBytes) {
 }
 
 async function fetchJson(url, accessToken, method = 'GET') {
-  const response = await fetch(url, { method, headers: { Authorization: `Bearer ${accessToken}` } });
+  const response = await fetch(url, {
+    method,
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: timeoutSignal(METADATA_TIMEOUT_MS),
+  });
   if (!response.ok) throw new Error(`${method} ${url} failed: ${response.status} ${response.statusText}`);
   return response.json();
 }
 
 async function headDownload(url, accessToken) {
-  const response = await fetch(url, { method: 'HEAD', headers: { Authorization: `Bearer ${accessToken}` } });
+  const response = await fetch(url, {
+    method: 'HEAD',
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: timeoutSignal(METADATA_TIMEOUT_MS),
+  });
   if (!response.ok) throw new Error(`HEAD ${url} failed: ${response.status} ${response.statusText}`);
   return {
     contentLength: Number(response.headers.get('content-length')),
@@ -148,20 +159,40 @@ async function downloadOne(url, filePath, accessToken, tracker) {
   const isResuming = startByte > 0 && acceptsRanges;
   if (isResuming) headers.Range = `bytes=${startByte}-`;
 
-  const response = await fetch(url, { headers });
-  if (response.status === 416) return; // already complete
-  if (!response.ok && response.status !== 206) {
-    throw new Error(`Download failed: ${response.status} ${response.statusText}`);
-  }
+  // Guards against a silent hang mid-transfer too, not just on connect: the
+  // timer resets on every chunk received, so it only fires if bytes stop
+  // arriving for STALL_TIMEOUT_MS, not because the whole download is slow.
+  const controller = new AbortController();
+  let stallTimer = setTimeout(() => controller.abort(), STALL_TIMEOUT_MS);
+  const resetStallTimer = () => {
+    clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => controller.abort(), STALL_TIMEOUT_MS);
+  };
 
-  const writeStream = fs.createWriteStream(filePath, { flags: isResuming ? 'a' : 'w' });
-  for await (const chunk of Readable.fromWeb(response.body)) {
-    tracker.addBytes(chunk.length);
-    if (!writeStream.write(chunk)) {
-      await new Promise((resolve) => writeStream.once('drain', resolve));
+  try {
+    const response = await fetch(url, { headers, signal: controller.signal });
+    if (response.status === 416) return; // already complete
+    if (!response.ok && response.status !== 206) {
+      throw new Error(`Download failed: ${response.status} ${response.statusText}`);
     }
+
+    const writeStream = fs.createWriteStream(filePath, { flags: isResuming ? 'a' : 'w' });
+    for await (const chunk of Readable.fromWeb(response.body)) {
+      resetStallTimer();
+      tracker.addBytes(chunk.length);
+      if (!writeStream.write(chunk)) {
+        await new Promise((resolve) => writeStream.once('drain', resolve));
+      }
+    }
+    await new Promise((resolve, reject) => writeStream.end((error) => (error ? reject(error) : resolve())));
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new Error(`Chunk stalled — no data received for ${STALL_TIMEOUT_MS / 1000}s (${path.basename(filePath)}).`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(stallTimer);
   }
-  await new Promise((resolve, reject) => writeStream.end((error) => (error ? reject(error) : resolve())));
 
   const finalSize = fs.statSync(filePath).size;
   if (Number.isFinite(contentLength) && contentLength > 0 && finalSize !== contentLength) {
@@ -194,13 +225,23 @@ async function downloadAllChunks(accessToken) {
     filePath: path.join(destDir, `${chunkId}.tar.gz`),
   }));
 
-  console.log(`${chunks.length} chunks, ${info.record_count ?? '?'} articles total. Checking sizes...`);
+  console.log(`${chunks.length} chunks, ${info.record_count ?? '?'} articles total. Checking sizes (concurrency ${CONCURRENCY})...`);
   let totalBytes = 0;
-  for (const chunk of chunks) {
-    const { contentLength } = await headDownload(chunk.url, accessToken);
-    chunk.contentLength = contentLength;
-    totalBytes += contentLength;
-  }
+  let checked = 0;
+  await runWithConcurrency(
+    chunks,
+    async (chunk) => {
+      const { contentLength } = await headDownload(chunk.url, accessToken);
+      chunk.contentLength = contentLength;
+      totalBytes += contentLength;
+      checked++;
+      if (checked % 25 === 0 || checked === chunks.length) {
+        process.stdout.write(`\r  ...checked ${checked}/${chunks.length} chunks`);
+      }
+    },
+    CONCURRENCY
+  );
+  process.stdout.write('\n');
   console.log(`Total: ${formatGB(totalBytes)} GB across ${chunks.length} chunks. Downloading with concurrency ${CONCURRENCY}...`);
 
   const tracker = createProgressTracker(totalBytes);
