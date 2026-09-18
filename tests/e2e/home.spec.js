@@ -23,6 +23,21 @@ test.describe('Home page: idea-input form', () => {
     await expect(page.getByRole('button', { name: 'Prove me right!' })).toBeVisible();
   });
 
+  test('B16: clicking an example chip fills the input, and typing hides the chips', async ({ page }) => {
+    await page.goto('/');
+    const chips = page.locator('.example-chip');
+    await expect(chips.first()).toBeVisible();
+    const chipText = await chips.first().textContent();
+
+    await chips.first().click();
+    await expect(page.locator('.belief-input')).toHaveValue(chipText);
+    await expect(page.locator('.belief-input')).toBeFocused();
+    await expect(page.locator('.example-chips')).toHaveCount(0);
+
+    await page.locator('.belief-input').fill('');
+    await expect(page.locator('.example-chips')).toBeVisible();
+  });
+
   test('B7 style: the submit button is a clearly legible, prominent primary action', async ({ page }) => {
     // Real report: "submit buttons area still just white with no visible
     // text" — the button was technically legible (see the earlier
