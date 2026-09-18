@@ -30,6 +30,13 @@ test.describe('Discover feed', () => {
     await expect(card).toContainText('BOMBSHELL');
     await expect(card.locator('.article-card-stats')).toContainText('♥ 0');
     await expect(card).toHaveAttribute('href', new RegExp(`^/a/${article.id}`));
+
+    // The fixture's hero image (seedArticle defaults to withImages: true)
+    // shows up as a real, loadable thumbnail on the card.
+    const thumbnail = card.locator('.article-card-thumbnail');
+    await expect(thumbnail).toBeVisible();
+    const thumbnailResponse = await page.request.get(await thumbnail.getAttribute('src'));
+    expect(thumbnailResponse.status()).toBe(200);
   });
 
   test('C24: a Discover-tab (ranked feed) card renders headline, byline, and stats', async ({ page }) => {
@@ -45,10 +52,13 @@ test.describe('Discover feed', () => {
     await expect(firstCard).toBeVisible();
     await expect(firstCard.locator('h3')).not.toBeEmpty();
     await expect(firstCard.locator('.article-card-byline')).toContainText('by ');
+    // Bookmark count is deliberately not shown on the card (kept on the
+    // article page itself) — a real request to declutter the thumbnail.
     await expect(firstCard.locator('.article-card-stats')).toContainText('♥');
     await expect(firstCard.locator('.article-card-stats')).toContainText('💬');
-    await expect(firstCard.locator('.article-card-stats')).toContainText('🔖');
+    await expect(firstCard.locator('.article-card-stats')).not.toContainText('🔖');
   });
+
 
   test('C18: Following tab is disabled for a guest, with an inline sign-up prompt', async ({ page }) => {
     await page.goto('/');

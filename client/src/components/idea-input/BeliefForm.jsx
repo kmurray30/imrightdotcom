@@ -1,18 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { RunProgress, VISIBLE_STAGES } from './RunProgress.jsx';
 import { useAnimatedPlaceholder } from './useAnimatedPlaceholder.js';
-
-const EXAMPLE_CHIP_COUNT = 3;
-
-function pickRandom(array, count) {
-  const copy = array.slice();
-  const picked = [];
-  while (copy.length && picked.length < count) {
-    picked.push(copy.splice(Math.floor(Math.random() * copy.length), 1)[0]);
-  }
-  return picked;
-}
 
 /** Port of index.html's belief-form submit flow: POST /api/run, then an SSE
  * stream of progress until `ready`. The one deliberate behavior change from
@@ -26,37 +15,11 @@ export function BeliefForm() {
   const [stepName, setStepName] = useState('');
   const [percent, setPercent] = useState(0);
   const [error, setError] = useState(null);
-  const [exampleChips, setExampleChips] = useState([]);
   const eventSourceRef = useRef(null);
   const placeholderOverlayRef = useRef(null);
-  const inputRef = useRef(null);
   const navigate = useNavigate();
 
   useAnimatedPlaceholder(placeholderOverlayRef, isFocused || claim !== '' || isSubmitting);
-
-  // Same suggestions pool the animated placeholder cycles through — a few
-  // of them doubling as one-click starting points fills the space below the
-  // input with something a first-time visitor can actually use, rather than
-  // empty air, and needs no new backend endpoint.
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/placeholder-suggestions')
-      .then((res) => res.json())
-      .then((data) => {
-        if (!cancelled && Array.isArray(data.suggestions)) {
-          setExampleChips(pickRandom(data.suggestions, EXAMPLE_CHIP_COUNT));
-        }
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  function handleChipClick(text) {
-    setClaim(text);
-    inputRef.current?.focus();
-  }
 
   function handleStreamEvent(event) {
     if (event.type === 'progress') {
@@ -145,7 +108,6 @@ export function BeliefForm() {
       <form className="belief-form" onSubmit={handleSubmit}>
         <div className="belief-input-wrap">
           <input
-            ref={inputRef}
             className="belief-input"
             value={claim}
             onChange={(e) => setClaim(e.target.value)}
@@ -162,16 +124,6 @@ export function BeliefForm() {
       </form>
       {error && <p className="form-error">{error}</p>}
       {isSubmitting && <RunProgress stepName={stepName} percent={percent} />}
-      {!isSubmitting && !claim && exampleChips.length > 0 && (
-        <div className="example-chips">
-          <span className="example-chips-label">Try:</span>
-          {exampleChips.map((text) => (
-            <button key={text} type="button" className="example-chip" onClick={() => handleChipClick(text)}>
-              {text}
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

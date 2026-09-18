@@ -31,7 +31,6 @@ handling and overlapped/ran off-screen at phone width).
 | 13 | Empty/whitespace claim can't be submitted | home.spec.js B13 |
 | 14 | Discover feed renders below the idea-input form | home.spec.js B14 |
 | 15 | Home page doesn't repeat the "imright.com" heading already in the header | home.spec.js B15 |
-| 63 | Example-belief chips fill the input on click, and hide while there's typed text | home.spec.js B16 |
 | 61 | Submit button is a legible, visually prominent primary action | home.spec.js "B7 style..." |
 
 ## C. Discover feed
@@ -46,7 +45,7 @@ handling and overlapped/ran off-screen at phone width).
 | 21 | Clear resets back to the normal feed | discover.spec.js C20+C21 |
 | 22 | "Load more" paginates in additional results | discover.spec.js C22 |
 | 23 | Empty state when a search matches nothing | discover.spec.js C23 |
-| 24 | Article card shows headline/byline/like/comment/bookmark counts | discover.spec.js C24 |
+| 24 | Article card shows headline/byline/like/comment counts (no bookmark count) and a hero-image thumbnail when one exists | discover.spec.js C24, C17+C20 |
 
 ## D. Article page
 | # | Feature | Test |
