@@ -31,6 +31,7 @@ handling and overlapped/ran off-screen at phone width).
 | 13 | Empty/whitespace claim can't be submitted | home.spec.js B13 |
 | 14 | Discover feed renders below the idea-input form | home.spec.js B14 |
 | 15 | Home page doesn't repeat the "imright.com" heading already in the header | home.spec.js B15 |
+| 63 | Example-belief chips fill the input on click, and hide while there's typed text | home.spec.js B16 |
 | 61 | Submit button is a legible, visually prominent primary action | home.spec.js "B7 style..." |
 
 ## C. Discover feed
