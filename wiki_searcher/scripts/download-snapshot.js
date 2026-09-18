@@ -25,7 +25,7 @@
  */
 import fs from 'fs';
 import path from 'path';
-import { pipeline } from 'stream/promises';
+import { Readable } from 'stream';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { loadEnv } from '../../imright/load-env.js';
@@ -40,6 +40,26 @@ const destDir = process.argv[3] || './wiki-snapshots';
 
 const archivePath = path.join(destDir, `${identifier}.tar.gz`);
 const etagSidecarPath = `${archivePath}.etag`;
+
+const PROGRESS_BAR_WIDTH = 30;
+const PROGRESS_RENDER_INTERVAL_MS = 200;
+
+function formatGB(bytes) {
+  return (bytes / 1e9).toFixed(2);
+}
+
+/** Renders/overwrites a single terminal line: [bar] pct% downloaded/total GB. */
+function renderProgress(downloadedBytes, totalBytes) {
+  if (!Number.isFinite(totalBytes) || totalBytes <= 0) {
+    process.stdout.write(`\r${formatGB(downloadedBytes)} GB downloaded (total size unknown)`);
+    return;
+  }
+  const fraction = Math.min(1, downloadedBytes / totalBytes);
+  const filled = Math.round(fraction * PROGRESS_BAR_WIDTH);
+  const bar = '█'.repeat(filled) + '░'.repeat(PROGRESS_BAR_WIDTH - filled);
+  const pct = (fraction * 100).toFixed(1).padStart(5, ' ');
+  process.stdout.write(`\r[${bar}] ${pct}%  ${formatGB(downloadedBytes)} / ${formatGB(totalBytes)} GB`);
+}
 
 async function headSnapshot(accessToken) {
   const response = await fetch(`${API_BASE}/v2/snapshots/${identifier}/download`, {
@@ -102,7 +122,26 @@ async function downloadSnapshot() {
   }
 
   const writeStream = fs.createWriteStream(archivePath, { flags: isResuming ? 'a' : 'w' });
-  await pipeline(response.body, writeStream);
+  let downloadedBytes = startByte; // total bytes now on disk, including anything from a prior resumed run
+  let lastRenderAt = 0;
+
+  for await (const chunk of Readable.fromWeb(response.body)) {
+    downloadedBytes += chunk.length;
+    if (!writeStream.write(chunk)) {
+      await new Promise((resolve) => writeStream.once('drain', resolve));
+    }
+    const now = Date.now();
+    if (now - lastRenderAt >= PROGRESS_RENDER_INTERVAL_MS) {
+      renderProgress(downloadedBytes, contentLength);
+      lastRenderAt = now;
+    }
+  }
+  renderProgress(downloadedBytes, contentLength);
+  process.stdout.write('\n');
+
+  await new Promise((resolve, reject) => {
+    writeStream.end((error) => (error ? reject(error) : resolve()));
+  });
 
   const finalSize = fs.statSync(archivePath).size;
   console.log(`Downloaded — file is now ${(finalSize / 1e9).toFixed(2)} GB.`);
