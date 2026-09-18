@@ -35,8 +35,16 @@ button {
 }
 
 button:disabled {
-  opacity: 0.6;
+  /* Not `opacity`: it fades the border and background along with the text,
+   * and on top of this palette's already-subtle button-vs-page contrast
+   * (white button on a barely-off-white page background), the compounded
+   * effect made disabled button labels nearly unreadable (e.g. the comment
+   * composer's "Post" button before any text is typed). Fading only the
+   * text color to the palette's existing muted tone keeps the button's
+   * outline fully visible so it still reads as a button, while the label
+   * stays legible enough to actually see it's disabled, not just invisible. */
   cursor: default;
+  color: var(--muted);
 }
 
 button.link-button {
@@ -361,9 +369,23 @@ textarea {
 }
 
 .visibility-toggle {
-  display: flex;
+  /* Matches the Save/Share buttons' chrome (border/padding/radius/background)
+   * it sits next to in .article-actions — as bare checkbox+text it read as
+   * incidental page copy rather than an actionable control, easy to miss
+   * entirely next to its clearly button-shaped siblings. */
+  display: inline-flex;
   align-items: center;
   gap: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  background: var(--card-bg);
+  cursor: pointer;
+}
+
+.visibility-toggle input {
+  width: auto;
+  cursor: pointer;
 }
 
 .history-list,

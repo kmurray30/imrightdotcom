@@ -61,6 +61,12 @@ Playwright test(s) that exercise it. Run with `npm run test:e2e`.
 | 40 | Comment like toggles for a logged-in user | article.spec.js D39+D40 |
 | 41 | Empty state when there are no comments | article.spec.js D38+D41 |
 
+## Visual legibility (found from real user reports, not covered by the areas above)
+| # | Feature | Test |
+|---|---|---|
+| 57 | Visibility toggle is styled as a real control (border/background), not bare text next to its Save/Share siblings | article.spec.js D27 style |
+| 58 | Disabled buttons (comment "Post", bookmark-folder "Add") stay legible — measured via real rendered-pixel contrast, not just DOM presence | article.spec.js D38 style, D30+D31 |
+
 ## E. Auth
 | # | Feature | Test |
 |---|---|---|

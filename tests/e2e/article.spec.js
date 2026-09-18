@@ -4,6 +4,14 @@ import { test, expect } from '@playwright/test';
 import { seedGuestUser, seedArticle, uniqueSlug } from './helpers/db.js';
 import { signupViaApi } from './helpers/auth.js';
 import { mergeArticleData } from '../../imright/scripts/articles.js';
+import { minContrastRatio } from './helpers/contrast.js';
+
+// Below this, text is the kind of "technically present, not actually
+// visible" that a DOM/text-content assertion would happily pass — see
+// contrast.js's docstring for the real bug (a near-invisible disabled
+// "Post" button) that this threshold is calibrated against: it measured
+// ~1.46 broken, ~5.6 fixed.
+const MIN_LEGIBLE_CONTRAST = 3;
 
 async function setGuestCookie(context, guestCookieId) {
   await context.addCookies([
@@ -67,6 +75,30 @@ test.describe('Article page', () => {
     await expect(page.locator('.visibility-toggle')).toContainText('Public');
   });
 
+  test('D27 style: the visibility toggle reads as a real control, not incidental text next to it', async ({ page }) => {
+    // Real-user report: the toggle was a bare checkbox+label with no border
+    // or background, so unlike its Save/Share siblings in the same actions
+    // bar it didn't visually register as a clickable control at all ("no
+    // make public/private button... I think"). It was always there and
+    // functional (see D27+D28) — this specifically guards the styling that
+    // makes it look like one, by requiring the same chrome its siblings have.
+    const { user } = await signupViaApi(page);
+    const article = await seedArticle({ ownerUserId: user.id });
+    await page.goto(article.url);
+
+    const toggleStyle = await page.locator('.visibility-toggle').evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return { borderStyle: cs.borderStyle, background: cs.backgroundColor };
+    });
+    const shareStyle = await page.locator('.share-button').evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return { borderStyle: cs.borderStyle, background: cs.backgroundColor };
+    });
+    expect(toggleStyle.borderStyle).not.toBe('none');
+    expect(toggleStyle.background).not.toBe('rgba(0, 0, 0, 0)');
+    expect(toggleStyle).toEqual(shareStyle);
+  });
+
   test('D27 (guest-owner edge case): a guest-owned article shows a sign-up prompt instead of the toggle', async ({
     page,
     context,
@@ -126,6 +158,13 @@ test.describe('Article page', () => {
     await expect(modal).toBeVisible();
     const unsortedRow = modal.locator('li', { hasText: 'Unsorted' });
     await expect(unsortedRow.locator('input[type=checkbox]')).toBeChecked();
+
+    // Same disabled-button legibility bug as the comment composer's Post
+    // button (both come from the same global button:disabled rule) — the
+    // "Add" button starts disabled since the folder-name field is empty.
+    const addButton = modal.getByRole('button', { name: 'Add' });
+    await expect(addButton).toBeDisabled();
+    expect(await minContrastRatio(addButton)).toBeGreaterThan(MIN_LEGIBLE_CONTRAST);
 
     // Unchecking the only folder takes the article back out of "bookmarked."
     await unsortedRow.locator('input[type=checkbox]').uncheck();
@@ -223,6 +262,22 @@ test.describe('Article page', () => {
     await expect(page.locator('.comment-composer')).toHaveCount(0);
     await expect(page.getByText('Sign up to comment')).toBeVisible();
     await expect(page.getByText('No comments yet.')).toBeVisible();
+  });
+
+  test('D38 style: the disabled Post button stays legible before anything is typed', async ({ page }) => {
+    // Real-user report: "no button to send comments" / "send button text is
+    // basically invisible". The button was always there and worked once
+    // typed into (see D39+D40) — the bug was that its *disabled* state (an
+    // empty textarea) rendered at a WCAG contrast ratio of ~1.46 against its
+    // own background, i.e. genuinely not perceivable as a button.
+    await signupViaApi(page);
+    const owner = await seedGuestUser();
+    const article = await seedArticle({ ownerUserId: owner.id });
+    await page.goto(article.url);
+
+    const postButton = page.locator('.comment-composer').getByRole('button', { name: 'Post' });
+    await expect(postButton).toBeDisabled();
+    expect(await minContrastRatio(postButton)).toBeGreaterThan(MIN_LEGIBLE_CONTRAST);
   });
 
   test('D39+D40: a logged-in user can post a comment and like another user\'s comment', async ({ page }) => {
