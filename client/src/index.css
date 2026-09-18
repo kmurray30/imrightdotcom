@@ -257,36 +257,6 @@ textarea:focus {
   margin: 1.25rem auto 0;
 }
 
-.example-chips {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  max-width: 640px;
-  margin: 1.1rem auto 0;
-}
-
-.example-chips-label {
-  color: var(--muted);
-  font-size: 0.85rem;
-  margin-right: 0.15rem;
-}
-
-.example-chip {
-  background: var(--bg);
-  border-color: var(--border);
-  border-radius: 999px;
-  padding: 0.35rem 0.85rem;
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-}
-
-.example-chip:hover:not(:disabled) {
-  background: var(--card-bg);
-  border-color: var(--accent);
-  color: var(--accent);
-}
 
 .belief-input-wrap {
   flex: 1;
@@ -407,7 +377,16 @@ textarea:focus {
   text-decoration: none;
   color: var(--text);
   box-shadow: var(--shadow-card);
+  overflow: hidden;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.article-card-thumbnail {
+  display: block;
+  width: calc(100% + 2.2rem);
+  height: 140px;
+  object-fit: cover;
+  margin: -1.1rem -1.1rem 0.75rem;
 }
 
 .article-card:hover {
