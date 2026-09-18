@@ -1,23 +1,35 @@
 #!/usr/bin/env node
 /**
- * Downloads (resumably) and extracts a Wikimedia Enterprise Snapshot — the
- * raw text+structure corpus that build-index-from-snapshot.js consumes.
- * Auth is fully automatic via utils/wikimediaAuth.js, the same module the
- * running app uses — it handles minting/refreshing both the access and
- * refresh tokens itself; nothing to copy-paste here.
+ * Downloads (resumably, concurrently) and extracts a Wikimedia Enterprise
+ * Snapshot — the raw text+structure corpus that build-index-from-snapshot.js
+ * consumes.
  *
- * Resumable per the Snapshot API's documented flow (HEAD for
- * Content-Length/ETag, GET with Range to resume, an ETag mismatch means the
- * snapshot rotated so we restart, 416 means it's already complete) — a
- * multi-GB download shouldn't have to start over just because the
- * connection dropped partway through.
+ * Downloads by CHUNK, not as one giant file — this is what the Snapshot API
+ * docs recommend for a project as large as English Wikipedia, and it's also
+ * what makes concurrency possible at all: chunks are independently
+ * downloadable objects, so several can be fetched in parallel instead of
+ * fighting over a single HTTP connection. Auth is fully automatic via
+ * utils/wikimediaAuth.js — nothing to copy-paste.
  *
- * NOTE: this leans on Node's fetch stripping the Authorization header on
- * the cross-origin redirect to the presigned download URL, the same way
- * curl does per the docs, and forwarding the Range header through that
- * redirect. Not verified against a live run in this environment (network
- * access to Wikimedia is blocked here) — watch the first run's output for
- * an auth error on the redirected request.
+ * Each chunk resumes independently (its own partial file + ETag sidecar),
+ * so an interrupted run only has to redo whichever chunks weren't finished.
+ *
+ * Concurrency default (6) stays well under Wikimedia Enterprise's free-tier
+ * 10 QPS limit — each chunk only issues a HEAD + a GET to start, then
+ * streams, so 6 concurrent chunks is nowhere near that ceiling.
+ *
+ * Honest caveat on whether this actually speeds things up: if your own
+ * connection is the bottleneck, splitting one slow pipe into more streams
+ * won't create bandwidth that isn't there. It's most likely to help if the
+ * backend is rate-limiting individual connections, which is common for the
+ * presigned cloud-storage URLs this API redirects to — worth just trying.
+ *
+ * NOTE: as before, this leans on Node's fetch stripping Authorization but
+ * forwarding Range across the redirect to each chunk's presigned URL, the
+ * same way curl does per the docs — not verified live from this environment.
+ * Also unverified: that each chunk's archive extracts to a plain .ndjson
+ * file with no further nesting — if extraction produces something else,
+ * the combine step below will just find zero .ndjson files and say so.
  *
  * Usage: node wiki_searcher/scripts/download-snapshot.js [identifier] [destDir]
  *   identifier - defaults to enwiki_namespace_0
@@ -37,38 +49,77 @@ const execFileAsync = promisify(execFile);
 const API_BASE = 'https://api.enterprise.wikimedia.com';
 const identifier = process.argv[2] || 'enwiki_namespace_0';
 const destDir = process.argv[3] || './wiki-snapshots';
-
-const archivePath = path.join(destDir, `${identifier}.tar.gz`);
-const etagSidecarPath = `${archivePath}.etag`;
+const CONCURRENCY = 6; // raise if you're on a paid plan with a higher QPS limit
 
 const PROGRESS_BAR_WIDTH = 30;
 const PROGRESS_RENDER_INTERVAL_MS = 200;
+const SPEED_WINDOW_MS = 5000; // recent-window speed, more responsive than a lifetime average on a multi-hour download
 
 function formatGB(bytes) {
   return (bytes / 1e9).toFixed(2);
 }
 
-/** Renders/overwrites a single terminal line: [bar] pct% downloaded/total GB. */
-function renderProgress(downloadedBytes, totalBytes) {
-  if (!Number.isFinite(totalBytes) || totalBytes <= 0) {
-    process.stdout.write(`\r${formatGB(downloadedBytes)} GB downloaded (total size unknown)`);
-    return;
-  }
-  const fraction = Math.min(1, downloadedBytes / totalBytes);
-  const filled = Math.round(fraction * PROGRESS_BAR_WIDTH);
-  const bar = '█'.repeat(filled) + '░'.repeat(PROGRESS_BAR_WIDTH - filled);
-  const pct = (fraction * 100).toFixed(1).padStart(5, ' ');
-  process.stdout.write(`\r[${bar}] ${pct}%  ${formatGB(downloadedBytes)} / ${formatGB(totalBytes)} GB`);
+function formatDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return '--:--:--';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  return [h, m, s].map((n) => String(n).padStart(2, '0')).join(':');
 }
 
-async function headSnapshot(accessToken) {
-  const response = await fetch(`${API_BASE}/v2/snapshots/${identifier}/download`, {
-    method: 'HEAD',
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  if (!response.ok) {
-    throw new Error(`HEAD failed: ${response.status} ${response.statusText}`);
+/** Tracks aggregate progress across all concurrently-downloading chunks and renders one combined status line. */
+function createProgressTracker(totalBytes) {
+  let downloadedBytes = 0;
+  const samples = []; // { time, bytes } — pruned to the last SPEED_WINDOW_MS
+  let lastRenderAt = 0;
+
+  function render() {
+    const now = Date.now();
+    samples.push({ time: now, bytes: downloadedBytes });
+    while (samples.length > 1 && now - samples[0].time > SPEED_WINDOW_MS) samples.shift();
+
+    const oldest = samples[0];
+    const elapsedSec = (now - oldest.time) / 1000;
+    const speedBps = elapsedSec > 0 ? (downloadedBytes - oldest.bytes) / elapsedSec : 0;
+    const remainingBytes = totalBytes - downloadedBytes;
+    const etaSeconds = speedBps > 0 ? remainingBytes / speedBps : NaN;
+
+    const fraction = totalBytes > 0 ? Math.min(1, downloadedBytes / totalBytes) : 0;
+    const filled = Math.round(fraction * PROGRESS_BAR_WIDTH);
+    const bar = '█'.repeat(filled) + '░'.repeat(PROGRESS_BAR_WIDTH - filled);
+    const pct = (fraction * 100).toFixed(1).padStart(5, ' ');
+
+    process.stdout.write(
+      `\r[${bar}] ${pct}%  ${formatGB(downloadedBytes)} / ${formatGB(totalBytes)} GB` +
+        `  ${(speedBps / 1e6).toFixed(2)} MB/s  ETA ${formatDuration(etaSeconds)}   `
+    );
   }
+
+  return {
+    addBytes(n) {
+      downloadedBytes += n;
+      const now = Date.now();
+      if (now - lastRenderAt >= PROGRESS_RENDER_INTERVAL_MS) {
+        render();
+        lastRenderAt = now;
+      }
+    },
+    finish() {
+      render();
+      process.stdout.write('\n');
+    },
+  };
+}
+
+async function fetchJson(url, accessToken, method = 'GET') {
+  const response = await fetch(url, { method, headers: { Authorization: `Bearer ${accessToken}` } });
+  if (!response.ok) throw new Error(`${method} ${url} failed: ${response.status} ${response.statusText}`);
+  return response.json();
+}
+
+async function headDownload(url, accessToken) {
+  const response = await fetch(url, { method: 'HEAD', headers: { Authorization: `Bearer ${accessToken}` } });
+  if (!response.ok) throw new Error(`HEAD ${url} failed: ${response.status} ${response.statusText}`);
   return {
     contentLength: Number(response.headers.get('content-length')),
     etag: response.headers.get('etag'),
@@ -76,33 +127,19 @@ async function headSnapshot(accessToken) {
   };
 }
 
-function existingPartialSize() {
-  return fs.existsSync(archivePath) ? fs.statSync(archivePath).size : 0;
-}
+/** Downloads one chunk resumably, reporting newly-streamed bytes to `tracker` (pre-existing bytes are credited by the caller before this runs). */
+async function downloadOne(url, filePath, accessToken, tracker) {
+  const etagSidecarPath = `${filePath}.etag`;
+  const { contentLength, etag, acceptsRanges } = await headDownload(url, accessToken);
 
-function readSidecarEtag() {
-  return fs.existsSync(etagSidecarPath) ? fs.readFileSync(etagSidecarPath, 'utf8').trim() : null;
-}
-
-async function downloadSnapshot() {
-  fs.mkdirSync(destDir, { recursive: true });
-  const accessToken = await getAccessToken();
-
-  const { contentLength, etag, acceptsRanges } = await headSnapshot(accessToken);
-  console.log(`Snapshot ${identifier}: ${(contentLength / 1e9).toFixed(2)} GB, etag ${etag}`);
-
-  let startByte = existingPartialSize();
+  let startByte = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
   if (startByte > 0) {
-    const previousEtag = readSidecarEtag();
+    const previousEtag = fs.existsSync(etagSidecarPath) ? fs.readFileSync(etagSidecarPath, 'utf8').trim() : null;
     if (previousEtag !== etag) {
-      console.log('Snapshot rotated since the last partial download (ETag changed) — starting over.');
-      fs.rmSync(archivePath, { force: true });
+      fs.rmSync(filePath, { force: true }); // snapshot rotated since the last partial download — start this chunk over
       startByte = 0;
     } else if (startByte >= contentLength) {
-      console.log('Already fully downloaded — skipping to extraction.');
-      return;
-    } else {
-      console.log(`Resuming from byte ${startByte} of ${contentLength}...`);
+      return; // already complete
     }
   }
   fs.writeFileSync(etagSidecarPath, etag ?? '');
@@ -111,62 +148,114 @@ async function downloadSnapshot() {
   const isResuming = startByte > 0 && acceptsRanges;
   if (isResuming) headers.Range = `bytes=${startByte}-`;
 
-  const response = await fetch(`${API_BASE}/v2/snapshots/${identifier}/download`, { headers });
-
-  if (response.status === 416) {
-    console.log('Server reports range not satisfiable — file is already complete.');
-    return;
-  }
+  const response = await fetch(url, { headers });
+  if (response.status === 416) return; // already complete
   if (!response.ok && response.status !== 206) {
     throw new Error(`Download failed: ${response.status} ${response.statusText}`);
   }
 
-  const writeStream = fs.createWriteStream(archivePath, { flags: isResuming ? 'a' : 'w' });
-  let downloadedBytes = startByte; // total bytes now on disk, including anything from a prior resumed run
-  let lastRenderAt = 0;
-
+  const writeStream = fs.createWriteStream(filePath, { flags: isResuming ? 'a' : 'w' });
   for await (const chunk of Readable.fromWeb(response.body)) {
-    downloadedBytes += chunk.length;
+    tracker.addBytes(chunk.length);
     if (!writeStream.write(chunk)) {
       await new Promise((resolve) => writeStream.once('drain', resolve));
     }
-    const now = Date.now();
-    if (now - lastRenderAt >= PROGRESS_RENDER_INTERVAL_MS) {
-      renderProgress(downloadedBytes, contentLength);
-      lastRenderAt = now;
-    }
   }
-  renderProgress(downloadedBytes, contentLength);
-  process.stdout.write('\n');
+  await new Promise((resolve, reject) => writeStream.end((error) => (error ? reject(error) : resolve())));
 
-  await new Promise((resolve, reject) => {
-    writeStream.end((error) => (error ? reject(error) : resolve()));
-  });
-
-  const finalSize = fs.statSync(archivePath).size;
-  console.log(`Downloaded — file is now ${(finalSize / 1e9).toFixed(2)} GB.`);
+  const finalSize = fs.statSync(filePath).size;
   if (Number.isFinite(contentLength) && contentLength > 0 && finalSize !== contentLength) {
-    throw new Error(
-      `Size mismatch: expected ${contentLength} bytes, got ${finalSize}. Re-run this script to resume/retry.`
-    );
+    throw new Error(`Size mismatch for ${path.basename(filePath)}: expected ${contentLength}, got ${finalSize}.`);
   }
+  fs.rmSync(etagSidecarPath, { force: true });
 }
 
-async function extractSnapshot() {
-  console.log('Extracting...');
-  await execFileAsync('tar', ['xzf', archivePath], { cwd: destDir });
-  console.log(`Done. Look for the extracted .ndjson file in ${destDir}/`);
+async function runWithConcurrency(items, worker, concurrency) {
+  let cursor = 0;
+  async function runNext() {
+    while (cursor < items.length) {
+      await worker(items[cursor++]);
+    }
+  }
+  await Promise.all(Array.from({ length: concurrency }, runNext));
+}
+
+async function downloadAllChunks(accessToken) {
+  console.log(`Looking up chunks for ${identifier}...`);
+  const info = await fetchJson(`${API_BASE}/v2/snapshots/${identifier}`, accessToken, 'POST');
+  const chunkIds = info.chunks ?? [];
+  if (chunkIds.length === 0) {
+    throw new Error(`No chunks found for ${identifier} — double-check the identifier.`);
+  }
+
+  const chunks = chunkIds.map((chunkId) => ({
+    chunkId,
+    url: `${API_BASE}/v2/snapshots/${identifier}/chunks/${chunkId}/download`,
+    filePath: path.join(destDir, `${chunkId}.tar.gz`),
+  }));
+
+  console.log(`${chunks.length} chunks, ${info.record_count ?? '?'} articles total. Checking sizes...`);
+  let totalBytes = 0;
+  for (const chunk of chunks) {
+    const { contentLength } = await headDownload(chunk.url, accessToken);
+    chunk.contentLength = contentLength;
+    totalBytes += contentLength;
+  }
+  console.log(`Total: ${formatGB(totalBytes)} GB across ${chunks.length} chunks. Downloading with concurrency ${CONCURRENCY}...`);
+
+  const tracker = createProgressTracker(totalBytes);
+  // Credit bytes already on disk from a prior interrupted run, so the bar
+  // and ETA start from the real position instead of 0.
+  for (const chunk of chunks) {
+    const existingSize = fs.existsSync(chunk.filePath) ? fs.statSync(chunk.filePath).size : 0;
+    tracker.addBytes(Math.min(existingSize, chunk.contentLength));
+  }
+
+  await runWithConcurrency(chunks, (chunk) => downloadOne(chunk.url, chunk.filePath, accessToken, tracker), CONCURRENCY);
+  tracker.finish();
+
+  return chunks.map((c) => c.filePath);
+}
+
+async function extractAndCombine(archivePaths) {
+  console.log('Extracting chunks...');
+  for (const archivePath of archivePaths) {
+    await execFileAsync('tar', ['xzf', path.basename(archivePath)], { cwd: destDir });
+  }
+
+  const extractedFiles = fs.readdirSync(destDir).filter((f) => f.endsWith('.ndjson'));
+  if (extractedFiles.length === 0) {
+    throw new Error(`No .ndjson files found in ${destDir} after extraction — check what tar actually produced there.`);
+  }
+
+  const combinedPath = path.join(destDir, `${identifier}.combined.ndjson`);
+  console.log(`Combining ${extractedFiles.length} extracted files into ${combinedPath}...`);
+  const writeStream = fs.createWriteStream(combinedPath);
+  for (const file of extractedFiles) {
+    await new Promise((resolve, reject) => {
+      const readStream = fs.createReadStream(path.join(destDir, file));
+      readStream.on('error', reject);
+      readStream.pipe(writeStream, { end: false });
+      readStream.on('end', resolve);
+    });
+  }
+  await new Promise((resolve, reject) => writeStream.end((error) => (error ? reject(error) : resolve())));
+  return combinedPath;
 }
 
 async function main() {
-  await downloadSnapshot();
-  await extractSnapshot();
-  fs.rmSync(etagSidecarPath, { force: true });
-  console.log(`\nNext: node wiki_searcher/scripts/build-index-from-snapshot.js ${destDir}/<the-extracted-file>.ndjson`);
+  fs.mkdirSync(destDir, { recursive: true });
+  const accessToken = await getAccessToken();
+
+  const archivePaths = await downloadAllChunks(accessToken);
+  const combinedPath = await extractAndCombine(archivePaths);
+
+  console.log(`\nDone. Combined NDJSON: ${combinedPath}`);
+  console.log(`Next: node wiki_searcher/scripts/build-index-from-snapshot.js ${combinedPath}`);
 }
 
 main().catch((error) => {
-  console.error('Fatal error:', error.message);
-  console.error('Re-run this script to resume — the partial download and its .etag sidecar are left in place on failure.');
+  console.error('\nFatal error:', error.message);
+  console.error('Re-run this script to resume — completed/partial chunk files are left in place.');
   process.exit(1);
 });
