@@ -137,11 +137,12 @@ export async function seedArticle({
   if (withImages) writeFixtureImages(slug, articleData.images);
 
   const row = await createArticle({ ownerUserId, claimText: claim, articleData });
-  if (isPublic) {
-    const db = getDb();
-    await db.update(schema.articles).set({ isPublic: true }).where(eq(schema.articles.id, row.id));
-    row.isPublic = true;
-  }
+  // createArticle doesn't take isPublic (it relies on the schema's column
+  // default, which is `true`) — always force it explicitly here so fixtures
+  // are correct regardless of what that default happens to be.
+  const db = getDb();
+  await db.update(schema.articles).set({ isPublic }).where(eq(schema.articles.id, row.id));
+  row.isPublic = isPublic;
   return { ...row, url: `/a/${row.id}` };
 }
 

@@ -3,7 +3,7 @@
 import { test, expect } from '@playwright/test';
 import { seedGuestUser, seedArticle, uniqueSlug } from './helpers/db.js';
 import { signupViaApi } from './helpers/auth.js';
-import { mergeArticleData } from '../../imright/scripts/articles.js';
+import { mergeArticleData, createArticle } from '../../imright/scripts/articles.js';
 import { minContrastRatio } from './helpers/contrast.js';
 
 // Below this, text is the kind of "technically present, not actually
@@ -50,6 +50,23 @@ test.describe('Article page', () => {
   test('D26: an unknown article id shows a not-found state', async ({ page }) => {
     await page.goto('/a/00000000-0000-0000-0000-000000000000');
     await expect(page.getByText('Article not found.')).toBeVisible();
+  });
+
+  test('a freshly created article is public by default, with no explicit action needed', async ({ page }) => {
+    // Reversed default: articles used to start private and required an
+    // explicit "make public" action; now they start public and Private is
+    // the explicit opt-out (see VisibilityToggle) — most claims generated
+    // here are jokes/bits meant to be shared, not kept private by accident.
+    const owner = await seedGuestUser();
+    const row = await createArticle({
+      ownerUserId: owner.id,
+      claimText: 'default visibility check',
+      articleData: { version: 1, slug: 'dv', topic: 'x', headline: 'H', intro: 'I', sections: [], conclusion: 'C', citations: [] },
+    });
+    expect(row.isPublic).toBe(true);
+
+    const response = await page.request.get(`/api/articles/${row.id}`);
+    expect((await response.json()).article.isPublic).toBe(true);
   });
 
   test('I56: a private article is still reachable via its direct link (any visitor, any visibility)', async ({ page }) => {

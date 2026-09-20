@@ -29,6 +29,20 @@
       "when": 1789673476765,
       "tag": "0003_pipeline_run_retries",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789946759485,
+      "tag": "0004_change_articles_is_public_default",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789946793662,
+      "tag": "0005_publicize_guest_owned_private_articles",
+      "breakpoints": true
     }
   ]
 }

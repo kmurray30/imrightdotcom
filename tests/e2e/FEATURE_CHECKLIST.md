@@ -56,6 +56,7 @@ handling and overlapped/ran off-screen at phone width).
 | 25 | Loads an article by id | article.spec.js D25+D34+D35 |
 | 26 | Not-found state for an unknown id | article.spec.js D26 |
 | 27 | Visibility toggle: owner-only, including a guest owner (rendered, gated behind sign-up on click) | article.spec.js D27+D28, D27 (guest-owner) |
+| 70 | New articles default to public (Private is an explicit opt-out, not the starting state) | article.spec.js "a freshly created article is public by default..." |
 | 28 | Toggling visibility persists (survives reload) | article.spec.js D27+D28 |
 | 29 | Like: allowed on your own article too (identical display); real button shown to a guest, gated on click; persists per-user across reload | article.spec.js D29 (×4) |
 | 30 | Bookmark: quick-add on first click; real button shown to a guest, gated on click | article.spec.js D30+D31, D30 (guest) |
@@ -117,3 +118,4 @@ handling and overlapped/ran off-screen at phone width).
 |---|---|---|
 | 55 | Every guest-gated social action shows a sign-up prompt (via the shared modal, see #66), never a raw error | covered per-action across article.spec.js / discover.spec.js |
 | 56 | Direct article links work regardless of visibility | article.spec.js I56 |
+| 71 | One-time backfill: pre-existing guest-owned private articles were retroactively made public (accounts' own deliberate Private choices are left alone) | `imright/scripts/db/migrations/0005_publicize_guest_owned_private_articles.sql`, applied automatically at server startup — not practical to exercise via a fresh-DB e2e test, verified manually against the dev DB |
