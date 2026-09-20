@@ -360,28 +360,56 @@ async function downloadAllChunks(accessToken) {
   return chunks.map((c) => c.filePath);
 }
 
+/**
+ * Extracts and combines one chunk at a time, deleting each chunk's archive
+ * and extracted copy as soon as it's folded into the combined file —
+ * instead of extracting all 436 chunks first and combining after, which
+ * needs disk space for the compressed archives, all their (larger)
+ * extracted copies, AND the combined file simultaneously. That's what ran
+ * this out of space. This way, peak extra usage is one chunk's extracted
+ * size at a time, not the whole corpus held three times over.
+ */
 async function extractAndCombine(archivePaths) {
-  console.log('Extracting chunks...');
-  for (const archivePath of archivePaths) {
-    await execFileAsync('tar', ['xzf', path.basename(archivePath)], { cwd: destDir });
-  }
-
-  const extractedFiles = fs.readdirSync(destDir).filter((f) => f.endsWith('.ndjson'));
-  if (extractedFiles.length === 0) {
-    throw new Error(`No .ndjson files found in ${destDir} after extraction — check what tar actually produced there.`);
-  }
-
   const combinedPath = path.join(destDir, `${identifier}.combined.ndjson`);
-  console.log(`Combining ${extractedFiles.length} extracted files into ${combinedPath}...`);
-  const writeStream = fs.createWriteStream(combinedPath);
-  for (const file of extractedFiles) {
+  console.log(`Extracting and combining ${archivePaths.length} chunks into ${combinedPath}...`);
+  const writeStream = fs.createWriteStream(combinedPath, { flags: 'a' }); // append: safe to resume a prior partial combine
+
+  let done = 0;
+  for (const archivePath of archivePaths) {
+    const archiveName = path.basename(archivePath);
+    const chunkId = archiveName.replace(/\.tar\.gz$/, '');
+    const extractedPath = path.join(destDir, `${chunkId}.ndjson`);
+
+    if (!fs.existsSync(archivePath) && !fs.existsSync(extractedPath)) {
+      // Already fully processed and cleaned up in a prior run of this function.
+      done++;
+      continue;
+    }
+
+    if (fs.existsSync(archivePath)) {
+      await execFileAsync('tar', ['xzf', archiveName], { cwd: destDir });
+      fs.rmSync(archivePath, { force: true }); // free the compressed copy immediately, before touching the next chunk
+    }
+
+    if (!fs.existsSync(extractedPath)) {
+      throw new Error(`Expected ${extractedPath} after extracting ${archiveName}, but it's not there — check what tar actually produced.`);
+    }
+
     await new Promise((resolve, reject) => {
-      const readStream = fs.createReadStream(path.join(destDir, file));
+      const readStream = fs.createReadStream(extractedPath);
       readStream.on('error', reject);
       readStream.pipe(writeStream, { end: false });
       readStream.on('end', resolve);
     });
+    fs.rmSync(extractedPath, { force: true }); // already folded into the combined file — don't keep a second copy
+
+    done++;
+    if (done % 25 === 0 || done === archivePaths.length) {
+      process.stdout.write(`\r  ...${done}/${archivePaths.length} chunks extracted and combined`);
+    }
   }
+  process.stdout.write('\n');
+
   await new Promise((resolve, reject) => writeStream.end((error) => (error ? reject(error) : resolve())));
   return combinedPath;
 }
