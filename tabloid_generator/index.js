@@ -4,13 +4,21 @@ import { fileURLToPath } from 'url';
 import yaml from 'yaml';
 import { callGrokJson } from '../utils/grok.js';
 import { parseJsonFromLlmResponse } from '../utils/parse-json.js';
-import { getCachedImage } from '../utils/image-cache.js';
+import { getCachedImage, getArticleImagesRoot } from '../utils/image-cache.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const MAX_CITATIONS_FOR_LLM = 80;
 /** Number of refs to show in visualizer and to number in article; must match imright/scripts/generate-debug.js TOP_K_REFS */
 const REF_NUMBERS_COUNT = 50;
+
+/**
+ * Bump only for a non-additive change (a field renamed, removed, or repurposed)—readers of this
+ * data should branch on `version` for those, but a brand new optional field (e.g. future social
+ * features) doesn't need a bump: code should treat its absence as "not set yet," not "old version."
+ */
+const ARTICLE_DATA_VERSION = 1;
+const ARTICLE_DATA_DIR = path.join(__dirname, 'article_data');
 
 const SYSTEM_PROMPT = fs.readFileSync(
   path.join(__dirname, 'system_prompt.txt'),
@@ -38,6 +46,7 @@ function flattenAndDedupeCitations(extractedByTerm) {
 
     for (const item of items) {
       const link = item?.link;
+      const archiveLink = item?.archiveLink ?? null;
       const title = item?.title ?? '';
       const content = cleanContent(item?.content ?? '');
       if (!link || !link.startsWith('http')) continue;
@@ -46,7 +55,7 @@ function flattenAndDedupeCitations(extractedByTerm) {
       if (seen.has(key)) continue;
       seen.add(key);
 
-      citations.push({ link, title, content, searchTerm });
+      citations.push({ link, archiveLink, title, content, searchTerm });
     }
   }
 
@@ -60,6 +69,58 @@ function condenseForLlm(citations) {
 
 function parseJsonResponse(rawContent) {
   return parseJsonFromLlmResponse(rawContent);
+}
+
+/**
+ * Assemble the durable, versioned "compact JSON" for an article: the LLM's article structure
+ * (headline/intro/sections/conclusion/photo fields—spread through untouched, whatever shape the
+ * LLM produced) plus a frozen, numbered citations list matching the [anchor](id) refs already
+ * embedded in the prose by processParagraphWithLinks. Freezing this here (rather than recomputing
+ * idToUrl from extracted.yaml on every regenerate) is what makes old articles safe to keep
+ * rendering even if extraction logic changes later—the ids an old article's prose points to always
+ * resolve the same way.
+ *
+ * @param {object} params
+ * @param {string} params.slug
+ * @param {string} params.topic
+ * @param {object} params.article - Parsed LLM article object
+ * @param {Array<{link, archiveLink, title}>} params.condensed - Same list idToUrl was built from
+ * @returns {object} - The compact article data, version-tagged
+ */
+export function buildArticleData({ slug, topic, article, condensed, images }) {
+  return {
+    version: ARTICLE_DATA_VERSION,
+    slug,
+    topic,
+    ...article,
+    citations: condensed.map((citation, index) => ({
+      id: index + 1,
+      link: citation.link,
+      archiveLink: citation.archiveLink ?? null,
+      title: citation.title ?? '',
+    })),
+    ...(images ? { images } : {}),
+  };
+}
+
+/** Synchronous, matching how this module already writes its own output_raw/raw_input files. */
+function saveArticleData(slug, articleData) {
+  fs.mkdirSync(ARTICLE_DATA_DIR, { recursive: true });
+  fs.writeFileSync(path.join(ARTICLE_DATA_DIR, `${slug}.json`), JSON.stringify(articleData, null, 2), 'utf8');
+}
+
+/** Returns the parsed compact article data for a slug, or null if it doesn't exist yet (an
+ * article generated before this format existed—callers should fall back to the legacy
+ * output_raw + extracted.yaml reconstruction). */
+function loadArticleData(slug) {
+  const filePath = path.join(ARTICLE_DATA_DIR, `${slug}.json`);
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (error) {
+    console.error(`[article-data] failed to parse ${filePath}, falling back to legacy reconstruction:`, error.message);
+    return null;
+  }
 }
 
 /** Escape HTML for safe output. */
@@ -102,7 +163,7 @@ function processParagraphWithLinks(text, idToUrl = null, urlToIndex = null, debu
       // If numeric id but not in map, render as plain text (invalid ref)
       const isValidLink = resolvedUrl && (resolvedUrl.startsWith('http') || resolvedUrl.startsWith('//'));
       const linkHtml = isValidLink
-        ? `<a href="${escapeHtml(resolvedUrl)}" target="_blank" rel="noopener">${escapeHtml(part.anchor)}</a>`
+        ? `<a href="${escapeHtml(resolvedUrl)}" class="citation-link" target="_blank" rel="noopener">${escapeHtml(part.anchor)}</a>`
         : escapeHtml(part.anchor);
       const refNum = urlToIndex?.get(resolvedUrl);
       if (refNum != null && debugPageUrl) {
@@ -134,39 +195,49 @@ function buildUrlToIndex(citations) {
  * (utils/image-cache.js) and copy them into this article's local images dir.
  * Runs lookups concurrently. Returns Map of key -> filename for successful ones.
  *
- * @param {object} article - Parsed article with photo_query (top-level) and sections[].photo_query
+ * @param {object} article - Parsed article with photo_query/photo_description
+ *   (top-level) and sections[].photo_query/photo_description
  * @param {string} slug - Filename-safe slug
  * @param {string} projectRoot - Absolute path to project root
  * @returns {Promise<Map<string, string>>} - Map of 'hero'|'section-0'|... -> filename (e.g. 'hero.webp')
  */
 export async function fetchAndDownloadImages(article, slug, projectRoot) {
   const imagePaths = new Map();
-  const imagesDir = path.join(projectRoot, 'tabloid_generator', 'images', slug);
+  // Permanent, per-article location — a sibling of the shared Pixabay cache
+  // on the same mounted volume in prod (IMAGE_CACHE_DIR), not the ephemeral
+  // container filesystem, and never a path the cache's own 90-day sweep
+  // (runMaintenanceIfDue in utils/image-cache.js) walks. See getArticleImagesRoot().
+  const imagesDir = path.join(getArticleImagesRoot(), slug);
 
   const queries = [];
 
   const heroQuery = article?.photo_query;
   if (heroQuery && typeof heroQuery === 'string' && heroQuery.trim()) {
-    queries.push({ key: 'hero', query: heroQuery.trim() });
+    queries.push({ key: 'hero', simpleQuery: heroQuery.trim(), richDescription: article?.photo_description });
   }
 
   const sections = article?.sections ?? [];
   sections.forEach((section, index) => {
     const sectionQuery = section?.photo_query;
     if (sectionQuery && typeof sectionQuery === 'string' && sectionQuery.trim()) {
-      queries.push({ key: `section-${index}`, query: sectionQuery.trim() });
+      queries.push({
+        key: `section-${index}`,
+        simpleQuery: sectionQuery.trim(),
+        richDescription: section?.photo_description,
+      });
     }
   });
 
   if (queries.length === 0) return imagePaths;
 
-  // Resolve each query through the shared Pixabay cache (search + metadata +
-  // download/compress are all deduped by image ID there), then copy the
-  // cached file into this article's own images dir.
+  // Resolve each query through the shared Pixabay cache (embedding search +
+  // simple-term search + metadata + download/compress are all deduped by
+  // image ID there), then copy the cached file into this article's own
+  // images dir.
   const results = await Promise.all(
-    queries.map(async ({ key, query }) => {
+    queries.map(async ({ key, simpleQuery, richDescription }) => {
       try {
-        const cached = await getCachedImage(query);
+        const cached = await getCachedImage({ richDescription, simpleQuery });
         if (!cached) return null;
         const filename = `${key}.webp`;
         const destPath = path.join(imagesDir, filename);
@@ -174,7 +245,7 @@ export async function fetchAndDownloadImages(article, slug, projectRoot) {
         fs.copyFileSync(cached.filePath, destPath);
         return { key, filename };
       } catch (err) {
-        console.error(`Image cache lookup failed for "${query}":`, err.message);
+        console.error(`Image cache lookup failed for "${simpleQuery}":`, err.message);
         return null;
       }
     })
@@ -723,6 +794,31 @@ ${conclusionHtml}
     <p>${slug ? `<a class="site-footer__how-link" href="../../imright/debug/${escapeHtml(slug)}.html" target="_blank" rel="noopener">Find out how this works</a>` : ''}</p>
     <p>imright.com &middot; Published ${publishedDate}</p>
   </footer>
+  <script>
+  (function() {
+    // Best-effort, non-blocking: the page above is already fully usable with the original
+    // links. This just asks the backend "are any of these still good?" and quietly swaps in
+    // an archive copy for any that have since died. Any failure here is silently ignored—
+    // worst case, links stay exactly as originally rendered.
+    var links = Array.prototype.slice.call(document.querySelectorAll('a.citation-link'));
+    if (links.length === 0) return;
+    var urls = links.map(function(a) { return a.href; });
+    fetch('/api/link-status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ urls: urls }),
+    })
+      .then(function(res) { return res.ok ? res.json() : null; })
+      .then(function(data) {
+        if (!data) return;
+        links.forEach(function(a) {
+          var resolved = data[a.href];
+          if (resolved && resolved !== a.href) a.href = resolved;
+        });
+      })
+      .catch(function() {});
+  })();
+  </script>
 </body>
 </html>`;
 }
@@ -775,6 +871,9 @@ ${JSON.stringify(candidateArguments, null, 2)}`;
   }
 
   const article = parsed.article ?? parsed;
+  if (slug) {
+    saveArticleData(slug, buildArticleData({ slug, topic: claim, article, condensed }));
+  }
   return { article, condensed, idToUrl, topic: claim };
 }
 
@@ -784,13 +883,16 @@ ${JSON.stringify(candidateArguments, null, 2)}`;
  * @param {object} articleResult - From generateArticle: { article, condensed, idToUrl, topic }
  * @param {string} slug - Filename-safe slug
  * @param {string} projectRoot - Absolute path to project root
- * @returns {Promise<string>} - HTML string
+ * @returns {Promise<{ html: string, imagePaths: Map<string, string> }>} - HTML plus the
+ *   key->filename map (needed by callers that persist article_data with images, e.g.
+ *   imright/index.js's Postgres integration — generateHtml alone can't reconstruct this).
  */
 export async function renderWithImages(articleResult, slug, projectRoot) {
   const { article, condensed, idToUrl, topic } = articleResult;
   const imagePaths = await fetchAndDownloadImages(article, slug, projectRoot);
   const bunkyDataUrl = (slug && (article?.sections ?? []).length > 0) ? getBunkyDataUrl(projectRoot) : null;
-  return generateHtml(article, topic, slug, condensed, idToUrl, imagePaths, bunkyDataUrl);
+  const html = generateHtml(article, topic, slug, condensed, idToUrl, imagePaths, bunkyDataUrl);
+  return { html, imagePaths };
 }
 
 /**
@@ -800,7 +902,7 @@ export async function renderWithImages(articleResult, slug, projectRoot) {
  * @param {object} extractedByTerm - Output from ref_extractor
  * @param {string} [slug] - Filename-safe slug
  * @param {string} [projectRoot] - Project root (required for image fetching)
- * @returns {Promise<string>} - HTML string
+ * @returns {Promise<{ html: string, imagePaths: Map<string, string> }>}
  */
 export async function generate(claim, extractedByArticle, slug = null, projectRoot = null) {
   const articleResult = await generateArticle(claim, extractedByArticle, slug);
@@ -809,15 +911,53 @@ export async function generate(claim, extractedByArticle, slug = null, projectRo
 }
 
 /**
- * Regenerate HTML from existing output_raw and extracted data (no Grok call).
- * Use when pipeline data exists and you only need to refresh the rendered output.
+ * Regenerate HTML without a Grok call. Use when pipeline data exists and you only need to
+ * refresh the rendered output.
+ *
+ * Prefers the durable article_data/<slug>.json written by generateArticle (frozen citations,
+ * no drift risk if extraction logic changes later). Falls back to reconstructing from
+ * output_raw + extracted.yaml for articles generated before article_data existed—and once
+ * reconstructed, writes article_data so the next regenerate takes the fast, frozen path too.
  *
  * @param {string} slug - Filename-safe slug (e.g. vaccines-cause-autism)
  * @param {string} projectRoot - Absolute path to project root
  * @returns {string} - HTML string
- * @throws {Error} - If output_raw or extracted files are missing
+ * @throws {Error} - If neither article_data nor (output_raw + extracted) exist
  */
 export async function regenerateFromRaw(slug, projectRoot) {
+  const articleData = loadArticleData(slug);
+
+  const { selected, topic, condensed, idToUrl } = articleData
+    ? (() => {
+        const { version, slug: _slug, topic: savedTopic, citations, ...article } = articleData;
+        return {
+          selected: article,
+          topic: savedTopic,
+          condensed: citations.map((c) => ({ link: c.link, archiveLink: c.archiveLink, title: c.title })),
+          idToUrl: new Map(citations.map((c) => [c.id, c.link])),
+        };
+      })()
+    : reconstructFromLegacyFiles(slug, projectRoot);
+
+  if (!articleData) {
+    // Self-migrate: next regenerate can take the fast path above.
+    saveArticleData(slug, buildArticleData({ slug, topic, article: selected, condensed }));
+  }
+
+  const imagePaths =
+    selected?.photo_query || (selected?.sections ?? []).some((s) => s?.photo_query)
+      ? await fetchAndDownloadImages(selected, slug, projectRoot)
+      : new Map();
+
+  const bunkyDataUrl = (selected?.sections ?? []).length > 0 ? getBunkyDataUrl(projectRoot) : null;
+  return generateHtml(selected, topic, slug, condensed, idToUrl, imagePaths, bunkyDataUrl);
+}
+
+/**
+ * Legacy path: reconstruct { selected, topic, condensed, idToUrl } from output_raw + extracted.yaml,
+ * for articles generated before article_data/<slug>.json existed.
+ */
+function reconstructFromLegacyFiles(slug, projectRoot) {
   const outputRawPath = path.join(__dirname, 'output_raw', `${slug}.txt`);
   const extractedPath = path.join(projectRoot, 'ref_extractor', 'extracted', `${slug}.yaml`);
 
@@ -871,11 +1011,5 @@ export async function regenerateFromRaw(slug, projectRoot) {
     }
   }
 
-  const imagePaths =
-    selected?.photo_query || (selected?.sections ?? []).some((s) => s?.photo_query)
-      ? await fetchAndDownloadImages(selected, slug, projectRoot)
-      : new Map();
-
-  const bunkyDataUrl = (selected?.sections ?? []).length > 0 ? getBunkyDataUrl(projectRoot) : null;
-  return generateHtml(selected, topic, slug, condensed, idToUrl, imagePaths, bunkyDataUrl);
+  return { selected, topic, condensed, idToUrl };
 }

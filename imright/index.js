@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -11,6 +12,7 @@ import {
   generateArticle,
   renderWithImages,
   regenerateFromRaw,
+  buildArticleData,
 } from '../tabloid_generator/index.js';
 import { generateCounterarguments } from '../counterarguer/index.js';
 import { slugify } from './utils.js';
@@ -19,6 +21,9 @@ import {
   resetTokenUsage,
   computeCost,
 } from '../utils/grok.js';
+import { backfillImageEmbeddings } from '../utils/image-cache.js';
+import { upsertBackupLinks } from './scripts/backup-links.js';
+import { log } from './scripts/observability.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..');
@@ -45,15 +50,25 @@ function saveToDisk(filePath, content, format) {
  * @param {object} [options] - Optional config
  * @param {function} [options.onProgress] - Callback (stepIndex, totalSteps, message) for progress updates
  * @param {function} [options.onStepComplete] - Callback (stepIndex, totalSteps, message, delta) after each step; delta = { inputTokens, outputTokens, totalCost, timeMs } for that step
- * @param {function} [options.onPageReady] - Callback (slug) when HTML is written and page can be opened (after step 6, before step 7)
- * @returns {Promise<{ conspiracy, wikiFetched, wikiFiltered, extracted, html, slug }>}
+ * @param {function} [options.onPageReady] - Callback (slug, articleData) when the article is
+ *   ready to view (after step 6, before step 7) — articleData is buildArticleData()'s shape
+ *   (title/body/citations/images), for callers that persist it (e.g. into Postgres) right away
+ *   rather than waiting for this whole function to resolve, which would delay "ready" by
+ *   however long step 7 (counterarguments) takes.
+ * @returns {Promise<{ conspiracy, wikiFetched, wikiFiltered, extracted, html, slug, counterarguments }>}
  */
 export async function runPipeline(claim, options = {}) {
   const onProgress = options.onProgress ?? (() => {});
   const onStepComplete = options.onStepComplete ?? (() => {});
   const onPageReady = options.onPageReady ?? (() => {});
   const totalSteps = 7;
-  const slug = slugify(claim);
+  // A short random suffix, not just slugify(claim): every one of this run's
+  // on-disk artifacts (images included) is keyed by this value, and two
+  // different submissions of the same claim text must never collide on disk
+  // — the exact same identity problem the social layer already fixes for the
+  // `articles` table itself (see the plan's "route on the real primary key"
+  // section), one layer down in the pipeline's file paths.
+  const slug = `${slugify(claim)}-${crypto.randomBytes(4).toString('hex')}`;
 
   // Remove stale counterarguments so the page doesn't load old results while step 7 runs
   const staleCounterargs = path.join(PROJECT_ROOT, 'tabloid_generator', 'counterarguments', `${slug}.json`);
@@ -192,6 +207,9 @@ export async function runPipeline(claim, options = {}) {
     extracted,
     'yaml'
   );
+  // Fire-and-forget, same spirit as saveToDisk: seeds backup_links for the not-yet-built
+  // render-time link healing, but must never slow down or fail article generation.
+  upsertBackupLinks(extracted);
 
   onProgress(5, totalSteps, 'Generating tabloid article...');
   const step5Start = performance.now();
@@ -222,7 +240,7 @@ export async function runPipeline(claim, options = {}) {
 
   onProgress(6, totalSteps, 'Fetching images...');
   const step6Start = performance.now();
-  const html = await renderWithImages(articleResult, slug, PROJECT_ROOT);
+  const { html, imagePaths } = await renderWithImages(articleResult, slug, PROJECT_ROOT);
   (() => {
     const timeMs = performance.now() - step6Start;
     stageRows.push({
@@ -244,8 +262,33 @@ export async function runPipeline(claim, options = {}) {
   fs.mkdirSync(path.dirname(htmlPath), { recursive: true });
   fs.writeFileSync(htmlPath, html, 'utf8');
 
-  // Page is ready; open browser now so user can read while step 7 runs
-  onPageReady(slug);
+  // Page is ready; open browser now so user can read while step 7 runs.
+  // Callers that persist this (the Postgres integration in serve-site.js)
+  // need the actual content here, not just the slug — waiting for this
+  // whole function to resolve (i.e. for step 7 too) would silently delay
+  // "ready" by however long counterarguments take, which is exactly the
+  // regression onPageReady exists to avoid.
+  const articleDataForPersistence = buildArticleData({
+    slug,
+    topic: claim,
+    article: articleResult.article,
+    condensed: articleResult.condensed,
+    images: Object.fromEntries(imagePaths),
+  });
+  onPageReady(slug, articleDataForPersistence);
+
+  // Fire-and-forget, kicked off only now (never before the page is shown):
+  // compute CLIP embeddings for any images this run downloaded but hasn't
+  // embedded yet. Not awaited here — it runs concurrently with step 7's
+  // counterarguments call below (which is itself a multi-second LLM round
+  // trip the visitor isn't blocked on either), and is awaited once at the
+  // very end purely so it can't outlive the process, never on the path to
+  // onPageReady. Failures are caught inside backfillImageEmbeddings itself
+  // (logged, not thrown) — this is a "future lookups benefit" side effect,
+  // never something that should affect this run's outcome.
+  const embeddingBackfillPromise = backfillImageEmbeddings().catch((err) => {
+    log('warn', 'image embedding backfill failed', { error: err?.message ?? String(err) });
+  });
 
   // Write run-stats synchronously so the debug generator can read it
   const runStatsPath = path.join(PROJECT_ROOT, 'run-stats', `${slug}.json`);
@@ -270,6 +313,11 @@ export async function runPipeline(claim, options = {}) {
   );
 
   // Step 7: counterarguments. Await so totals are complete before CLI prints.
+  // Hoisted so it can be included in this function's return value below —
+  // callers that persist article content (the Postgres integration in
+  // serve-site.js) need it merged in once it's ready, same as the file-based
+  // injection into htmlPath already does for the old static-HTML path.
+  let counterarguments = null;
   const sections = articleResult?.article?.sections ?? [];
   if (sections.length > 0) {
     const step7Start = performance.now();
@@ -277,11 +325,11 @@ export async function runPipeline(claim, options = {}) {
     onProgress(7, totalSteps, 'Generating counterarguments...');
 
     try {
-      const { counterarguments } = await generateCounterarguments(
+      ({ counterarguments } = await generateCounterarguments(
         articleResult.article,
         articleResult.topic,
         slug
-      );
+      ));
       const current = getTokenUsage();
       const delta = {
         inputTokens: current.inputTokens - step7PreviousUsage.inputTokens,
@@ -354,6 +402,11 @@ export async function runPipeline(claim, options = {}) {
     }
   }
 
+  // Let the embedding backfill finish (it's had the entire step-7 duration to
+  // run concurrently already) so it can't outlive this function/process —
+  // errors were already caught and logged above, so this never throws.
+  await embeddingBackfillPromise;
+
   // Generate debug page once at the end (after table is complete)
   try {
     execSync(`node imright/scripts/generate-debug.js ${slug}`, {
@@ -377,6 +430,7 @@ export async function runPipeline(claim, options = {}) {
     slug,
     stageRows,
     refStats,
+    counterarguments,
     tokenUsage: {
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,

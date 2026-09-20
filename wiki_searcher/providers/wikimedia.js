@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import yaml from 'yaml';
-import { embedText } from '../../utils/embeddings.js';
+import { embedText } from '../textEmbeddings.js';
 import { searchSimilarArticles } from '../../utils/vectorIndex.js';
 import { fetchArticleByTitle, toWikiPage } from '../../utils/wikimediaOnDemand.js';
 

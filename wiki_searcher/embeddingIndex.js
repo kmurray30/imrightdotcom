@@ -25,7 +25,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import yaml from 'yaml';
 import { getPool } from '../imright/scripts/db.js';
-import { embedText } from '../utils/embeddings.js';
+import { embedText } from './textEmbeddings.js';
 import { findAllRefs, stripWikiMarkup } from '../ref_extractor/parser/index.js';
 import { parseAllCiteTemplates } from '../ref_extractor/parser/citeTemplate.js';
 import pgvector from 'pgvector/pg';

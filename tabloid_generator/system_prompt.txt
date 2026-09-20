@@ -20,6 +20,7 @@ Return strictly valid JSON with two top-level keys:
   "article": {
     "headline": "Short hooky headline (5-10 words)",
     "photo_query": "ONE word only—the main subject of the article. Examples: squirrel, dog, vaccine, electricity. Stock photo search term.",
+    "photo_description": "One descriptive sentence expanding on photo_query for a semantic image search (not a stock-photo search term)—what the photo should actually show, e.g. 'a close-up of a gray squirrel eating a nut on a tree branch' or 'a gloved hand holding a vaccine vial and syringe in a clinical setting'.",
     "sections": [
       {
         "heading": "Short hooky claim (5-10 words)",

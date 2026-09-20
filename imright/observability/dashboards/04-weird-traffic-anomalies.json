@@ -467,10 +467,10 @@
           }
         }
       },
-      "panel-7": {
+      "panel-9": {
         "kind": "Panel",
         "spec": {
-          "id": 7,
+          "id": 9,
           "title": "",
           "description": "",
           "links": [],
@@ -499,10 +499,10 @@
           }
         }
       },
-      "panel-8": {
+      "panel-10": {
         "kind": "Panel",
         "spec": {
-          "id": 8,
+          "id": 10,
           "title": "Failed interactions",
           "description": "",
           "links": [],
@@ -553,10 +553,10 @@
           }
         }
       },
-      "panel-9": {
+      "panel-11": {
         "kind": "Panel",
         "spec": {
-          "id": 9,
+          "id": 11,
           "title": "High-cost interactions (> $0.05)",
           "description": "Change the threshold in the query to match config/telemetry_thresholds.json's highCostUsd, or whatever you're curious about.",
           "links": [],
@@ -607,10 +607,10 @@
           }
         }
       },
-      "panel-10": {
+      "panel-12": {
         "kind": "Panel",
         "spec": {
-          "id": 10,
+          "id": 12,
           "title": "Interactions with more than 8 LLM calls",
           "description": "",
           "links": [],
@@ -661,10 +661,10 @@
           }
         }
       },
-      "panel-11": {
+      "panel-13": {
         "kind": "Panel",
         "spec": {
-          "id": 11,
+          "id": 13,
           "title": "Retry-heavy interactions (3+ LLM retries)",
           "description": "",
           "links": [],
@@ -715,10 +715,10 @@
           }
         }
       },
-      "panel-12": {
+      "panel-14": {
         "kind": "Panel",
         "spec": {
-          "id": 12,
+          "id": 14,
           "title": "Rate-limited interactions (any external dependency)",
           "description": "Uses a plain text match on the tags list rather than a `| json` field filter — tags is a JSON array, and Loki's structured-metadata/json array handling is inconsistent enough that a substring match on the raw JSON body (guaranteed present, see logStructured()) is the more reliable pattern here.",
           "links": [],
@@ -769,10 +769,10 @@
           }
         }
       },
-      "panel-13": {
+      "panel-15": {
         "kind": "Panel",
         "spec": {
-          "id": 13,
+          "id": 15,
           "title": "Suspected abuse",
           "description": "",
           "links": [],
@@ -823,10 +823,10 @@
           }
         }
       },
-      "panel-14": {
+      "panel-16": {
         "kind": "Panel",
         "spec": {
-          "id": 14,
+          "id": 16,
           "title": "Duplicate/repeated requests",
           "description": "",
           "links": [],
@@ -877,10 +877,10 @@
           }
         }
       },
-      "panel-15": {
+      "panel-17": {
         "kind": "Panel",
         "spec": {
-          "id": 15,
+          "id": 17,
           "title": "Trace a specific interaction (edit the query below with a real interaction_id)",
           "description": "Dropped the dashboard-variable version of this panel — this instance's Grafana schema doesn't (yet) accept a TextVariable kind, and rather than guess at another unverified name, this is a template: copy an interaction_id from any panel above, paste it over REPLACE_WITH_INTERACTION_ID in the query, and run it. Pulls the full step-by-step trace, if one was captured (sampled, error, or anomaly-tagged — see verbosityTiers in config/telemetry_thresholds.json).",
           "links": [],
@@ -925,6 +925,114 @@
                 "showTime": true,
                 "wrapLogMessage": true,
                 "sortOrder": "Ascending",
+                "enableLogDetails": true
+              }
+            }
+          }
+        }
+      },
+      "panel-7": {
+        "kind": "Panel",
+        "spec": {
+          "id": 7,
+          "title": "All errors (any source)",
+          "description": "Broadest net: catches error-severity logs regardless of shape — infra issues (OTLP export rejections, uncaught exceptions), not just failed interactions. detected_level is Loki's own severity-derived label; if it ever misbehaves for OTLP-sourced severity, structured logs also carry an explicit level field: {service_name=\"imright\"} | json | level=\"error\".",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "A",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "grafanacloud-logs"
+                      },
+                      "spec": {
+                        "expr": "{service_name=\"imright\"} | detected_level=\"error\"",
+                        "queryType": "range"
+                      }
+                    }
+                  }
+                }
+              ],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "vizConfig": {
+            "group": "logs",
+            "kind": "VizConfig",
+            "version": "13.3.0-34259522365",
+            "spec": {
+              "fieldConfig": {
+                "defaults": {},
+                "overrides": []
+              },
+              "options": {
+                "showTime": true,
+                "wrapLogMessage": true,
+                "sortOrder": "Descending",
+                "enableLogDetails": true
+              }
+            }
+          }
+        }
+      },
+      "panel-8": {
+        "kind": "Panel",
+        "spec": {
+          "id": 8,
+          "title": "Warnings (rate-limits, etc.)",
+          "description": "Notice-tier: external dependency rate-limiting and other warn-level events that aren't failures but are worth knowing about.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "A",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "grafanacloud-logs"
+                      },
+                      "spec": {
+                        "expr": "{service_name=\"imright\"} | detected_level=\"warn\"",
+                        "queryType": "range"
+                      }
+                    }
+                  }
+                }
+              ],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "vizConfig": {
+            "group": "logs",
+            "kind": "VizConfig",
+            "version": "13.3.0-34259522365",
+            "spec": {
+              "fieldConfig": {
+                "defaults": {},
+                "overrides": []
+              },
+              "options": {
+                "showTime": true,
+                "wrapLogMessage": true,
+                "sortOrder": "Descending",
                 "enableLogDetails": true
               }
             }
@@ -1018,35 +1126,9 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 0,
-              "y": 16,
+              "y": 32,
               "width": 24,
               "height": 2,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-7"
-              }
-            }
-          },
-          {
-            "kind": "GridLayoutItem",
-            "spec": {
-              "x": 0,
-              "y": 18,
-              "width": 24,
-              "height": 8,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-8"
-              }
-            }
-          },
-          {
-            "kind": "GridLayoutItem",
-            "spec": {
-              "x": 0,
-              "y": 26,
-              "width": 24,
-              "height": 8,
               "element": {
                 "kind": "ElementReference",
                 "name": "panel-9"
@@ -1130,6 +1212,58 @@
                 "name": "panel-15"
               }
             }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 82,
+              "width": 24,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-16"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 90,
+              "width": 24,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-17"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 16,
+              "width": 24,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-7"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 24,
+              "width": 24,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-8"
+              }
+            }
           }
         ]
       }
@@ -1168,7 +1302,7 @@
       "timezone": "browser",
       "to": "now"
     },
-    "title": "imright — Weird Traffic & Anomalies",
+    "title": "Weird Traffic & Anomalies",
     "variables": []
   }
 }
