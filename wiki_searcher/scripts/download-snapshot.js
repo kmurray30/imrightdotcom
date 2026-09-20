@@ -202,6 +202,8 @@ async function downloadOne(url, filePath, accessToken, tracker, metadata) {
       stallTimer = setTimeout(() => controller.abort(), STALL_TIMEOUT_MS);
     };
 
+    let writeStream;
+    let bytesThisAttempt = 0;
     try {
       const response = await fetch(url, { headers: attemptHeaders, signal: controller.signal });
       if (response.status === 416) {
@@ -212,9 +214,22 @@ async function downloadOne(url, filePath, accessToken, tracker, metadata) {
         throwForBadResponse(response, `Download failed: ${response.status} ${response.statusText}`);
       }
 
-      const writeStream = fs.createWriteStream(filePath, { flags: currentSize > 0 ? 'a' : 'w' });
+      writeStream = fs.createWriteStream(filePath, { flags: currentSize > 0 ? 'a' : 'w' });
       for await (const chunk of Readable.fromWeb(response.body)) {
         resetStallTimer();
+        // Hard stop the moment this chunk would exceed its known size — a
+        // defense against any cause of overrun (not just the retry race
+        // fixed below), so a bad transfer errors out immediately instead of
+        // silently growing past the total forever. Checked before counting
+        // this chunk anywhere, so bytesThisAttempt always matches exactly
+        // what was added to the tracker (needed for a clean rollback below).
+        if (Number.isFinite(contentLength) && contentLength > 0 && currentSize + bytesThisAttempt + chunk.length > contentLength) {
+          throw new Error(
+            `${path.basename(filePath)} received more bytes than its reported size ` +
+              `(${currentSize + bytesThisAttempt + chunk.length} > ${contentLength}) — aborting this attempt.`
+          );
+        }
+        bytesThisAttempt += chunk.length;
         tracker.addBytes(chunk.length);
         if (!writeStream.write(chunk)) {
           await new Promise((resolve) => writeStream.once('drain', resolve));
@@ -222,6 +237,21 @@ async function downloadOne(url, filePath, accessToken, tracker, metadata) {
       }
       await new Promise((resolve, reject) => writeStream.end((error) => (error ? reject(error) : resolve())));
     } catch (error) {
+      // Undo this attempt's byte count and any bytes it wrote before failing
+      // — without this, a retried attempt resumes from a file size that
+      // doesn't yet reflect the failed attempt's still-draining writes, both
+      // end up writing the same region, and every byte gets double-counted
+      // (this is exactly the "downloaded exceeds total" bug this fixes).
+      tracker.addBytes(-bytesThisAttempt);
+      if (writeStream && !writeStream.destroyed) {
+        await new Promise((resolve) => writeStream.destroy(undefined, () => resolve()));
+      }
+      try {
+        if (fs.existsSync(filePath)) fs.truncateSync(filePath, currentSize);
+      } catch {
+        // best-effort; the next attempt's own currentSize re-read is the real safety net
+      }
+
       if (error.name === 'AbortError') {
         throw new Error(`Chunk stalled — no data received for ${STALL_TIMEOUT_MS / 1000}s (${path.basename(filePath)}).`);
       }
