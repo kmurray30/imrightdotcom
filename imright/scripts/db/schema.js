@@ -83,7 +83,10 @@ export const articles = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     claimText: text('claim_text').notNull(),
-    isPublic: boolean('is_public').notNull().default(false),
+    // Defaults to public: most claims generated here are jokes/bits meant to
+    // be shared, not kept private — private is now an explicit opt-out via
+    // VisibilityToggle rather than something every article starts as.
+    isPublic: boolean('is_public').notNull().default(true),
     // Exactly buildArticleData()'s current shape (title/body/sections/citations/images/counterarguments).
     articleData: jsonb('article_data').notNull(),
     likeCount: integer('like_count').notNull().default(0),
