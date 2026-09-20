@@ -187,7 +187,15 @@ test.describe('Article page', () => {
     await expect(page.locator('.like-button')).toContainText('♥ 1');
   });
 
-  test('D29 (guest): a guest sees the real Like button, gated behind a sign-up prompt on click', async ({ page }) => {
+  test('D29 (guest): a guest can like without signing up, and it\'s tracked per-guest to prevent duplicates', async ({
+    page,
+  }) => {
+    // Reversed requirement: liking used to be account-gated behind the
+    // shared sign-up modal; now it's allowed for anyone, guest included —
+    // real engagement counts even without an account. Still idempotent: the
+    // guest identity minted on the first like (see ensureOwner in the
+    // like route) is what a repeat click/reload keys off of, same guarantee
+    // an account gets, just scoped to this browser instead of a login.
     const owner = await seedGuestUser();
     const article = await seedArticle({ ownerUserId: owner.id });
     await page.goto(article.url);
@@ -195,11 +203,19 @@ test.describe('Article page', () => {
     await expect(likeButton).toBeVisible();
     await expect(likeButton).toContainText('♡ 0');
     await likeButton.click();
-    await expect(page.locator('.modal')).toBeVisible();
-    await expect(page.locator('.modal')).toContainText('Sign up to like this.');
-    // Dismissing the prompt never actually liked it.
-    await page.locator('.modal button', { hasText: 'Not now' }).click();
-    await expect(likeButton).toContainText('♡ 0');
+    await expect(page.locator('.modal')).toHaveCount(0);
+    await expect(likeButton).toContainText('♥ 1');
+
+    // A duplicate like attempt from the same guest browser is a no-op, not a
+    // second like — reload to re-derive state from the database instead of
+    // client-only optimistic state.
+    await page.reload();
+    await expect(page.locator('.like-button')).toContainText('♥ 1');
+
+    const doubleLike = await page.request.post(`/api/articles/${article.id}/like`);
+    expect(doubleLike.ok()).toBe(true);
+    const check = await (await page.request.get(`/api/articles/${article.id}`)).json();
+    expect(check.article.likeCount).toBe(1);
   });
 
   test('D30+D31: bookmark quick-add, then the folder widget on a second click, including a new folder and a duplicate-name error', async ({
@@ -379,6 +395,36 @@ test.describe('Article page', () => {
 
     await page.reload();
     await expect(page.locator('.comment-item').first().locator('.comment-like')).toContainText('♥ 1');
+  });
+
+  test('D40 (guest): a guest can like a comment without signing up, tracked per-guest to prevent duplicates', async ({
+    page,
+  }) => {
+    await signupViaApi(page); // the comment's author — a separate identity from the guest liker below
+    const owner = await seedGuestUser();
+    const article = await seedArticle({ ownerUserId: owner.id });
+    const { comment } = await (
+      await page.request.post(`/api/articles/${article.id}/comments`, { data: { body: 'like me, guest' } })
+    ).json();
+    await page.request.post('/api/account/logout');
+
+    await page.goto(article.url);
+    const commentLike = page.locator('.comment-item').first().locator('.comment-like');
+    await expect(commentLike).toContainText('♡ 0');
+    await commentLike.click();
+    await expect(page.locator('.modal')).toHaveCount(0);
+    await expect(commentLike).toContainText('♥ 1');
+
+    // Reload before the follow-up API call so the guest cookie the like just
+    // set is guaranteed to be the one page.request sends next (same pattern
+    // as the article-like guest test above).
+    await page.reload();
+    await expect(page.locator('.comment-item').first().locator('.comment-like')).toContainText('♥ 1');
+
+    const doubleLike = await page.request.post(`/api/comments/${comment.id}/like`);
+    expect(doubleLike.ok()).toBe(true);
+    const check = await (await page.request.get(`/api/articles/${article.id}/comments`)).json();
+    expect(check.comments.find((c) => c.id === comment.id).likeCount).toBe(1);
   });
 
   test('D39 mobile: Enter submits a comment without needing the Post button visible', async ({ page }) => {

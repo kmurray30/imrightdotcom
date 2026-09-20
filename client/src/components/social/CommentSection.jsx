@@ -4,17 +4,13 @@ import { useAuth } from '../../context/AuthContext.jsx';
 import { useGuestGate } from '../../context/GuestGateContext.jsx';
 
 function CommentItem({ comment }) {
-  const { isGuest } = useAuth();
-  const { promptSignup } = useGuestGate();
+  // Liking a comment is guest-ok, same reasoning as LikeButton — posting a
+  // comment (below, in CommentSection) is still account-gated.
   const [liked, setLiked] = useState(comment.likedByViewer ?? false);
   const [count, setCount] = useState(comment.likeCount);
   const [busy, setBusy] = useState(false);
 
   async function toggleLike() {
-    if (isGuest) {
-      promptSignup('like comments');
-      return;
-    }
     if (busy) return;
     setBusy(true);
     const next = !liked;
