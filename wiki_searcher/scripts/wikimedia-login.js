@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 /**
- * One-time setup: exchange your Wikimedia Enterprise username/password for a
+ * Optional: exchange your Wikimedia Enterprise username/password for a
  * refresh token, so the running app never has to store your password.
  *
- * Run this once, then set the printed value as WIKIMEDIA_REFRESH_TOKEN
- * (env.local for local dev, a real Railway env var for prod). After that you
- * can remove WIKIMEDIA_PASSWORD — the app only ever calls token-refresh.
+ * You do NOT need to run this before build-index-from-wikimedia.js or
+ * refresh-daily.js — utils/wikimediaAuth.js already logs in automatically
+ * with WIKIMEDIA_USERNAME/WIKIMEDIA_PASSWORD if no refresh token is
+ * configured. This script exists purely for people who'd rather not keep
+ * their password sitting in an env var long-term: run it once, set the
+ * printed value as WIKIMEDIA_REFRESH_TOKEN, and then you can remove
+ * WIKIMEDIA_PASSWORD — the app will only ever call token-refresh after that.
  * Re-run this script to mint a new refresh token when the old one expires
  * (90 days, or 90 refresh calls, whichever comes first).
  *

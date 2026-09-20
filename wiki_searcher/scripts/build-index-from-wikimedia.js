@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 /**
- * Downloads a Wikimedia Enterprise Snapshot and builds the pgvector
- * paragraph-embedding index from it — end to end, chunk by chunk, never
- * holding more than a few chunks' worth of raw data on disk at once.
+ * One-time (or re-run-to-resume) full build: downloads a Wikimedia Enterprise
+ * Snapshot and builds the pgvector paragraph-embedding index from it — end to
+ * end, chunk by chunk, never holding more than a few chunks' worth of raw
+ * data on disk at once. This is the script to run to bootstrap the index from
+ * nothing; despite the old name, it was never just a download step.
  *
  * Earlier versions of this script downloaded and extracted the entire
- * corpus first, then expected a separate run of build-index-from-snapshot.js
+ * corpus first, then expected a separate run of build-index-from-ndjson.js
  * over one combined file. That doesn't work here: English Wikipedia's
  * snapshot is over a terabyte uncompressed (Wikimedia's own docs: "Some
  * projects (like English Wikipedia) are larger than a terabyte"), and there
@@ -20,7 +22,11 @@
  * Downloads by CHUNK, not as one giant file — this is what the Snapshot API
  * docs recommend for a project this large, and it's what makes concurrency
  * possible at all: chunks are independently downloadable objects. Auth is
- * fully automatic via utils/wikimediaAuth.js — nothing to copy-paste.
+ * fully automatic via utils/wikimediaAuth.js: just set WIKIMEDIA_USERNAME and
+ * WIKIMEDIA_PASSWORD and this script logs in on its own, no separate
+ * wikimedia-login.js step required. That script only exists for people who'd
+ * rather not keep their password in an env var long-term — run it once to
+ * mint a WIKIMEDIA_REFRESH_TOKEN, set that instead, and remove the password.
  *
  * Resumable at three levels, cheapest check first:
  *   - A chunk with a .done marker is fully processed (downloaded, extracted,
@@ -48,7 +54,7 @@
  * same way curl does per the docs; and that each chunk's archive extracts
  * to exactly one top-level .ndjson file with no further nesting.
  *
- * Usage: node wiki_searcher/scripts/download-snapshot.js [identifier] [destDir]
+ * Usage: node wiki_searcher/scripts/build-index-from-wikimedia.js [identifier] [destDir]
  *   identifier - defaults to enwiki_namespace_0
  *   destDir    - defaults to ./wiki-snapshots
  */

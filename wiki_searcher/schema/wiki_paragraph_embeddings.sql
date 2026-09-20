@@ -3,7 +3,7 @@
 --
 -- vector(384) must match wiki_searcher/textEmbeddings.js's EMBEDDING_DIMENSIONS. If the
 -- embedding model ever changes, this table needs to be dropped and rebuilt
--- from scratch (see wiki_searcher/scripts/build-index-from-snapshot.js) —
+-- from scratch (see wiki_searcher/scripts/build-index-from-wikimedia.js) —
 -- vectors from different models aren't comparable.
 
 CREATE EXTENSION IF NOT EXISTS vector;

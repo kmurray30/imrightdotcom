@@ -1,8 +1,9 @@
 /**
- * Shared logic for populating wiki_paragraph_embeddings — used by both the
- * one-time full build (scripts/build-index-from-snapshot.js) and the daily
- * refresh (scripts/refresh-daily.js), so there's exactly one place that
- * decides how an article's wikitext becomes indexed paragraphs.
+ * Shared logic for populating wiki_paragraph_embeddings — used by the
+ * one-time full build (scripts/build-index-from-wikimedia.js, or
+ * scripts/build-index-from-ndjson.js for an NDJSON file you already have)
+ * and the daily refresh (scripts/refresh-daily.js), so there's exactly one
+ * place that decides how an article's wikitext becomes indexed paragraphs.
  *
  * Two design decisions, both from the chunking discussion this came out of:
  *

@@ -6,16 +6,16 @@
  * article's paragraphs into wiki_paragraph_embeddings.
  *
  * For the primary workflow — downloading the snapshot from Wikimedia and
- * building the index from it — use download-snapshot.js instead. That script
- * handles download, extraction, and embedding chunk-by-chunk on its own, so
- * the full corpus is never materialized on disk at once (it's 1TB+
- * uncompressed) and there's no separate build step to run afterward.
+ * building the index from it — use build-index-from-wikimedia.js instead.
+ * That script handles download, extraction, and embedding chunk-by-chunk on
+ * its own, so the full corpus is never materialized on disk at once (it's
+ * 1TB+ uncompressed) and there's no separate build step to run afterward.
  *
  * This script is for the narrower case where you already have a decompressed
  * NDJSON file from somewhere else (a manual download, a subset export, etc.)
  * and just want it embedded.
  *
- * Usage: node wiki_searcher/scripts/build-index-from-snapshot.js /path/to/enwiki_namespace_0.ndjson
+ * Usage: node wiki_searcher/scripts/build-index-from-ndjson.js /path/to/enwiki_namespace_0.ndjson
  */
 import fs from 'fs';
 import readline from 'readline';
@@ -26,7 +26,7 @@ loadEnv();
 
 const ndjsonPath = process.argv[2];
 if (!ndjsonPath) {
-  console.error('Usage: node wiki_searcher/scripts/build-index-from-snapshot.js /path/to/snapshot.ndjson');
+  console.error('Usage: node wiki_searcher/scripts/build-index-from-ndjson.js /path/to/snapshot.ndjson');
   process.exit(1);
 }
 
