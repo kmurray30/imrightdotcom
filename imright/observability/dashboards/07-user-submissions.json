@@ -134,7 +134,7 @@
         "spec": {
           "id": 3,
           "title": "Submitted claims",
-          "description": "Newest first, claim text only. The trailing key=value junk from earlier versions of this panel (events=[...], interaction_id=..., tags=[], scope_name=...) was Grafana's Logs panel appending each line's unique labels/structured metadata after the formatted text — a display setting (\"Unique labels\", showLabels), not something LogQL could filter out. Turning that off is what actually fixes it; the underlying interaction_trace log line still carries the full record. Click a row to expand it (visitor_id, interaction_id, tags, per-step timings) — that detail is deliberately hidden by default, not shown inline.",
+          "description": "Newest first, claim text only. The trailing junk from earlier versions of this panel (events=[...], interaction_id=..., tags=[], scope_name=...) is structured metadata attached to every interaction_trace log line at ingestion — a separate label set from the `| json` body-parsing pipeline, so line_format alone can't touch it and no panel display toggle governs it either. `| drop` removes those labels from the query result itself before Grafana ever renders it. Click a row to expand it (visitor_id, interaction_id, tags, per-step timings) — that detail is deliberately hidden by default, not shown inline.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -153,7 +153,7 @@
                         "name": "grafanacloud-logs"
                       },
                       "spec": {
-                        "expr": "{service_name=\"imright\"} |= `interaction_trace` | json claim_text | line_format \"{{.claim_text}}\"",
+                        "expr": "{service_name=\"imright\"} |= `interaction_trace` | json | line_format \"{{.claim_text}}\" | drop claim_text, claim_text_extracted, events, interaction_id, scope_name, tags, level, message",
                         "queryType": "range"
                       }
                     }
