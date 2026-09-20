@@ -1,17 +1,19 @@
 #!/usr/bin/env node
 /**
- * One-time full build: streams a decompressed Wikimedia Enterprise Snapshot
- * NDJSON file (one article JSON object per line — see
+ * Streams an already-decompressed Wikimedia Enterprise Snapshot NDJSON file
+ * (one article JSON object per line — see
  * https://enterprise.wikimedia.com/docs/snapshot/) and embeds+upserts every
  * article's paragraphs into wiki_paragraph_embeddings.
  *
- * You need to download and extract the snapshot yourself first:
- *   curl -H "Authorization: Bearer $ACCESS_TOKEN" -L \
- *     https://api.enterprise.wikimedia.com/v2/snapshots/enwiki_namespace_0/download \
- *     --output enwiki.tar.gz
- *   tar xzf enwiki.tar.gz
- * (Consider downloading by chunk instead — see the Snapshot API docs — enwiki
- * is large; this script doesn't care, it just reads whatever NDJSON path you give it.)
+ * For the primary workflow — downloading the snapshot from Wikimedia and
+ * building the index from it — use download-snapshot.js instead. That script
+ * handles download, extraction, and embedding chunk-by-chunk on its own, so
+ * the full corpus is never materialized on disk at once (it's 1TB+
+ * uncompressed) and there's no separate build step to run afterward.
+ *
+ * This script is for the narrower case where you already have a decompressed
+ * NDJSON file from somewhere else (a manual download, a subset export, etc.)
+ * and just want it embedded.
  *
  * Usage: node wiki_searcher/scripts/build-index-from-snapshot.js /path/to/enwiki_namespace_0.ndjson
  */

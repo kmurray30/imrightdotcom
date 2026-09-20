@@ -1,35 +1,52 @@
 #!/usr/bin/env node
 /**
- * Downloads (resumably, concurrently) and extracts a Wikimedia Enterprise
- * Snapshot — the raw text+structure corpus that build-index-from-snapshot.js
- * consumes.
+ * Downloads a Wikimedia Enterprise Snapshot and builds the pgvector
+ * paragraph-embedding index from it — end to end, chunk by chunk, never
+ * holding more than a few chunks' worth of raw data on disk at once.
+ *
+ * Earlier versions of this script downloaded and extracted the entire
+ * corpus first, then expected a separate run of build-index-from-snapshot.js
+ * over one combined file. That doesn't work here: English Wikipedia's
+ * snapshot is over a terabyte uncompressed (Wikimedia's own docs: "Some
+ * projects (like English Wikipedia) are larger than a terabyte"), and there
+ * was never a good reason to materialize all of that on disk — only a
+ * small, citation-filtered slice of it ever gets embedded (see
+ * embeddingIndex.js). So each chunk now goes through its whole lifecycle
+ * before the next one starts: download -> extract -> embed every article's
+ * citation-adjacent paragraphs -> delete the chunk's archive and extracted
+ * copy. Peak extra disk usage is a few chunks' worth of raw data (a few GB
+ * at EMBED_CONCURRENCY chunks in flight), not the whole corpus.
  *
  * Downloads by CHUNK, not as one giant file — this is what the Snapshot API
- * docs recommend for a project as large as English Wikipedia, and it's also
- * what makes concurrency possible at all: chunks are independently
- * downloadable objects, so several can be fetched in parallel instead of
- * fighting over a single HTTP connection. Auth is fully automatic via
- * utils/wikimediaAuth.js — nothing to copy-paste.
+ * docs recommend for a project this large, and it's what makes concurrency
+ * possible at all: chunks are independently downloadable objects. Auth is
+ * fully automatic via utils/wikimediaAuth.js — nothing to copy-paste.
  *
- * Each chunk resumes independently (its own partial file + ETag sidecar),
- * so an interrupted run only has to redo whichever chunks weren't finished.
+ * Resumable at three levels, cheapest check first:
+ *   - A chunk with a .done marker is fully processed (downloaded, extracted,
+ *     embedded, cleaned up) — skipped entirely.
+ *   - A chunk with an extracted .ndjson already on disk (downloaded and
+ *     extracted, but not yet embedded when a prior run stopped) skips
+ *     straight to embedding instead of re-downloading.
+ *   - Otherwise downloadOne resumes the partial archive by its own
+ *     byte-range logic, same as before.
+ *   - Below all of that, every individual article is independently
+ *     resumable too (embeddingIndex.js skips one whose version_identifier
+ *     hasn't changed) — so even re-processing an already-done chunk is
+ *     cheap, this just avoids the wasted re-download/re-extract on top.
  *
- * Concurrency default (6) stays well under Wikimedia Enterprise's free-tier
- * 10 QPS limit — each chunk only issues a HEAD + a GET to start, then
- * streams, so 6 concurrent chunks is nowhere near that ceiling.
+ * Concurrency: CONCURRENCY (6) governs the network-only sizing pass, well
+ * under Wikimedia Enterprise's free-tier 10 QPS limit. EMBED_CONCURRENCY (4)
+ * governs the full per-chunk pipeline once embedding (CPU-bound, and each
+ * chunk holds a Postgres connection while it runs) is in the mix — kept
+ * below the connection pool's max (imright/scripts/db.js, max: 5) so chunks
+ * don't end up waiting on each other for a connection.
  *
- * Honest caveat on whether this actually speeds things up: if your own
- * connection is the bottleneck, splitting one slow pipe into more streams
- * won't create bandwidth that isn't there. It's most likely to help if the
- * backend is rate-limiting individual connections, which is common for the
- * presigned cloud-storage URLs this API redirects to — worth just trying.
- *
- * NOTE: as before, this leans on Node's fetch stripping Authorization but
- * forwarding Range across the redirect to each chunk's presigned URL, the
- * same way curl does per the docs — not verified live from this environment.
- * Also unverified: that each chunk's archive extracts to a plain .ndjson
- * file with no further nesting — if extraction produces something else,
- * the combine step below will just find zero .ndjson files and say so.
+ * Honest caveats, unverified live from this environment (Wikimedia's
+ * domains are blocked here): that Node's fetch strips Authorization but
+ * forwards Range across the redirect to each chunk's presigned URL, the
+ * same way curl does per the docs; and that each chunk's archive extracts
+ * to exactly one top-level .ndjson file with no further nesting.
  *
  * Usage: node wiki_searcher/scripts/download-snapshot.js [identifier] [destDir]
  *   identifier - defaults to enwiki_namespace_0
@@ -37,12 +54,14 @@
  */
 import fs from 'fs';
 import path from 'path';
+import readline from 'readline';
 import { Readable } from 'stream';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { loadEnv } from '../../imright/load-env.js';
 import { getAccessToken } from '../../utils/wikimediaAuth.js';
 import { callExternalApi, HttpStatusError, timeoutSignal } from '../../utils/external-api.js';
+import { upsertArticleEmbeddings } from '../embeddingIndex.js';
 
 loadEnv();
 const execFileAsync = promisify(execFile);
@@ -50,7 +69,8 @@ const execFileAsync = promisify(execFile);
 const API_BASE = 'https://api.enterprise.wikimedia.com';
 const identifier = process.argv[2] || 'enwiki_namespace_0';
 const destDir = process.argv[3] || './wiki-snapshots';
-const CONCURRENCY = 6; // raise if you're on a paid plan with a higher QPS limit
+const CONCURRENCY = 6; // sizing pass only — pure network, raise if you're on a paid plan with a higher QPS limit
+const EMBED_CONCURRENCY = 4; // full download+extract+embed pipeline — keep at/below the DB pool's max (5)
 const METADATA_TIMEOUT_MS = 15_000; // HEAD/info calls should be fast; don't hang forever if one stalls
 const STALL_TIMEOUT_MS = 30_000; // abort a chunk download if no bytes arrive for this long
 
@@ -70,7 +90,7 @@ function formatDuration(seconds) {
   return [h, m, s].map((n) => String(n).padStart(2, '0')).join(':');
 }
 
-/** Tracks aggregate progress across all concurrently-downloading chunks and renders one combined status line. */
+/** Tracks aggregate download progress across all in-flight chunks and renders one combined status line. */
 function createProgressTracker(totalBytes) {
   let downloadedBytes = 0;
   const samples = []; // { time, bytes } — pruned to the last SPEED_WINDOW_MS
@@ -155,13 +175,11 @@ async function headDownload(url, accessToken) {
 }
 
 /**
- * Downloads one chunk resumably, reporting newly-streamed bytes to `tracker`
- * (pre-existing bytes are credited by the caller before this runs).
- * `metadata` ({ contentLength, etag, acceptsRanges }) comes from the sizing
- * pass in downloadAllChunks — deliberately not re-HEAD-ing here, since
- * every chunk was already HEAD'd once for its total size; doing it again
- * per chunk doubled the request volume for no reason and was a real
- * contributor to hitting the rate limit.
+ * Downloads one chunk's archive resumably, reporting newly-streamed bytes to
+ * `tracker` (pre-existing on-disk bytes are credited by the caller before
+ * this runs). `metadata` ({ contentLength, etag, acceptsRanges }) comes from
+ * the sizing pass — deliberately not re-HEAD-ing here, since every chunk
+ * was already HEAD'd once for its total size.
  */
 async function downloadOne(url, filePath, accessToken, tracker, metadata) {
   const { contentLength, etag, acceptsRanges } = metadata;
@@ -169,25 +187,19 @@ async function downloadOne(url, filePath, accessToken, tracker, metadata) {
 
   // This is the ONE place that decides how many on-disk bytes for this
   // chunk are trustworthy — and therefore the one place that's allowed to
-  // credit them to the tracker. A separate pre-pass in downloadAllChunks
-  // used to credit a chunk's raw on-disk size before this function got a
-  // chance to reset it (oversized/rotated-ETag cases), so every reset chunk
-  // got counted once there AND again in full as it re-downloaded here.
-  // Deciding and crediting in the same place makes that impossible.
+  // credit them to the tracker. Crediting a chunk's raw on-disk size
+  // anywhere else, before this function gets a chance to reset it
+  // (oversized/rotated-ETag cases), causes double-counting.
   let startByte = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
   if (startByte === contentLength) {
     // Trust an exact size match immediately, with no dependency on the ETag
-    // sidecar. A completed chunk has its sidecar deleted on success (see the
-    // cleanup at the end of this function) — checking the ETag first here,
-    // like an earlier version of this did, meant a completed chunk with no
-    // sidecar always looked "rotated" and got needlessly deleted and
-    // re-downloaded from scratch on every subsequent run.
+    // sidecar — a completed chunk has its sidecar deleted on success, so
+    // checking the ETag first would make every completed chunk look
+    // "rotated" (no sidecar to compare against) on a later run.
     tracker.addBytes(startByte);
     return;
   } else if (startByte > contentLength) {
-    // Oversized — e.g. corrupted by the double-counting bug this version
-    // fixes. Reset and re-download; can't be trusted at any size, exact
-    // match or not.
+    // Oversized/corrupted — can't be trusted at any size. Reset and re-download.
     fs.rmSync(filePath, { force: true });
     startByte = 0;
   } else if (startByte > 0) {
@@ -209,8 +221,8 @@ async function downloadOne(url, filePath, accessToken, tracker, metadata) {
   let alreadyComplete = false;
   await withRetry('snapshot_chunk_download', async () => {
     // Re-check on every retry attempt — a prior attempt may have written
-    // some bytes before failing, so isResuming/startByte-equivalent state
-    // needs to reflect what's on disk right now, not what it was initially.
+    // some bytes before failing, so this needs to reflect what's on disk
+    // right now, not what it was when downloadOne started.
     const currentSize = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
     const attemptHeaders = { ...headers };
     if (currentSize > 0 && acceptsRanges) attemptHeaders.Range = `bytes=${currentSize}-`;
@@ -240,12 +252,10 @@ async function downloadOne(url, filePath, accessToken, tracker, metadata) {
       writeStream = fs.createWriteStream(filePath, { flags: currentSize > 0 ? 'a' : 'w' });
       for await (const chunk of Readable.fromWeb(response.body)) {
         resetStallTimer();
-        // Hard stop the moment this chunk would exceed its known size — a
-        // defense against any cause of overrun (not just the retry race
-        // fixed below), so a bad transfer errors out immediately instead of
-        // silently growing past the total forever. Checked before counting
-        // this chunk anywhere, so bytesThisAttempt always matches exactly
-        // what was added to the tracker (needed for a clean rollback below).
+        // Hard stop the moment this chunk would exceed its known size —
+        // checked before counting it anywhere, so bytesThisAttempt always
+        // matches exactly what was added to the tracker (needed for a
+        // clean rollback below).
         if (Number.isFinite(contentLength) && contentLength > 0 && currentSize + bytesThisAttempt + chunk.length > contentLength) {
           throw new Error(
             `${path.basename(filePath)} received more bytes than its reported size ` +
@@ -260,11 +270,11 @@ async function downloadOne(url, filePath, accessToken, tracker, metadata) {
       }
       await new Promise((resolve, reject) => writeStream.end((error) => (error ? reject(error) : resolve())));
     } catch (error) {
-      // Undo this attempt's byte count and any bytes it wrote before failing
-      // — without this, a retried attempt resumes from a file size that
-      // doesn't yet reflect the failed attempt's still-draining writes, both
-      // end up writing the same region, and every byte gets double-counted
-      // (this is exactly the "downloaded exceeds total" bug this fixes).
+      // Undo this attempt's byte count and any bytes it wrote before
+      // failing — a retried attempt otherwise resumes from a file size
+      // that doesn't reflect the failed attempt's still-draining writes,
+      // both end up writing the same region, and every byte gets
+      // double-counted.
       tracker.addBytes(-bytesThisAttempt);
       if (writeStream && !writeStream.destroyed) {
         await new Promise((resolve) => writeStream.destroy(undefined, () => resolve()));
@@ -303,7 +313,86 @@ async function runWithConcurrency(items, worker, concurrency) {
   await Promise.all(Array.from({ length: concurrency }, runNext));
 }
 
-async function downloadAllChunks(accessToken) {
+/** Extracts one chunk's archive, deletes the archive, and returns the extracted NDJSON path. */
+async function extractChunk(chunk) {
+  const archiveName = path.basename(chunk.filePath);
+  await execFileAsync('tar', ['xzf', archiveName], { cwd: destDir });
+  fs.rmSync(chunk.filePath, { force: true }); // compressed copy no longer needed once extracted
+
+  const extractedPath = path.join(destDir, `${chunk.chunkId}.ndjson`);
+  if (!fs.existsSync(extractedPath)) {
+    throw new Error(`Expected ${extractedPath} after extracting ${archiveName}, but it's not there — check what tar actually produced.`);
+  }
+  return extractedPath;
+}
+
+/** Streams one chunk's NDJSON, embeds every article's citation-adjacent paragraphs, then deletes the raw extracted file. */
+async function embedChunkArticles(ndjsonPath) {
+  const rl = readline.createInterface({ input: fs.createReadStream(ndjsonPath), crlfDelay: Infinity });
+  const stats = { articles: 0, paragraphs: 0, alreadyCurrent: 0 };
+
+  for await (const line of rl) {
+    if (!line.trim()) continue;
+    let article;
+    try {
+      article = JSON.parse(line);
+    } catch {
+      continue; // skip malformed lines rather than aborting the whole chunk
+    }
+    const wikitext = article.article_body?.wikitext;
+    if (!wikitext) continue; // deleted/visibility-changed/empty articles omit article_body
+
+    const result = await upsertArticleEmbeddings({
+      title: article.name,
+      wikitext,
+      versionIdentifier: article.version?.identifier,
+    });
+    stats.articles++;
+    stats.paragraphs += result.paragraphCount;
+    if (result.skipped) stats.alreadyCurrent++;
+  }
+
+  fs.rmSync(ndjsonPath, { force: true }); // already embedded — don't keep the raw extracted copy around
+  return stats;
+}
+
+/** Runs one chunk through its whole lifecycle: download -> extract -> embed -> cleanup -> mark done. */
+async function processChunk(chunk, accessToken, tracker, totals) {
+  const donePath = path.join(destDir, `${chunk.chunkId}.done`);
+  if (fs.existsSync(donePath)) {
+    tracker.addBytes(chunk.contentLength); // already fully processed in a prior run
+    return;
+  }
+
+  const alreadyExtractedPath = path.join(destDir, `${chunk.chunkId}.ndjson`);
+  let ndjsonPath;
+  if (fs.existsSync(alreadyExtractedPath)) {
+    // Downloaded and extracted in a prior run, but not yet embedded when
+    // that run stopped — pick up from here instead of re-downloading.
+    tracker.addBytes(chunk.contentLength);
+    ndjsonPath = alreadyExtractedPath;
+  } else {
+    await downloadOne(chunk.url, chunk.filePath, accessToken, tracker, {
+      contentLength: chunk.contentLength,
+      etag: chunk.etag,
+      acceptsRanges: chunk.acceptsRanges,
+    });
+    ndjsonPath = await extractChunk(chunk);
+  }
+
+  const stats = await embedChunkArticles(ndjsonPath);
+  totals.chunksDone++;
+  totals.articles += stats.articles;
+  totals.paragraphs += stats.paragraphs;
+  totals.alreadyCurrent += stats.alreadyCurrent;
+
+  fs.writeFileSync(donePath, new Date().toISOString());
+}
+
+async function main() {
+  fs.mkdirSync(destDir, { recursive: true });
+  const accessToken = await getAccessToken();
+
   console.log(`Looking up chunks for ${identifier}...`);
   const info = await fetchJson(`${API_BASE}/v2/snapshots/${identifier}`, accessToken, 'POST');
   const chunkIds = info.chunks ?? [];
@@ -336,97 +425,26 @@ async function downloadAllChunks(accessToken) {
     CONCURRENCY
   );
   process.stdout.write('\n');
-  console.log(`Total: ${formatGB(totalBytes)} GB across ${chunks.length} chunks. Downloading with concurrency ${CONCURRENCY}...`);
+  console.log(
+    `Total: ${formatGB(totalBytes)} GB across ${chunks.length} chunks. Downloading, extracting, and embedding ` +
+      `${EMBED_CONCURRENCY} chunks at a time (never holding more than a few chunks' worth of raw data on disk)...`
+  );
 
   const tracker = createProgressTracker(totalBytes);
-  // Bytes already on disk get credited inside downloadOne itself, not here —
-  // it's the only place that knows whether an existing file is trustworthy
-  // (exact size match) or needs resetting (oversized/rotated ETag). Crediting
-  // it separately here caused every reset chunk to be counted twice: once
-  // for its stale on-disk size, again in full as it re-downloaded.
+  const totals = { chunksDone: 0, articles: 0, paragraphs: 0, alreadyCurrent: 0 };
 
-  await runWithConcurrency(
-    chunks,
-    (chunk) =>
-      downloadOne(chunk.url, chunk.filePath, accessToken, tracker, {
-        contentLength: chunk.contentLength,
-        etag: chunk.etag,
-        acceptsRanges: chunk.acceptsRanges,
-      }),
-    CONCURRENCY
-  );
+  await runWithConcurrency(chunks, (chunk) => processChunk(chunk, accessToken, tracker, totals), EMBED_CONCURRENCY);
   tracker.finish();
 
-  return chunks.map((c) => c.filePath);
-}
-
-/**
- * Extracts and combines one chunk at a time, deleting each chunk's archive
- * and extracted copy as soon as it's folded into the combined file —
- * instead of extracting all 436 chunks first and combining after, which
- * needs disk space for the compressed archives, all their (larger)
- * extracted copies, AND the combined file simultaneously. That's what ran
- * this out of space. This way, peak extra usage is one chunk's extracted
- * size at a time, not the whole corpus held three times over.
- */
-async function extractAndCombine(archivePaths) {
-  const combinedPath = path.join(destDir, `${identifier}.combined.ndjson`);
-  console.log(`Extracting and combining ${archivePaths.length} chunks into ${combinedPath}...`);
-  const writeStream = fs.createWriteStream(combinedPath, { flags: 'a' }); // append: safe to resume a prior partial combine
-
-  let done = 0;
-  for (const archivePath of archivePaths) {
-    const archiveName = path.basename(archivePath);
-    const chunkId = archiveName.replace(/\.tar\.gz$/, '');
-    const extractedPath = path.join(destDir, `${chunkId}.ndjson`);
-
-    if (!fs.existsSync(archivePath) && !fs.existsSync(extractedPath)) {
-      // Already fully processed and cleaned up in a prior run of this function.
-      done++;
-      continue;
-    }
-
-    if (fs.existsSync(archivePath)) {
-      await execFileAsync('tar', ['xzf', archiveName], { cwd: destDir });
-      fs.rmSync(archivePath, { force: true }); // free the compressed copy immediately, before touching the next chunk
-    }
-
-    if (!fs.existsSync(extractedPath)) {
-      throw new Error(`Expected ${extractedPath} after extracting ${archiveName}, but it's not there — check what tar actually produced.`);
-    }
-
-    await new Promise((resolve, reject) => {
-      const readStream = fs.createReadStream(extractedPath);
-      readStream.on('error', reject);
-      readStream.pipe(writeStream, { end: false });
-      readStream.on('end', resolve);
-    });
-    fs.rmSync(extractedPath, { force: true }); // already folded into the combined file — don't keep a second copy
-
-    done++;
-    if (done % 25 === 0 || done === archivePaths.length) {
-      process.stdout.write(`\r  ...${done}/${archivePaths.length} chunks extracted and combined`);
-    }
-  }
-  process.stdout.write('\n');
-
-  await new Promise((resolve, reject) => writeStream.end((error) => (error ? reject(error) : resolve())));
-  return combinedPath;
-}
-
-async function main() {
-  fs.mkdirSync(destDir, { recursive: true });
-  const accessToken = await getAccessToken();
-
-  const archivePaths = await downloadAllChunks(accessToken);
-  const combinedPath = await extractAndCombine(archivePaths);
-
-  console.log(`\nDone. Combined NDJSON: ${combinedPath}`);
-  console.log(`Next: node wiki_searcher/scripts/build-index-from-snapshot.js ${combinedPath}`);
+  console.log(
+    `\nDone. ${chunks.length} chunks total (${totals.chunksDone} newly processed this run): ` +
+      `${totals.articles} articles seen, ${totals.paragraphs} paragraphs embedded, ${totals.alreadyCurrent} already current.`
+  );
+  console.log('The vector index is up to date — no separate build step needed.');
 }
 
 main().catch((error) => {
   console.error('\nFatal error:', error.message);
-  console.error('Re-run this script to resume — completed/partial chunk files are left in place.');
+  console.error('Re-run this script to resume — completed chunks (marked .done) are skipped, others pick up where they left off.');
   process.exit(1);
 });
