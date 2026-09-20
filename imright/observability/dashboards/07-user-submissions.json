@@ -134,7 +134,7 @@
         "spec": {
           "id": 3,
           "title": "Submitted claims",
-          "description": "Newest first, claim text only. Click a row to expand the full trace (visitor_id, interaction_id, tags, per-step timings) — that detail is deliberately hidden by default, not shown inline.",
+          "description": "Newest first, claim text only. The trailing key=value junk from earlier versions of this panel (events=[...], interaction_id=..., tags=[], scope_name=...) was Grafana's Logs panel appending each line's unique labels/structured metadata after the formatted text — a display setting (\"Unique labels\", showLabels), not something LogQL could filter out. Turning that off is what actually fixes it; the underlying interaction_trace log line still carries the full record. Click a row to expand it (visitor_id, interaction_id, tags, per-step timings) — that detail is deliberately hidden by default, not shown inline.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -175,6 +175,8 @@
               },
               "options": {
                 "showTime": true,
+                "showLabels": false,
+                "showCommonLabels": false,
                 "wrapLogMessage": true,
                 "sortOrder": "Descending",
                 "enableLogDetails": true
