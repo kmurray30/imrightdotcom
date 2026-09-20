@@ -167,22 +167,39 @@ async function downloadOne(url, filePath, accessToken, tracker, metadata) {
   const { contentLength, etag, acceptsRanges } = metadata;
   const etagSidecarPath = `${filePath}.etag`;
 
+  // This is the ONE place that decides how many on-disk bytes for this
+  // chunk are trustworthy — and therefore the one place that's allowed to
+  // credit them to the tracker. A separate pre-pass in downloadAllChunks
+  // used to credit a chunk's raw on-disk size before this function got a
+  // chance to reset it (oversized/rotated-ETag cases), so every reset chunk
+  // got counted once there AND again in full as it re-downloaded here.
+  // Deciding and crediting in the same place makes that impossible.
   let startByte = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
-  if (startByte > 0) {
+  if (startByte === contentLength) {
+    // Trust an exact size match immediately, with no dependency on the ETag
+    // sidecar. A completed chunk has its sidecar deleted on success (see the
+    // cleanup at the end of this function) — checking the ETag first here,
+    // like an earlier version of this did, meant a completed chunk with no
+    // sidecar always looked "rotated" and got needlessly deleted and
+    // re-downloaded from scratch on every subsequent run.
+    tracker.addBytes(startByte);
+    return;
+  } else if (startByte > contentLength) {
+    // Oversized — e.g. corrupted by the double-counting bug this version
+    // fixes. Reset and re-download; can't be trusted at any size, exact
+    // match or not.
+    fs.rmSync(filePath, { force: true });
+    startByte = 0;
+  } else if (startByte > 0) {
+    // Genuinely partial — only safe to resume if the snapshot hasn't
+    // rotated underneath us since whatever wrote these bytes.
     const previousEtag = fs.existsSync(etagSidecarPath) ? fs.readFileSync(etagSidecarPath, 'utf8').trim() : null;
     if (previousEtag !== etag) {
-      fs.rmSync(filePath, { force: true }); // snapshot rotated since the last partial download — start this chunk over
-      startByte = 0;
-    } else if (startByte === contentLength) {
-      return; // already complete
-    } else if (startByte > contentLength) {
-      // Oversized — e.g. corrupted by the double-counting bug this version
-      // fixes. "At least as big as expected" isn't good enough to call it
-      // complete; only an exact match is trustworthy. Reset and re-download.
       fs.rmSync(filePath, { force: true });
       startByte = 0;
     }
   }
+  tracker.addBytes(startByte); // whatever we're keeping/resuming from, credited exactly once, right here
   fs.writeFileSync(etagSidecarPath, etag ?? '');
 
   const headers = { Authorization: `Bearer ${accessToken}` };
@@ -322,12 +339,11 @@ async function downloadAllChunks(accessToken) {
   console.log(`Total: ${formatGB(totalBytes)} GB across ${chunks.length} chunks. Downloading with concurrency ${CONCURRENCY}...`);
 
   const tracker = createProgressTracker(totalBytes);
-  // Credit bytes already on disk from a prior interrupted run, so the bar
-  // and ETA start from the real position instead of 0.
-  for (const chunk of chunks) {
-    const existingSize = fs.existsSync(chunk.filePath) ? fs.statSync(chunk.filePath).size : 0;
-    tracker.addBytes(Math.min(existingSize, chunk.contentLength));
-  }
+  // Bytes already on disk get credited inside downloadOne itself, not here —
+  // it's the only place that knows whether an existing file is trustworthy
+  // (exact size match) or needs resetting (oversized/rotated ETag). Crediting
+  // it separately here caused every reset chunk to be counted twice: once
+  // for its stale on-disk size, again in full as it re-downloaded.
 
   await runWithConcurrency(
     chunks,
