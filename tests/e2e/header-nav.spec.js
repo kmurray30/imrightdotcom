@@ -52,6 +52,23 @@ test.describe('Header / nav', () => {
     await expect(page.getByRole('link', { name: 'Bookmarks' })).toHaveCount(0);
   });
 
+  test('A5/A6: a guest sees a hamburger icon; a logged-in user sees a circular avatar with their initial', async ({
+    page,
+  }) => {
+    // Real report: "'menu' is ugly" — a plain hamburger for guests (still
+    // exists), but a logged-in user now gets a small circular profile icon
+    // instead of the same generic hamburger/text.
+    await page.goto('/');
+    await expect(page.locator('.nav-toggle-icon')).toBeVisible();
+    await expect(page.locator('.nav-toggle-avatar')).toHaveCount(0);
+
+    const { displayName } = await signupViaApi(page);
+    await page.reload();
+    await expect(page.locator('.nav-toggle-avatar')).toBeVisible();
+    await expect(page.locator('.nav-toggle-avatar')).toHaveText(displayName.charAt(0).toUpperCase());
+    await expect(page.locator('.nav-toggle-icon')).toHaveCount(0);
+  });
+
   test('menu closes on an outside click, and after following a link', async ({ page }) => {
     await page.goto('/');
     await openMenu(page);

@@ -1,20 +1,22 @@
 import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { ArticleBody } from '../components/article/ArticleBody.jsx';
 import { VisibilityToggle } from '../components/article/VisibilityToggle.jsx';
 import { ShareButton } from '../components/article/ShareButton.jsx';
+import { DeleteArticleModal } from '../components/article/DeleteArticleModal.jsx';
 import { LikeButton } from '../components/social/LikeButton.jsx';
 import { BookmarkButton } from '../components/social/BookmarkButton.jsx';
-import { FollowButton } from '../components/social/FollowButton.jsx';
 import { CommentSection } from '../components/social/CommentSection.jsx';
 
 export function ArticlePage() {
   const { id } = useParams();
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [article, setArticle] = useState(null);
   const [notFound, setNotFound] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -44,7 +46,9 @@ export function ArticlePage() {
         <div className="article-meta">
           <p className="article-byline">
             by{' '}
-            {article.ownerUsername ? (
+            {isOwner ? (
+              'you'
+            ) : article.ownerUsername ? (
               <Link to={`/u/${article.ownerUsername}`}>{article.ownerDisplayName}</Link>
             ) : (
               article.ownerDisplayName || 'Anonymous'
@@ -64,14 +68,25 @@ export function ArticlePage() {
               onChange={(isPublic) => setArticle((a) => ({ ...a, isPublic }))}
             />
           )}
-          <LikeButton articleId={article.id} initialCount={article.likeCount} isOwnArticle={isOwner} />
+          <LikeButton articleId={article.id} initialLiked={article.likedByViewer} initialCount={article.likeCount} />
           <BookmarkButton articleId={article.id} />
-          <FollowButton userId={article.ownerUserId} />
           <ShareButton />
         </div>
         <ArticleBody articleId={article.id} articleData={article.articleData} />
+        {isOwner && (
+          <button type="button" className="delete-article-trigger" onClick={() => setShowDeleteModal(true)}>
+            Delete this article
+          </button>
+        )}
       </div>
       <CommentSection articleId={article.id} />
+      {showDeleteModal && (
+        <DeleteArticleModal
+          article={article}
+          onClose={() => setShowDeleteModal(false)}
+          onDeleted={() => navigate('/history')}
+        />
+      )}
     </div>
   );
 }

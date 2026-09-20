@@ -99,26 +99,47 @@ test.describe('Article page', () => {
     expect(toggleStyle).toEqual(shareStyle);
   });
 
-  test('D27 (guest-owner edge case): a guest-owned article shows a sign-up prompt instead of the toggle', async ({
+  test('D27 (guest-owner edge case): a guest owner sees the same toggle, gated behind a sign-up prompt on click', async ({
     page,
     context,
   }) => {
+    // Reversed from an earlier design that hid the toggle entirely for a
+    // guest owner with inline "Sign up to..." text next to it — now every
+    // guest-gated control renders normally and prompts via the shared modal
+    // only when actually clicked (see GuestGateContext).
     const owner = await seedGuestUser();
     await setGuestCookie(context, owner.guestCookieId);
     const article = await seedArticle({ ownerUserId: owner.id });
 
     await page.goto(article.url);
-    await expect(page.locator('.visibility-toggle')).toHaveCount(0);
-    await expect(page.getByText('Sign up to make this article public')).toBeVisible();
+    const toggle = page.locator('.visibility-toggle');
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toContainText('Private');
+    // A plain .click() here, not .check() — the guest gate intercepts before
+    // any state change, so the checkbox never actually becomes checked.
+    await toggle.locator('input').click();
+    await expect(page.locator('.modal')).toBeVisible();
+    await expect(page.locator('.modal')).toContainText('Sign up to make this article public.');
+    // Clicking never actually toggled it — still Private once the modal's dismissed.
+    await page.locator('.modal button', { hasText: 'Not now' }).click();
+    await expect(toggle).toContainText('Private');
   });
 
-  test('D29: Like is hidden on your own article, prompts a guest, and toggles for another logged-in user', async ({
+  test('D29: liking is allowed on your own article and looks identical to liking someone else\'s', async ({
     page,
   }) => {
+    // Reversed requirement: liking your own article used to be blocked
+    // (LikeButton hidden entirely on your own article); now it's allowed and
+    // rendered the exact same way regardless of ownership.
     const { user } = await signupViaApi(page);
     const ownArticle = await seedArticle({ ownerUserId: user.id });
     await page.goto(ownArticle.url);
-    await expect(page.locator('.like-button')).toHaveCount(0);
+    const ownLikeButton = page.locator('.like-button');
+    await expect(ownLikeButton).toContainText('♡ 0');
+    await ownLikeButton.click();
+    await expect(ownLikeButton).toContainText('♥ 1');
+    await ownLikeButton.click();
+    await expect(ownLikeButton).toContainText('♡ 0');
 
     const otherOwner = await seedGuestUser();
     const othersArticle = await seedArticle({ ownerUserId: otherOwner.id });
@@ -131,12 +152,37 @@ test.describe('Article page', () => {
     await expect(likeButton).toContainText('♡ 0');
   });
 
-  test('D29 (guest): a guest sees a sign-up prompt instead of a Like button', async ({ page }) => {
+  test('D29: a like persists per-user across a reload (does not reset and allow re-liking)', async ({ page }) => {
+    // Real report: liking, leaving, and coming back let the same user like
+    // the same article again — the like state was never re-derived from the
+    // database on load. GET /api/articles/:id now returns likedByViewer.
+    const { user } = await signupViaApi(page);
+    const otherOwner = await seedGuestUser();
+    const article = await seedArticle({ ownerUserId: otherOwner.id });
+    void user;
+
+    await page.goto(article.url);
+    const likeButton = page.locator('.like-button');
+    await likeButton.click();
+    await expect(likeButton).toContainText('♥ 1');
+
+    await page.reload();
+    await expect(page.locator('.like-button')).toContainText('♥ 1');
+  });
+
+  test('D29 (guest): a guest sees the real Like button, gated behind a sign-up prompt on click', async ({ page }) => {
     const owner = await seedGuestUser();
     const article = await seedArticle({ ownerUserId: owner.id });
     await page.goto(article.url);
-    await expect(page.locator('.like-button')).toHaveCount(0);
-    await expect(page.getByText('Sign up to like this')).toBeVisible();
+    const likeButton = page.locator('.like-button');
+    await expect(likeButton).toBeVisible();
+    await expect(likeButton).toContainText('♡ 0');
+    await likeButton.click();
+    await expect(page.locator('.modal')).toBeVisible();
+    await expect(page.locator('.modal')).toContainText('Sign up to like this.');
+    // Dismissing the prompt never actually liked it.
+    await page.locator('.modal button', { hasText: 'Not now' }).click();
+    await expect(likeButton).toContainText('♡ 0');
   });
 
   test('D30+D31: bookmark quick-add, then the folder widget on a second click, including a new folder and a duplicate-name error', async ({
@@ -185,30 +231,22 @@ test.describe('Article page', () => {
     await expect(modal).toHaveCount(0);
   });
 
-  test('D30 (guest): a guest sees a sign-up prompt instead of a Bookmark button', async ({ page }) => {
+  test('D30 (guest): a guest sees the real Bookmark button, gated behind a sign-up prompt on click', async ({ page }) => {
     const owner = await seedGuestUser();
     const article = await seedArticle({ ownerUserId: owner.id });
     await page.goto(article.url);
-    await expect(page.locator('.bookmark-button')).toHaveCount(0);
-    await expect(page.getByText('Sign up to bookmark this')).toBeVisible();
+    const bookmarkButton = page.locator('.bookmark-button');
+    await expect(bookmarkButton).toBeVisible();
+    await bookmarkButton.click();
+    await expect(page.locator('.modal')).toBeVisible();
+    await expect(page.locator('.modal')).toContainText('Sign up to bookmark this.');
+    await page.locator('.modal button', { hasText: 'Not now' }).click();
+    await expect(bookmarkButton).not.toHaveClass(/is-bookmarked/);
   });
 
-  test('D32: Follow is hidden on your own article and toggles for another logged-in user', async ({ page }) => {
-    const { user } = await signupViaApi(page);
-    const ownArticle = await seedArticle({ ownerUserId: user.id });
-    await page.goto(ownArticle.url);
-    await expect(page.locator('.follow-button')).toHaveCount(0);
-
-    const otherOwner = await seedGuestUser();
-    const othersArticle = await seedArticle({ ownerUserId: otherOwner.id });
-    await page.goto(othersArticle.url);
-    const followButton = page.locator('.follow-button');
-    await expect(followButton).toHaveText('Follow');
-    await followButton.click();
-    await expect(followButton).toHaveText('Following');
-    await followButton.click();
-    await expect(followButton).toHaveText('Follow');
-  });
+  // D32 (Follow) moved off the article page entirely per a real request
+  // ("move the follow button to only on the account page") — see
+  // history-bookmarks-profile.spec.js's profile-page Follow test.
 
   test('D33: Share copies the current link and confirms it', async ({ page, context }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
@@ -253,15 +291,23 @@ test.describe('Article page', () => {
     await expect(firstSection.locator('.bunky-callout-toggle')).toBeVisible({ timeout: 6000 });
   });
 
-  test('D38+D41: guest sees a sign-up prompt instead of the comment composer, and an empty state with no comments', async ({
+  test('D38+D41: guest sees the real comment composer, gated behind a sign-up prompt on submit, and an empty state with no comments', async ({
     page,
   }) => {
     const owner = await seedGuestUser();
     const article = await seedArticle({ ownerUserId: owner.id });
     await page.goto(article.url);
-    await expect(page.locator('.comment-composer')).toHaveCount(0);
-    await expect(page.getByText('Sign up to comment')).toBeVisible();
+    const composer = page.locator('.comment-composer');
+    await expect(composer).toBeVisible();
     await expect(page.getByText('No comments yet.')).toBeVisible();
+
+    await composer.locator('textarea').fill('a guest comment attempt');
+    await composer.getByRole('button', { name: 'Post' }).click();
+    await expect(page.locator('.modal')).toBeVisible();
+    await expect(page.locator('.modal')).toContainText('Sign up to comment.');
+    await page.locator('.modal button', { hasText: 'Not now' }).click();
+    // Dismissing the prompt never actually posted it.
+    await expect(page.locator('.comment-item')).toHaveCount(0);
   });
 
   test('D38 style: the disabled Post button stays legible before anything is typed', async ({ page }) => {
@@ -298,6 +344,24 @@ test.describe('Article page', () => {
     await expect(commentLike).toContainText('♡ 0');
     await commentLike.click();
     await expect(commentLike).toContainText('♥ 1');
+  });
+
+  test('D40: a comment like persists per-user across a reload', async ({ page }) => {
+    // Same fix as the article-level per-user like bug (see D29): GET
+    // .../comments now returns likedByViewer per comment.
+    await signupViaApi(page);
+    const owner = await seedGuestUser();
+    const article = await seedArticle({ ownerUserId: owner.id });
+    await page.goto(article.url);
+
+    await page.locator('.comment-composer textarea').fill('reload me');
+    await page.locator('.comment-composer').getByRole('button', { name: 'Post' }).click();
+    const commentLike = page.locator('.comment-item').first().locator('.comment-like');
+    await commentLike.click();
+    await expect(commentLike).toContainText('♥ 1');
+
+    await page.reload();
+    await expect(page.locator('.comment-item').first().locator('.comment-like')).toContainText('♥ 1');
   });
 
   test('D39 mobile: Enter submits a comment without needing the Post button visible', async ({ page }) => {
@@ -344,9 +408,118 @@ test.describe('Article page', () => {
   test('D42: the byline links to the owner\'s profile when they have an account', async ({ page }) => {
     const { user, username, displayName } = await signupViaApi(page);
     const article = await seedArticle({ ownerUserId: user.id });
+    // Viewed as someone other than the owner — a self-view renders "by you"
+    // instead (see the next test), so log out first to exercise the link.
+    await page.request.post('/api/account/logout');
     await page.goto(article.url);
 
     const bylineLink = page.locator('.article-byline a', { hasText: displayName });
     await expect(bylineLink).toHaveAttribute('href', `/u/${username}`);
+  });
+
+  test('D42: your own article shows "by you" instead of your own name/link', async ({ page }) => {
+    // Real report: "by Anonymous" on a guest-generated article read as bad
+    // design. Same fix applies to a real account viewing their own article —
+    // in both cases the owner *is* the viewer, so "by you" reads better than
+    // either "Anonymous" or a self-link.
+    const { user } = await signupViaApi(page);
+    const article = await seedArticle({ ownerUserId: user.id });
+    await page.goto(article.url);
+
+    await expect(page.locator('.article-byline')).toHaveText('by you');
+    await expect(page.locator('.article-byline a')).toHaveCount(0);
+  });
+
+  test('D42 (guest owner): a guest\'s own article also shows "by you", not "by Anonymous"', async ({
+    page,
+  }) => {
+    await page.request.post('/api/run', { data: { claim: 'guest byline check' } });
+    const me = await (await page.request.get('/api/account/me')).json();
+    const article = await seedArticle({ ownerUserId: me.user.id });
+    await page.goto(article.url);
+
+    await expect(page.locator('.article-byline')).toHaveText('by you');
+  });
+});
+
+test.describe('Delete article', () => {
+  test('the delete trigger is only shown to the owner, styled as a buried/muted link, not a prominent button', async ({
+    page,
+  }) => {
+    const owner = await seedGuestUser();
+    const article = await seedArticle({ ownerUserId: owner.id });
+    await page.goto(article.url);
+    await expect(page.locator('.delete-article-trigger')).toHaveCount(0);
+
+    const { user } = await signupViaApi(page);
+    const ownArticle = await seedArticle({ ownerUserId: user.id });
+    await page.goto(ownArticle.url);
+    const trigger = page.locator('.delete-article-trigger');
+    await expect(trigger).toBeVisible();
+    const style = await trigger.evaluate((el) => getComputedStyle(el));
+    expect(style.fontSize).toBe('12.8px'); // 0.8rem — smaller than body text
+  });
+
+  test('deleting a private article (no double-check needed) removes it from public access and history', async ({
+    page,
+  }) => {
+    const { user } = await signupViaApi(page);
+    const article = await seedArticle({ ownerUserId: user.id, isPublic: false });
+    await page.goto(article.url);
+
+    await page.locator('.delete-article-trigger').click();
+    const modal = page.locator('.modal');
+    await expect(modal).toContainText('Delete this article?');
+    // No email-confirm friction for a private article with no interaction.
+    await expect(page.getByLabel(/email/i)).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Delete permanently' }).click();
+    await expect(page).toHaveURL('/history');
+
+    const check = await page.request.get(`/api/articles/${article.id}`);
+    expect(check.status()).toBe(404);
+  });
+
+  test('deleting a public article with interaction requires typing the account email first', async ({ page }) => {
+    const { user, email } = await signupViaApi(page);
+    const article = await seedArticle({ ownerUserId: user.id, isPublic: true });
+    const otherLiker = await seedGuestUser();
+    void otherLiker;
+    // Give it real interaction so the stronger confirmation kicks in.
+    await page.request.post(`/api/articles/${article.id}/like`);
+
+    await page.goto(article.url);
+    await page.locator('.delete-article-trigger').click();
+    const modal = page.locator('.modal');
+    await expect(modal).toContainText('This article is public and has activity on it.');
+
+    const deleteButton = page.getByRole('button', { name: 'Delete permanently' });
+    await expect(deleteButton).toBeDisabled();
+
+    await page.getByLabel(/email/i).fill('not-my-email@example.test');
+    await expect(deleteButton).toBeDisabled();
+
+    await page.getByLabel(/email/i).fill(email);
+    await expect(deleteButton).toBeEnabled();
+    await deleteButton.click();
+    await expect(page).toHaveURL('/history');
+
+    const check = await page.request.get(`/api/articles/${article.id}`);
+    expect(check.status()).toBe(404);
+  });
+
+  test('a guest can delete their own guest-owned article from history', async ({ page }) => {
+    await page.request.post('/api/run', { data: { claim: 'guest delete check' } });
+    const me = await (await page.request.get('/api/account/me')).json();
+    const article = await seedArticle({ ownerUserId: me.user.id });
+
+    await page.goto('/history');
+    await expect(page.locator('.history-list li')).toHaveCount(1);
+    await page.locator('.delete-article-trigger').click();
+    await page.getByRole('button', { name: 'Delete permanently' }).click();
+    await expect(page.locator('.history-list li')).toHaveCount(0);
+
+    const check = await page.request.get(`/api/articles/${article.id}`);
+    expect(check.status()).toBe(404);
   });
 });

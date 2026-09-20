@@ -34,7 +34,7 @@ socialRouter.get('/me/articles', async (req, res, next) => {
 
 socialRouter.get('/articles/:id', async (req, res, next) => {
   try {
-    const article = await Articles.getArticleById(req.params.id);
+    const article = await Articles.getArticleById(req.params.id, req.user?.id);
     if (!article) throw new HttpError(404, 'article_not_found');
     // No visibility check here on purpose: any article, public or private, is
     // reachable via its direct link (requirement 4). Visibility only gates
@@ -51,6 +51,20 @@ socialRouter.patch('/articles/:id/visibility', requireAccount, async (req, res, 
     if (typeof isPublic !== 'boolean') throw new HttpError(400, 'invalid_body');
     const article = await Articles.setArticleVisibility({ articleId: req.params.id, userId: req.user.id, isPublic });
     res.json({ article });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Not gated by requireAccount on purpose: a guest can delete their own
+// guest-owned articles too (this only ever touches your own content).
+// Articles.deleteArticle's ownership check 403s anyone else, including a
+// visitor with no identity at all (req.user is then undefined).
+socialRouter.delete('/articles/:id', async (req, res, next) => {
+  try {
+    if (!req.user) throw new HttpError(403, 'account_required');
+    await Articles.deleteArticle({ articleId: req.params.id, userId: req.user.id });
+    res.json({ ok: true });
   } catch (error) {
     next(error);
   }
@@ -185,7 +199,12 @@ socialRouter.get('/users/:userId/following', async (req, res, next) => {
 socialRouter.get('/articles/:id/comments', async (req, res, next) => {
   try {
     const seed = typeof req.query.seed === 'string' ? req.query.seed : '';
-    const comments = await Articles.listComments({ articleId: req.params.id, seed, cursor: parseCursor(req) });
+    const comments = await Articles.listComments({
+      articleId: req.params.id,
+      seed,
+      cursor: parseCursor(req),
+      viewerId: req.user?.id,
+    });
     res.json({ comments });
   } catch (error) {
     next(error);

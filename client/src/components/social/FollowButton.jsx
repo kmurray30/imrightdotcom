@@ -1,17 +1,21 @@
 import { useState } from 'react';
 import { api } from '../../api/client.js';
 import { useAuth } from '../../context/AuthContext.jsx';
-import { GuestPrompt } from '../auth/GuestPrompt.jsx';
+import { useGuestGate } from '../../context/GuestGateContext.jsx';
 
 export function FollowButton({ userId, initialFollowing = false }) {
   const { isGuest, user } = useAuth();
+  const { promptSignup } = useGuestGate();
   const [following, setFollowing] = useState(initialFollowing);
   const [busy, setBusy] = useState(false);
 
-  if (isGuest) return <GuestPrompt message="Sign up to follow" />;
   if (user?.id === userId) return null;
 
   async function toggle() {
+    if (isGuest) {
+      promptSignup('follow people');
+      return;
+    }
     if (busy) return;
     setBusy(true);
     const next = !following;
