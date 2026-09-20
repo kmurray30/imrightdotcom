@@ -58,7 +58,7 @@ handling and overlapped/ran off-screen at phone width).
 | 27 | Visibility toggle: owner-only, including a guest owner (rendered, gated behind sign-up on click) | article.spec.js D27+D28, D27 (guest-owner) |
 | 70 | New articles default to public (Private is an explicit opt-out, not the starting state) | article.spec.js "a freshly created article is public by default..." |
 | 28 | Toggling visibility persists (survives reload) | article.spec.js D27+D28 |
-| 29 | Like: allowed on your own article too (identical display); real button shown to a guest, gated on click; persists per-user across reload | article.spec.js D29 (×4) |
+| 29 | Like: allowed on your own article too (identical display); allowed for a guest with no account (no sign-up gate, real engagement counted); persists per-user (or per-guest) across reload; a duplicate like is a no-op | article.spec.js D29 (×4) |
 | 30 | Bookmark: quick-add on first click; real button shown to a guest, gated on click | article.spec.js D30+D31, D30 (guest) |
 | 31 | Bookmark folder widget on second click: toggle/create folders, duplicate-name error | article.spec.js D30+D31 |
 | 32 | Follow: moved off the article page entirely (see Profile page, H) | history-bookmarks-profile.spec.js "D32 (moved here)" |
@@ -69,11 +69,11 @@ handling and overlapped/ran off-screen at phone width).
 | 37 | Counterarguments arriving after load are picked up by polling | article.spec.js D37 |
 | 38 | Comments: composer always shown, even to a guest — gated behind a sign-up prompt on submit | article.spec.js D38+D41 |
 | 39 | Posting a comment prepends it and clears the composer | article.spec.js D39+D40 |
-| 40 | Comment like toggles for a logged-in user and persists per-user across reload | article.spec.js D39+D40, D40 |
+| 40 | Comment like toggles for a logged-in user or a guest (no sign-up gate), persists per-user/per-guest across reload, and is idempotent against duplicates | article.spec.js D39+D40, D40, D40 (guest) |
 | 41 | Empty state when there are no comments | article.spec.js D38+D41 |
 | 42 | Article page shows the owner byline ("by you" for the viewer's own article, a profile link otherwise) and like/comment/bookmark stats | article.spec.js D42 (×4) |
 | 62 | On mobile, Enter submits a comment (Shift+Enter for a newline) without needing the Post button visible | article.spec.js D39 mobile |
-| 66 | Every guest-gated control (Like/Bookmark/Follow/Comment/Visibility) renders normally and prompts via one shared modal only on click, instead of hiding behind inline "Sign up to..." text | article.spec.js D27 (guest-owner), D29 (guest), D30 (guest), D38+D41 |
+| 66 | Every remaining guest-gated control (Bookmark/Follow/Comment/Visibility — Like is no longer gated, see #29/#40) renders normally and prompts via one shared modal only on click, instead of hiding behind inline "Sign up to..." text | article.spec.js D27 (guest-owner), D30 (guest), D38+D41 |
 | 67 | Delete an article: buried/muted trigger, owner-only, a plain confirm for a private/no-interaction article, a stronger email-match confirm for a public article with likes/comments/bookmarks, guests can delete their own | article.spec.js "Delete article" describe block |
 
 ## Visual legibility (found from real user reports, not covered by the areas above)

@@ -7,6 +7,7 @@
 
 import { Router } from 'express';
 import { requireAccount } from '../require-account.js';
+import { ensureOwner } from '../auth-accounts.js';
 import { HttpError } from '../http-error.js';
 import * as Articles from '../articles.js';
 
@@ -72,17 +73,25 @@ socialRouter.delete('/articles/:id', async (req, res, next) => {
 
 // ---- Article likes ----
 
-socialRouter.post('/articles/:id/like', requireAccount, async (req, res, next) => {
+// Guest-ok, on purpose: liking is real engagement worth counting even from
+// someone who never made an account, and a guest's `users` row (see
+// ensureOwner) already gives article_likes a stable per-browser identity to
+// key its unique constraint on — same idempotency guarantee an account gets,
+// just scoped to this browser instead of a login. This does mean a guest can
+// clear cookies to re-like, same tradeoff as any anonymous-engagement metric.
+socialRouter.post('/articles/:id/like', async (req, res, next) => {
   try {
-    res.json(await Articles.likeArticle({ userId: req.user.id, articleId: req.params.id }));
+    const owner = await ensureOwner(req, res);
+    res.json(await Articles.likeArticle({ userId: owner.id, articleId: req.params.id }));
   } catch (error) {
     next(error);
   }
 });
 
-socialRouter.delete('/articles/:id/like', requireAccount, async (req, res, next) => {
+socialRouter.delete('/articles/:id/like', async (req, res, next) => {
   try {
-    res.json(await Articles.unlikeArticle({ userId: req.user.id, articleId: req.params.id }));
+    const owner = await ensureOwner(req, res);
+    res.json(await Articles.unlikeArticle({ userId: owner.id, articleId: req.params.id }));
   } catch (error) {
     next(error);
   }
@@ -220,17 +229,20 @@ socialRouter.post('/articles/:id/comments', requireAccount, async (req, res, nex
   }
 });
 
-socialRouter.post('/comments/:id/like', requireAccount, async (req, res, next) => {
+// Guest-ok too — same reasoning as article likes above.
+socialRouter.post('/comments/:id/like', async (req, res, next) => {
   try {
-    res.json(await Articles.likeComment({ userId: req.user.id, commentId: req.params.id }));
+    const owner = await ensureOwner(req, res);
+    res.json(await Articles.likeComment({ userId: owner.id, commentId: req.params.id }));
   } catch (error) {
     next(error);
   }
 });
 
-socialRouter.delete('/comments/:id/like', requireAccount, async (req, res, next) => {
+socialRouter.delete('/comments/:id/like', async (req, res, next) => {
   try {
-    res.json(await Articles.unlikeComment({ userId: req.user.id, commentId: req.params.id }));
+    const owner = await ensureOwner(req, res);
+    res.json(await Articles.unlikeComment({ userId: owner.id, commentId: req.params.id }));
   } catch (error) {
     next(error);
   }
