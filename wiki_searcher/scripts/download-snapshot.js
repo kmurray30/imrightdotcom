@@ -173,8 +173,14 @@ async function downloadOne(url, filePath, accessToken, tracker, metadata) {
     if (previousEtag !== etag) {
       fs.rmSync(filePath, { force: true }); // snapshot rotated since the last partial download — start this chunk over
       startByte = 0;
-    } else if (startByte >= contentLength) {
+    } else if (startByte === contentLength) {
       return; // already complete
+    } else if (startByte > contentLength) {
+      // Oversized — e.g. corrupted by the double-counting bug this version
+      // fixes. "At least as big as expected" isn't good enough to call it
+      // complete; only an exact match is trustworthy. Reset and re-download.
+      fs.rmSync(filePath, { force: true });
+      startByte = 0;
     }
   }
   fs.writeFileSync(etagSidecarPath, etag ?? '');
