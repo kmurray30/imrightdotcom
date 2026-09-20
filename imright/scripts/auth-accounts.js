@@ -260,6 +260,19 @@ export async function login(req, res, { username, password }) {
   }
 
   await db.update(schema.users).set({ failedLoginAttempts: 0, lockedUntil: null }).where(eq(schema.users.id, account.id));
+
+  // Logging into an *existing* account from a guest session is a separate
+  // case from signup's guest-claim UPDATE (same row, same id, nothing to
+  // transfer): here the guest and the account are two different rows, so
+  // anything the guest generated on this browser would otherwise be
+  // orphaned under an identity nobody can log into again. Auto-transfers
+  // rather than asking, since there's no real downside to the account
+  // gaining articles that were, a moment ago, provably created from this
+  // same browser session.
+  if (req.user && req.user.isGuest && req.user.id !== account.id) {
+    await db.update(schema.articles).set({ ownerUserId: account.id }).where(eq(schema.articles.ownerUserId, req.user.id));
+  }
+
   await createSession(db, account.id, req, res);
   req.user = toPublicUser(account);
   return req.user;

@@ -1,21 +1,22 @@
 import { useState } from 'react';
 import { api } from '../../api/client.js';
 import { useAuth } from '../../context/AuthContext.jsx';
-import { GuestPrompt } from '../auth/GuestPrompt.jsx';
+import { useGuestGate } from '../../context/GuestGateContext.jsx';
 
-/** Requirement: can't like your own article (but can bookmark it — see
- * BookmarkButton). isOwnArticle hides the control entirely rather than
- * showing it disabled, since there's nothing useful to explain there. */
-export function LikeButton({ articleId, initialLiked = false, initialCount = 0, isOwnArticle }) {
+/** Liking your own article is allowed (an earlier requirement blocked it;
+ * reversed — display is identical whether you're the owner or not). */
+export function LikeButton({ articleId, initialLiked = false, initialCount = 0 }) {
   const { isGuest } = useAuth();
+  const { promptSignup } = useGuestGate();
   const [liked, setLiked] = useState(initialLiked);
   const [count, setCount] = useState(initialCount);
   const [busy, setBusy] = useState(false);
 
-  if (isOwnArticle) return null;
-  if (isGuest) return <GuestPrompt message="Sign up to like this" />;
-
   async function toggle() {
+    if (isGuest) {
+      promptSignup('like this');
+      return;
+    }
     if (busy) return;
     setBusy(true);
     const next = !liked;

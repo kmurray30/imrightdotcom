@@ -45,6 +45,26 @@ export async function seedGuestUser({ displayName = 'Fixture Owner' } = {}) {
   return row;
 }
 
+/** Inserts a real (non-guest, has-a-username) `users` row directly — used
+ * when a test needs a second, independently-followable/linkable identity
+ * without going through the browser's own session (e.g. a profile page to
+ * visit and follow while logged in as someone else). */
+export async function seedRealUser({ displayName = 'Fixture Person', username } = {}) {
+  const db = getDb();
+  const finalUsername = username ?? uniqueSlug('fixture-user').replace(/-/g, '_');
+  const [row] = await db
+    .insert(schema.users)
+    .values({
+      isGuest: false,
+      username: finalUsername,
+      email: `${finalUsername}@example.test`,
+      passwordHash: 'not-a-real-hash',
+      displayName,
+    })
+    .returning();
+  return row;
+}
+
 /** Builds an articleData payload matching tabloid_generator/index.js's
  * buildArticleData() shape exactly: headline/intro/sections/conclusion,
  * numbered citations, a `[anchor](N)` inline marker per the plan's citation

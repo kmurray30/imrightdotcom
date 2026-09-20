@@ -1,16 +1,21 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../../api/client.js';
 import { useAuth } from '../../context/AuthContext.jsx';
-import { GuestPrompt } from '../auth/GuestPrompt.jsx';
+import { useGuestGate } from '../../context/GuestGateContext.jsx';
 
 function CommentItem({ comment }) {
   const { isGuest } = useAuth();
-  const [liked, setLiked] = useState(false);
+  const { promptSignup } = useGuestGate();
+  const [liked, setLiked] = useState(comment.likedByViewer ?? false);
   const [count, setCount] = useState(comment.likeCount);
   const [busy, setBusy] = useState(false);
 
   async function toggleLike() {
-    if (isGuest || busy) return;
+    if (isGuest) {
+      promptSignup('like comments');
+      return;
+    }
+    if (busy) return;
     setBusy(true);
     const next = !liked;
     setLiked(next);
@@ -33,7 +38,7 @@ function CommentItem({ comment }) {
     <li className="comment-item">
       <p className="comment-author">{comment.displayName || comment.username || 'Anonymous'}</p>
       <p className="comment-body">{comment.body}</p>
-      <button type="button" className={`comment-like ${liked ? 'is-liked' : ''}`} onClick={toggleLike} disabled={isGuest || busy}>
+      <button type="button" className={`comment-like ${liked ? 'is-liked' : ''}`} onClick={toggleLike} disabled={busy}>
         {liked ? '♥' : '♡'} {count}
       </button>
     </li>
@@ -42,6 +47,7 @@ function CommentItem({ comment }) {
 
 export function CommentSection({ articleId }) {
   const { isGuest } = useAuth();
+  const { promptSignup } = useGuestGate();
   // One seed per time this section mounts (article page load) — see the
   // plan's Comment Ranking section: reused across pagination of this view,
   // regenerated on a fresh page load, so ordering is stable while reading.
@@ -59,6 +65,10 @@ export function CommentSection({ articleId }) {
 
   async function handleSubmit(event) {
     event.preventDefault();
+    if (isGuest) {
+      promptSignup('comment');
+      return;
+    }
     const trimmed = body.trim();
     if (!trimmed) return;
     setSubmitting(true);
@@ -88,23 +98,19 @@ export function CommentSection({ articleId }) {
   return (
     <section className="comment-section">
       <h2>Comments</h2>
-      {isGuest ? (
-        <GuestPrompt message="Sign up to comment" />
-      ) : (
-        <form onSubmit={handleSubmit} className="comment-composer">
-          <textarea
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            onKeyDown={handleKeyDown}
-            maxLength={2000}
-            placeholder="Add a comment..."
-            enterKeyHint="send"
-          />
-          <button type="submit" className="button-primary" disabled={submitting || !body.trim()}>
-            Post
-          </button>
-        </form>
-      )}
+      <form onSubmit={handleSubmit} className="comment-composer">
+        <textarea
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          onKeyDown={handleKeyDown}
+          maxLength={2000}
+          placeholder="Add a comment..."
+          enterKeyHint="send"
+        />
+        <button type="submit" className="button-primary" disabled={submitting || (!isGuest && !body.trim())}>
+          Post
+        </button>
+      </form>
       <ul className="comment-list">
         {comments.map((comment) => (
           <CommentItem key={comment.id} comment={comment} />

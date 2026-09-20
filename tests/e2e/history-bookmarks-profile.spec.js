@@ -2,7 +2,7 @@
 // (see FEATURE_CHECKLIST.md #47-54).
 import { test, expect } from '@playwright/test';
 import { signupViaApi } from './helpers/auth.js';
-import { seedArticle, seedGuestUser, uniqueSlug } from './helpers/db.js';
+import { seedArticle, seedGuestUser, seedRealUser, uniqueSlug } from './helpers/db.js';
 
 test.describe('History page', () => {
   test('F49: shows an empty state with no history yet', async ({ page }) => {
@@ -84,5 +84,21 @@ test.describe('Profile page', () => {
     const { username } = await signupViaApi(page);
     await page.goto(`/u/${username}`);
     await expect(page.getByText('No public articles yet.')).toBeVisible();
+  });
+
+  test('D32 (moved here): Follow toggles on another user\'s profile page', async ({ page }) => {
+    // Follow used to also render on the article page; moved to be
+    // profile-only per a real request ("move the follow button to only on
+    // the account page").
+    await signupViaApi(page);
+    const other = await seedRealUser({ displayName: 'Followable Person' });
+
+    await page.goto(`/u/${other.username}`);
+    const followButton = page.locator('.follow-button');
+    await expect(followButton).toHaveText('Follow');
+    await followButton.click();
+    await expect(followButton).toHaveText('Following');
+    await followButton.click();
+    await expect(followButton).toHaveText('Follow');
   });
 });

@@ -122,6 +122,22 @@ test.describe('Discover feed', () => {
     await expect(page.locator('.discover-tabs .is-active')).toHaveText('Discover');
   });
 
+  test('mobile viewport: the Discover grid shows two smaller cards per row', async ({ page }) => {
+    // Real report: single-column cards on mobile looked too large; two
+    // per row (smaller each) reads better at phone width.
+    const owner = await seedGuestUser();
+    await seedArticle({ ownerUserId: owner.id, claim: `mobile grid a ${uniqueSlug('m')}`, isPublic: true });
+    await seedArticle({ ownerUserId: owner.id, claim: `mobile grid b ${uniqueSlug('m')}`, isPublic: true });
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/');
+    await expect(page.locator('.article-card').first()).toBeVisible();
+    const first = await page.locator('.article-card').nth(0).boundingBox();
+    const second = await page.locator('.article-card').nth(1).boundingBox();
+    expect(first.y).toBeCloseTo(second.y, 0); // same row
+    expect(first.x).toBeLessThan(second.x); // side by side, not stacked
+  });
+
   test('C22: a Load more button appears and pagination reveals additional articles', async ({ page }) => {
     const owner = await seedGuestUser();
     // 31 dominant rows guarantees page 1 (30) is full and at least one more

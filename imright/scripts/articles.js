@@ -34,8 +34,16 @@ export async function createArticle({ ownerUserId, claimText, articleData }) {
  * transactions elsewhere in this file), this is what GET /api/articles/:id
  * actually returns — it joins the owner's username/displayName so the
  * article page can show a byline without a second request, the same
- * information Discover/search/profile listings already include per row. */
-export async function getArticleById(id) {
+ * information Discover/search/profile listings already include per row.
+ *
+ * `viewerId` (the current req.user.id, or undefined for a guest with no
+ * identity yet) is used to compute `likedByViewer` — without this, the
+ * frontend had no way to know the current viewer had already liked the
+ * article, so LikeButton always started from "not liked" on every page
+ * load/reload regardless of the real state (a real bug: a user could like,
+ * leave, come back, and the button would let them "like" again, even
+ * though the idempotent backend just no-ops the duplicate). */
+export async function getArticleById(id, viewerId) {
   if (!UUID_PATTERN.test(id)) return null;
   const db = getDb();
   const rows = await db
@@ -57,7 +65,30 @@ export async function getArticleById(id) {
     .innerJoin(schema.users, eq(schema.users.id, schema.articles.ownerUserId))
     .where(eq(schema.articles.id, id))
     .limit(1);
-  return rows[0] ?? null;
+  const article = rows[0] ?? null;
+  if (!article) return null;
+
+  let likedByViewer = false;
+  if (viewerId) {
+    const likeRows = await db
+      .select({ userId: schema.articleLikes.userId })
+      .from(schema.articleLikes)
+      .where(and(eq(schema.articleLikes.userId, viewerId), eq(schema.articleLikes.articleId, id)))
+      .limit(1);
+    likedByViewer = likeRows.length > 0;
+  }
+  return { ...article, likedByViewer };
+}
+
+/** Owner-only. Cascades to the article's likes/comments/bookmark-folder
+ * memberships via the FKs already declared in schema.js — nothing else to
+ * clean up here. */
+export async function deleteArticle({ articleId, userId }) {
+  const db = getDb();
+  const article = await getArticleRow(db, articleId);
+  if (!article) throw new HttpError(404, 'article_not_found');
+  if (article.ownerUserId !== userId) throw new HttpError(403, 'not_owner');
+  await db.delete(schema.articles).where(eq(schema.articles.id, articleId));
 }
 
 /** Shallow-merges `patch` into article_data (e.g. adding counterarguments
@@ -98,12 +129,14 @@ export async function setArticleVisibility({ articleId, userId, isPublic }) {
 // Article likes
 // ---------------------------------------------------------------------------
 
+/** Liking your own article is allowed — an earlier requirement blocked it;
+ * reversed, so the display and behavior are identical whether you're the
+ * owner or not. */
 export async function likeArticle({ userId, articleId }) {
   const db = getDb();
   return db.transaction(async (tx) => {
     const article = await getArticleRow(tx, articleId);
     if (!article) throw new HttpError(404, 'article_not_found');
-    if (article.ownerUserId === userId) throw new HttpError(403, 'cannot_like_own_article');
     const inserted = await tx.insert(schema.articleLikes).values({ userId, articleId }).onConflictDoNothing().returning();
     if (inserted.length > 0) {
       await tx
@@ -324,13 +357,21 @@ export async function createComment({ articleId, authorId, body }) {
 
 /** Most-liked at top, with a little seeded-hash randomness for recent
  * comments — see the plan's Comment Ranking section for the full formula. */
-export async function listComments({ articleId, seed, cursor = 0, limit = 50 }) {
+/** `viewerId` (undefined for a guest with no identity yet) drives
+ * `likedByViewer` per row — same fix, same reason as getArticleById's: the
+ * frontend previously had no way to know the current viewer had already
+ * liked a given comment, so every comment-like button always started
+ * "unliked" regardless of the real per-user state. */
+export async function listComments({ articleId, seed, cursor = 0, limit = 50, viewerId }) {
   const db = getDb();
   const safeSeed = typeof seed === 'string' && seed ? seed : 'no-seed';
   const result = await db.execute(sql`
     SELECT c.id, c.article_id AS "articleId", c.author_id AS "authorId", c.body,
            c.like_count AS "likeCount", c.created_at AS "createdAt",
-           u.username, u.display_name AS "displayName"
+           u.username, u.display_name AS "displayName",
+           EXISTS(
+             SELECT 1 FROM comment_likes cl WHERE cl.comment_id = c.id AND cl.user_id = ${viewerId ?? null}
+           ) AS "likedByViewer"
     FROM comments c
     JOIN users u ON u.id = c.author_id
     WHERE c.article_id = ${articleId}
