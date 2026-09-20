@@ -70,7 +70,7 @@
         "spec": {
           "id": 2,
           "title": "Claims logged (selected range)",
-          "description": "Coverage caveat: only counts claims that landed in a traced interaction — every error/anomaly, plus a rolling sample that tapers down as traffic grows (100% under ~20 interactions/hour, down to 1% at high volume — see verbosityTiers in config/telemetry_thresholds.json). Very likely 100% at today's traffic; not a guaranteed-complete count once volume grows.",
+          "description": "Coverage caveat: only counts claims that landed in a traced interaction — every error/anomaly, plus a rolling sample that tapers down as traffic grows (100% under ~20 interactions/hour, down to 1% at high volume — see verbosityTiers in config/telemetry_thresholds.json). Very likely 100% at today's traffic; not a guaranteed-complete count once volume grows. Wrapped in sum() because interaction_trace logs land in multiple underlying streams (differing beyond service_name, e.g. pod/instance) — without it, count_over_time returns one series per stream and the stat shows just one of them instead of the total.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -89,7 +89,7 @@
                         "name": "grafanacloud-logs"
                       },
                       "spec": {
-                        "expr": "count_over_time({service_name=\"imright\"} |= `interaction_trace` [$__range])",
+                        "expr": "sum(count_over_time({service_name=\"imright\"} |= `interaction_trace` [$__range]))",
                         "queryType": "instant"
                       }
                     }
