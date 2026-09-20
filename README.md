@@ -14,6 +14,19 @@ Set `DATABASE_URL` to point at Postgres. On Railway, add a Postgres database to 
 
 `/admin` itself is gated by a separate password: set `ADMIN_PASSWORD` in `env.local` for local dev, and as a real environment variable in Railway for prod. Unlike the site gate, the server still starts if it's unset — `/admin` just responds 503 until it's configured. Both gates use signed session cookies with a secret generated fresh per process, so restarting the server logs everyone (site visitors and admin) out; that's fine for a simple gate like this.
 
+### Wiki search provider
+
+`WIKI_SEARCH_PROVIDER` picks how `wiki_searcher` finds and fetches Wikipedia articles (see `wiki_searcher/index.js`): `mediawiki` (default) hits the free, rate-limited MediaWiki Action API directly; `wikimedia` searches a self-hosted pgvector paragraph index and fetches content via Wikimedia Enterprise's On-demand API. Both return the identical shape, so nothing downstream (`wiki_filterer`, `ref_extractor`) needs to know which one ran.
+
+To use `wikimedia`, all of the following need to be in place first:
+
+1. `wiki_searcher/schema/wiki_paragraph_embeddings.sql` and `wiki_searcher/schema/wiki_refresh_checkpoint.sql` run once against `DATABASE_URL` (pgvector extension, the index table, and the checkpoint `refresh-daily.js` uses so a missed run doesn't create a permanent gap).
+2. The vector index actually populated — run `wiki_searcher/scripts/download-snapshot.js` once (downloads the Wikimedia Enterprise Snapshot and embeds it chunk-by-chunk on its own; no separate build step, and it needs a working `DATABASE_URL` since embedding happens as each chunk comes down, not afterward). `wiki_searcher/scripts/build-index-from-snapshot.js` is only for the narrower case of embedding an NDJSON file you already have from elsewhere. Then `wiki_searcher/scripts/refresh-daily.js` (scheduled, keeps the index current — see the script header for what it does and why it's safe to run on a schedule with zero impact on live requests).
+3. `wiki_searcher/scripts/wikimedia-login.js` run once to mint `WIKIMEDIA_REFRESH_TOKEN` (see below).
+4. The env vars: `WIKIMEDIA_USERNAME`, `WIKIMEDIA_REFRESH_TOKEN`. `WIKIMEDIA_PASSWORD` is needed for step 3's bootstrap either way — keep it set permanently as a Railway env var if you want the ~90-day refresh-token renewal to happen automatically, or remove it after step 3 if you'd rather do that renewal by hand (re-run `wikimedia-login.js`, update the env var) and not store the password long-term.
+
+Only then set `WIKI_SEARCH_PROVIDER=wikimedia`. Until all of the above exists, leave it unset/`mediawiki` — the `wikimedia` provider will throw on the first missing piece (no silent fallback).
+
 Server logs + metrics push to Grafana Cloud (Loki + Prometheus, via OTLP) if `OTEL_EXPORTER_OTLP_ENDPOINT`/`OTEL_EXPORTER_OTLP_HEADERS` are set (Grafana Cloud → Connections → OpenTelemetry). Unset, it silently falls back to console-only. Query in Grafana Explore with `{service_name="imright"}` (logs) or the metric names below (Prometheus). `service.version` (deployed git SHA) is attached to every log/metric so a cost/retry/latency change can be correlated with a specific deploy.
 
 ### Telemetry design

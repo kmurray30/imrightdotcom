@@ -1,143 +1,30 @@
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import yaml from 'yaml';
-import { callExternalApi, HttpStatusError, timeoutSignal } from '../utils/external-api.js';
+import { fetchWiki as fetchWikiViaMediaWiki } from './providers/mediawiki.js';
+import { fetchWiki as fetchWikiViaWikimedia } from './providers/wikimedia.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MEDIAWIKI_TIMEOUT_MS = 15_000;
+const PROVIDERS = {
+  mediawiki: fetchWikiViaMediaWiki,
+  wikimedia: fetchWikiViaWikimedia,
+};
 
 /**
- * Wiki searcher module: fetches Wikipedia articles via MediaWiki API.
- * Uses search queries from conspirator output, fetches for each query,
- * and returns a deduplicated union of all articles.
+ * Wiki searcher: resolves conspirator search queries to Wikipedia articles.
+ * Backend is chosen by the WIKI_SEARCH_PROVIDER env var:
+ *   - 'mediawiki' (default): free MediaWiki Action API search, rate-limited.
+ *   - 'wikimedia': local vector search + Wikimedia Enterprise On-demand fetch.
+ * Both providers return the identical shape, so callers (wiki_filterer,
+ * ref_extractor, imright/index.js) never need to know which one ran.
  *
- * @param {object} conspiracyData - Output from conspirator (topic, angles with search_queries)
- * @param {object} [options] - Optional config
- * @param {number} [options.articlesPerQuery] - Max articles per search query (default: 5 from config, or 10)
- * @returns {Promise<{ query: string, search_queries: string[], search_query_article_titles: object, fetched_at: string, page_count: number, pages: Array<{ pageid: number, title: string, extract: string, source: string, revision_id: number, last_modified: string, search_queries_hit: string[] }> }>}
+ * @param {object} conspiracyData
+ * @param {object} [options]
+ * @param {'mediawiki'|'wikimedia'} [options.provider] - Overrides WIKI_SEARCH_PROVIDER.
  */
 export async function fetchWiki(conspiracyData, options = {}) {
+  const provider = options.provider ?? process.env.WIKI_SEARCH_PROVIDER ?? 'mediawiki';
+  const fetchWikiImpl = PROVIDERS[provider];
 
-  const EXTRACT_CHARS_PER_PAGE = 1200;
-  const WIKI_API = 'https://en.wikipedia.org/w/api.php';
-  const USER_AGENT = 'imright-wiki-fetcher/1.0 (educational use)';
-
-  // Prefer the consolidated top-level search_queries added by the conspirator's second pass.
-  // Fall back to flatMapping per-angle queries for older conspiracy files that predate this field.
-  const searchQueries = (conspiracyData.search_queries?.length > 0)
-    ? conspiracyData.search_queries
-    : (conspiracyData.angles ?? []).flatMap((angle) => angle.search_queries ?? []).filter(Boolean);
-
-  if (searchQueries.length === 0) {
-    throw new Error('No search queries found in conspiracy data.');
+  if (!fetchWikiImpl) {
+    throw new Error(`Unknown WIKI_SEARCH_PROVIDER: "${provider}" (expected one of: ${Object.keys(PROVIDERS).join(', ')})`);
   }
 
-  const configPath = path.join(__dirname, 'config.yaml');
-  const config = fs.existsSync(configPath)
-    ? yaml.parse(fs.readFileSync(configPath, 'utf8'))
-    : {};
-  const articlesPerQuery = options.articlesPerQuery ?? config.articles_per_query ?? 10;
-
-  async function fetchFromMediaWiki(params) {
-    const url = new URL(WIKI_API);
-    Object.entries(params).forEach(([key, value]) => {
-      url.searchParams.append(key, value);
-    });
-
-    return callExternalApi({
-      service: 'mediawiki',
-      operation: 'search',
-      pipelineStep: 'wiki_search',
-      fn: async () => {
-        const response = await fetch(url.toString(), {
-          headers: { 'User-Agent': USER_AGENT },
-          signal: timeoutSignal(MEDIAWIKI_TIMEOUT_MS),
-        });
-
-        if (!response.ok) {
-          const retryAfterHeader = response.headers.get('retry-after');
-          throw new HttpStatusError(response.status, `MediaWiki API error: ${response.status} ${response.statusText}`, {
-            retryAfterSeconds: retryAfterHeader ? Number(retryAfterHeader) : undefined,
-          });
-        }
-
-        return response.json();
-      },
-    });
-  }
-
-  /**
-   * Search Wikipedia and fetch page content in a single API call using
-   * generator=search, which pipes search results directly into a prop query.
-   */
-  async function searchAndFetchPages(searchQuery, limit) {
-    const data = await fetchFromMediaWiki({
-      action: 'query',
-      generator: 'search',
-      gsrsearch: searchQuery,
-      gsrlimit: limit,
-      prop: 'extracts|revisions',
-      exintro: false,
-      explaintext: true,
-      exchars: EXTRACT_CHARS_PER_PAGE,
-      rvprop: 'ids|timestamp|content',
-      rvslots: 'main',
-      format: 'json',
-    });
-
-    if (!data.query?.pages) return [];
-
-    return Object.values(data.query.pages).map((page) => {
-      const revision = page.revisions?.[0];
-      const mainSlot = revision?.slots?.main;
-      const source = mainSlot?.['*'] ?? mainSlot?.content ?? '';
-
-      return {
-        pageid: page.pageid,
-        title: page.title,
-        extract: page.extract?.trim() ?? '',
-        source: source.trim(),
-        revision_id: revision?.revid,
-        last_modified: revision?.timestamp,
-      };
-    });
-  }
-
-  const query = conspiracyData.topic ?? '';
-
-  // Run all search queries concurrently — each is now a single API call.
-  const pageLists = await Promise.all(
-    searchQueries.map((searchQuery) => searchAndFetchPages(searchQuery, articlesPerQuery))
-  );
-
-  // Build search_query_article_titles: query -> [titles]
-  const searchQueryArticleTitles = {};
-  for (let i = 0; i < searchQueries.length; i++) {
-    searchQueryArticleTitles[searchQueries[i]] = pageLists[i].map((page) => page.title);
-  }
-
-  // Merge pages, tracking search_queries_hit per page
-  const pagesById = new Map();
-  for (let i = 0; i < searchQueries.length; i++) {
-    const searchQuery = searchQueries[i];
-    for (const page of pageLists[i]) {
-      if (!pagesById.has(page.pageid)) {
-        pagesById.set(page.pageid, { ...page, search_queries_hit: [searchQuery] });
-      } else {
-        pagesById.get(page.pageid).search_queries_hit.push(searchQuery);
-      }
-    }
-  }
-
-  const pages = Array.from(pagesById.values());
-
-  return {
-    query,
-    search_queries: searchQueries,
-    search_query_article_titles: searchQueryArticleTitles,
-    fetched_at: new Date().toISOString(),
-    page_count: pages.length,
-    pages,
-  };
+  return fetchWikiImpl(conspiracyData, options);
 }
