@@ -48,11 +48,14 @@
  * below the connection pool's max (imright/scripts/db.js, max: 5) so chunks
  * don't end up waiting on each other for a connection.
  *
- * Honest caveats, unverified live from this environment (Wikimedia's
- * domains are blocked here): that Node's fetch strips Authorization but
- * forwards Range across the redirect to each chunk's presigned URL, the
- * same way curl does per the docs; and that each chunk's archive extracts
- * to exactly one top-level .ndjson file with no further nesting.
+ * Honest caveat, unverified live from this environment (Wikimedia's domains
+ * are blocked here): that Node's fetch strips Authorization but forwards
+ * Range across the redirect to each chunk's presigned URL, the same way curl
+ * does per the docs. (The other original caveat here — that each archive
+ * extracts to a predictably-named top-level .ndjson file — turned out to be
+ * false in practice; extractChunk now lists the archive's actual contents
+ * with `tar tzf` instead of assuming a name, and normalizes whatever it
+ * finds to the canonical destDir/${chunkId}.ndjson path.)
  *
  * Usage: node wiki_searcher/scripts/build-index-from-wikimedia.js [identifier] [destDir]
  *   identifier - defaults to enwiki_namespace_0
@@ -319,17 +322,53 @@ async function runWithConcurrency(items, worker, concurrency) {
   await Promise.all(Array.from({ length: concurrency }, runNext));
 }
 
-/** Extracts one chunk's archive, deletes the archive, and returns the extracted NDJSON path. */
+/**
+ * Extracts one chunk's archive, deletes the archive, and returns the
+ * extracted NDJSON path — always at destDir/${chunkId}.ndjson, regardless of
+ * whatever name/layout the archive itself actually uses internally (proven
+ * necessary in practice: the archive does NOT extract to a file named after
+ * the chunk id, contrary to what was originally assumed here). Lists the
+ * archive's contents first rather than guessing, extracts, then normalizes
+ * whatever came out to the canonical path so every downstream check
+ * (processChunk's resumability tiers, embedChunkArticles, cleanup) can keep
+ * assuming that fixed layout without caring what tar actually produced.
+ */
 async function extractChunk(chunk) {
   const archiveName = path.basename(chunk.filePath);
+  const canonicalPath = path.join(destDir, `${chunk.chunkId}.ndjson`);
+
+  const { stdout } = await execFileAsync('tar', ['tzf', archiveName], { cwd: destDir, maxBuffer: 10 * 1024 * 1024 });
+  const entries = stdout
+    .split('\n')
+    .map((line) => line.trim().replace(/^\.\//, '')) // tar lists relative entries with a leading "./" — strip it so path math below is sane
+    .filter(Boolean);
+  const ndjsonEntry = entries.find((entry) => entry.endsWith('.ndjson'));
+  if (!ndjsonEntry) {
+    throw new Error(`No .ndjson entry found inside ${archiveName} — archive contains: ${entries.join(', ') || '(nothing)'}`);
+  }
+
   await execFileAsync('tar', ['xzf', archiveName], { cwd: destDir });
   fs.rmSync(chunk.filePath, { force: true }); // compressed copy no longer needed once extracted
 
-  const extractedPath = path.join(destDir, `${chunk.chunkId}.ndjson`);
-  if (!fs.existsSync(extractedPath)) {
-    throw new Error(`Expected ${extractedPath} after extracting ${archiveName}, but it's not there — check what tar actually produced.`);
+  const actualPath = path.join(destDir, ndjsonEntry);
+  if (!fs.existsSync(actualPath)) {
+    throw new Error(`tar listed ${ndjsonEntry} inside ${archiveName}, but it's not on disk after extracting — check what tar actually produced.`);
   }
-  return extractedPath;
+  if (actualPath !== canonicalPath) {
+    fs.renameSync(actualPath, canonicalPath);
+    // Clean up whatever subdirectory the archive extracted into, now that
+    // its one file of interest has been moved out of it. Only when the
+    // (now "./"-stripped) entry actually names a subdirectory — an entry
+    // with no "/" at all (a flat archive) has no extraction directory of
+    // its own to remove, and treating an empty split segment as "the top
+    // dir" here would resolve to destDir itself, deleting every other
+    // chunk's data alongside it.
+    if (ndjsonEntry.includes('/')) {
+      const entryTopDir = ndjsonEntry.split('/')[0];
+      fs.rmSync(path.join(destDir, entryTopDir), { recursive: true, force: true });
+    }
+  }
+  return canonicalPath;
 }
 
 /** Streams one chunk's NDJSON, embeds every article's citation-adjacent paragraphs, then deletes the raw extracted file. */
