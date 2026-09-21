@@ -253,7 +253,8 @@ socialRouter.delete('/comments/:id/like', async (req, res, next) => {
 socialRouter.get('/discover', async (req, res, next) => {
   try {
     const seed = typeof req.query.seed === 'string' ? req.query.seed : '';
-    const articles = await Articles.discoverFeed({ seed, cursor: parseCursor(req) });
+    const sort = typeof req.query.sort === 'string' ? req.query.sort : undefined;
+    const articles = await Articles.discoverFeed({ seed, cursor: parseCursor(req), sort });
     res.json({ articles });
   } catch (error) {
     next(error);

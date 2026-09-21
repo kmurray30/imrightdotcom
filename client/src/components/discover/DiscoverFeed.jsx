@@ -14,9 +14,16 @@ function newSeed() {
   return crypto.randomUUID();
 }
 
+const SORT_OPTIONS = [
+  { value: 'new', label: 'Newest' },
+  { value: 'popular', label: 'Popular' },
+  { value: 'algo', label: 'Algo' },
+];
+
 export function DiscoverFeed() {
   const { isGuest } = useAuth();
   const [tab, setTab] = useState('discover');
+  const [sort, setSort] = useState('new');
   const [query, setQuery] = useState('');
   const [activeQuery, setActiveQuery] = useState('');
   const [seed, setSeed] = useState(newSeed);
@@ -35,7 +42,7 @@ export function DiscoverFeed() {
         } else if (tab === 'following') {
           data = await api.get(`/api/discover/following?cursor=${nextCursor}`);
         } else {
-          data = await api.get(`/api/discover?seed=${seed}&cursor=${nextCursor}`);
+          data = await api.get(`/api/discover?seed=${seed}&sort=${sort}&cursor=${nextCursor}`);
         }
         const rows = data?.articles ?? [];
         setArticles((prev) => (replace ? rows : [...prev, ...rows]));
@@ -48,13 +55,13 @@ export function DiscoverFeed() {
         setIsLoading(false);
       }
     },
-    [tab, seed, activeQuery]
+    [tab, seed, sort, activeQuery]
   );
 
   useEffect(() => {
     load(0, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, seed, activeQuery]);
+  }, [tab, seed, sort, activeQuery]);
 
   function switchTab(nextTab) {
     if (nextTab === tab) return;
@@ -62,6 +69,14 @@ export function DiscoverFeed() {
     setSeed(newSeed());
     setActiveQuery('');
     setQuery('');
+  }
+
+  function changeSort(nextSort) {
+    if (nextSort === sort) return;
+    setSort(nextSort);
+    // A fresh seed so "Algo"'s jitter reshuffles right away instead of
+    // reusing whatever the feed happened to load with earlier.
+    setSeed(newSeed());
   }
 
   function handleSearchSubmit(event) {
@@ -87,6 +102,23 @@ export function DiscoverFeed() {
       </div>
       {isGuest && tab === 'following' && (
         <p className="guest-prompt-inline">Sign up to follow people and see their articles here.</p>
+      )}
+
+      {tab === 'discover' && !activeQuery && (
+        <div className="discover-sort" role="radiogroup" aria-label="Sort Discover feed">
+          {SORT_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={sort === option.value}
+              className={sort === option.value ? 'is-active' : ''}
+              onClick={() => changeSort(option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
       )}
 
       <form className="discover-search" onSubmit={handleSearchSubmit}>

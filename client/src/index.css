@@ -356,6 +356,23 @@ textarea:focus {
   font-size: 0.9rem;
 }
 
+.discover-sort {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+}
+
+.discover-sort button {
+  font-size: 0.85rem;
+  padding: 0.3rem 0.7rem;
+}
+
+.discover-sort button.is-active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
 .discover-search {
   display: flex;
   gap: 0.5rem;
