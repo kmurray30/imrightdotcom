@@ -426,23 +426,40 @@ export async function unlikeComment({ userId, commentId }) {
 // section for why these use a client-supplied `seed` instead of raw random().
 // ---------------------------------------------------------------------------
 
-// Temporarily plain reverse-chronological instead of the popularity+jitter
-// ranking below (kept, commented out, not deleted — this is a "for now"
-// request, easy to revert): with so few articles total and most starting at
-// zero engagement, the ranked order scattered brand-new articles anywhere on
-// the page instead of always up top, which made a just-submitted article
-// hard to find (no 1:1 mapping between claim text and headline) and read as
-// "my article isn't showing up" even though it was on the page all along.
-export async function discoverFeed({ seed, cursor = 0, limit = 30 }) {
+const DISCOVER_SORTS = new Set(['new', 'popular', 'algo']);
+
+// Date defaults to newest-first per a real request: with so few articles
+// total and most starting at zero engagement, "Algo"'s ranking used to be
+// the only option and could place a brand-new article anywhere on the page
+// — confusing when the rendered headline isn't 1:1 with the claim text
+// someone typed. A visitor who wants the popularity/algo view can still
+// switch to it explicitly.
+function discoverOrderBy(sort, safeSeed) {
+  switch (sort) {
+    case 'popular':
+      // All-time leaderboard: raw engagement, no time decay or jitter — a
+      // stable ranking, not a "front page" that reshuffles between loads.
+      return sql`ORDER BY (a.like_count * 2 + a.comment_count + a.bookmark_count) DESC, a.created_at DESC, a.id`;
+    case 'algo':
+      // Popularity-weighted with deterministic per-seed jitter (see the
+      // plan's Discover Feed Ranking section) — a Reddit/HN-style "hot"
+      // ranking: recent + engaged wins, with enough shuffle between loads
+      // that a low-engagement article still gets a chance to surface.
+      return sql`ORDER BY
+        ( (a.like_count * 2 + a.comment_count + a.bookmark_count)
+          / POWER(EXTRACT(EPOCH FROM (now() - a.created_at)) / 3600.0 + 2, 1.5)
+        ) * (0.6 + 0.8 * ((hashtext(a.id::text || ${safeSeed}) & 65535)::float / 65535)) DESC,
+        a.id`;
+    case 'new':
+    default:
+      return sql`ORDER BY a.created_at DESC, a.id`;
+  }
+}
+
+export async function discoverFeed({ seed, cursor = 0, limit = 30, sort = 'new' }) {
   const db = getDb();
-  void seed; // unused while sorting is plain reverse-chronological
-  // Popularity-weighted ranking with deterministic per-seed jitter (see the
-  // plan's Discover Feed Ranking section) — restore this ORDER BY once
-  // there's enough volume/engagement for it to be worth the shuffle:
-  //   ( (a.like_count * 2 + a.comment_count + a.bookmark_count)
-  //     / POWER(EXTRACT(EPOCH FROM (now() - a.created_at)) / 3600.0 + 2, 1.5)
-  //   ) * (0.6 + 0.8 * ((hashtext(a.id::text || ${safeSeed}) & 65535)::float / 65535)) DESC,
-  //   a.id
+  const safeSort = DISCOVER_SORTS.has(sort) ? sort : 'new';
+  const safeSeed = typeof seed === 'string' && seed ? seed : 'no-seed';
   const result = await db.execute(sql`
     SELECT a.id, a.owner_user_id AS "ownerUserId", a.claim_text AS "claimText",
            a.is_public AS "isPublic", a.article_data AS "articleData",
@@ -452,7 +469,7 @@ export async function discoverFeed({ seed, cursor = 0, limit = 30 }) {
     FROM articles a
     JOIN users u ON u.id = a.owner_user_id
     WHERE a.is_public = true
-    ORDER BY a.created_at DESC, a.id
+    ${discoverOrderBy(safeSort, safeSeed)}
     LIMIT ${limit} OFFSET ${cursor}
   `);
   return result.rows;

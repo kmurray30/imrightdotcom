@@ -36,6 +36,70 @@ test.describe('Discover feed', () => {
     expect(newerIndex).toBeLessThan(olderIndex);
   });
 
+  test('Discover sort control: Newest is selected by default, hidden on Following and while searching', async ({
+    page,
+  }) => {
+    // Following is disabled for a guest (see C18), so a real account is
+    // needed here to actually switch to it.
+    await signupViaApi(page);
+    await page.goto('/');
+    const sortControl = page.locator('.discover-sort');
+    await expect(sortControl).toBeVisible();
+    await expect(sortControl.getByRole('radio', { name: 'Newest' })).toHaveAttribute('aria-checked', 'true');
+
+    await page.getByRole('button', { name: 'Following' }).click();
+    await expect(sortControl).toHaveCount(0);
+    await page.getByRole('button', { name: 'Discover' }).click();
+    await expect(sortControl).toBeVisible();
+
+    await page.getByPlaceholder('Search public articles...').fill('anything');
+    await page.getByRole('button', { name: 'Search' }).click();
+    await expect(sortControl).toHaveCount(0);
+  });
+
+  test('Discover sort control: switching to Popular ranks by raw engagement, ignoring recency', async ({ page }) => {
+    // Deliberately checks "is this the very first card" rather than its
+    // position relative to some other specific fixture: other tests in this
+    // file (C22 in particular) permanently leave dozens of 1,000,000-like
+    // fixtures behind in this shared, never-reset dev DB, so any fixture
+    // with more modest engagement can never be guaranteed a spot on page 1
+    // of a popularity-sorted feed no matter how "newer" it is. A boost far
+    // above anything else this suite ever uses sidesteps that entirely.
+    const owner = await seedGuestUser();
+    const mostPopular = await seedArticle({
+      ownerUserId: owner.id,
+      claim: `sort popular winner ${uniqueSlug('a')}`,
+      isPublic: true,
+    });
+    await boostEngagement(mostPopular.id, { likeCount: 900_000_000 });
+    // Newer than mostPopular, but with no engagement — would win under the
+    // default Newest sort; must lose under Popular.
+    await seedArticle({ ownerUserId: owner.id, claim: `sort popular newer but quiet ${uniqueSlug('b')}`, isPublic: true });
+
+    await page.goto('/');
+    await page.locator('.discover-sort').getByRole('radio', { name: 'Popular' }).click();
+    await expect(page.locator('.discover-sort').getByRole('radio', { name: 'Popular' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+    await expect(page.locator('.article-card').first()).toHaveAttribute('href', new RegExp(`^/a/${mostPopular.id}`));
+  });
+
+  test('Discover sort control: Algo re-requests the feed with the algo ranking', async ({ page }) => {
+    const owner = await seedGuestUser();
+    await seedArticle({ ownerUserId: owner.id, claim: `sort algo fixture ${uniqueSlug('x')}`, isPublic: true });
+
+    await page.goto('/');
+    const algoRequest = page.waitForRequest((req) => /\/api\/discover\?.*sort=algo/.test(req.url()));
+    await page.locator('.discover-sort').getByRole('radio', { name: 'Algo' }).click();
+    await algoRequest;
+    await expect(page.locator('.discover-sort').getByRole('radio', { name: 'Algo' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+    await expect(page.locator('.article-card').first()).toBeVisible();
+  });
+
   test('C17+C20: a newly-published public article is discoverable via search, with correct card content (C24)', async ({ page }) => {
     // Deliberately found via search, not the raw ranked feed: several other
     // tests in this file also boost a fixture's engagement to guarantee
