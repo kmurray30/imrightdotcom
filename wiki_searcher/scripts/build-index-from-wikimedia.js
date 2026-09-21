@@ -352,6 +352,7 @@ async function embedChunkArticles(ndjsonPath) {
       title: article.name,
       wikitext,
       versionIdentifier: article.version?.identifier,
+      pageId: article.identifier,
     });
     stats.articles++;
     stats.paragraphs += result.paragraphCount;

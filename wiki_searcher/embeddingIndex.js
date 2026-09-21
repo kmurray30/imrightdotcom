@@ -135,10 +135,20 @@ async function isAlreadyCurrent(client, title, versionIdentifier) {
  * paragraphs than before) doesn't leave stale ones behind. Resumable: a
  * second call with the same versionIdentifier is a no-op.
  *
- * @param {object} article - { title, wikitext, versionIdentifier }
+ * title is the only key search actually uses at fetch time (see
+ * providers/wikimedia.js) — Wikimedia's On-demand API has no ID-based lookup,
+ * only /v2/articles/{title}. But title alone can't survive a page rename: the
+ * old title would keep its embedded rows forever, quietly dead (they'd never
+ * again resolve via On-demand, since the article now lives under a different
+ * title). pageId (Wikimedia's article.identifier, stable across renames) is
+ * what closes that gap — when provided, any other row sharing this pageId
+ * under a *different* title is deleted before writing this one, so a rename
+ * cleans up its old title's rows instead of leaving them to rot.
+ *
+ * @param {object} article - { title, wikitext, versionIdentifier, pageId }
  * @returns {Promise<{ title: string, paragraphCount: number, skipped: boolean }>}
  */
-export async function upsertArticleEmbeddings({ title, wikitext, versionIdentifier }) {
+export async function upsertArticleEmbeddings({ title, wikitext, versionIdentifier, pageId }) {
   const pool = getPool();
   if (!pool) {
     throw new Error('DATABASE_URL is not set; cannot write to the wiki paragraph vector index.');
@@ -153,15 +163,18 @@ export async function upsertArticleEmbeddings({ title, wikitext, versionIdentifi
     const paragraphs = extractCitableParagraphs(wikitext ?? '');
 
     await client.query('BEGIN');
+    if (pageId != null) {
+      await client.query('DELETE FROM wiki_paragraph_embeddings WHERE page_id = $1 AND title != $2', [pageId, title]);
+    }
     await client.query('DELETE FROM wiki_paragraph_embeddings WHERE title = $1', [title]);
 
     for (let index = 0; index < paragraphs.length; index++) {
       const { section, text } = paragraphs[index];
       const embedding = await embedText(`${title} — ${section}: ${text}`);
       await client.query(
-        `INSERT INTO wiki_paragraph_embeddings (title, paragraph_index, section, paragraph_text, embedding, version_identifier)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [title, index, section, text, pgvector.toSql(embedding), versionIdentifier ?? null]
+        `INSERT INTO wiki_paragraph_embeddings (title, page_id, paragraph_index, section, paragraph_text, embedding, version_identifier)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [title, pageId ?? null, index, section, text, pgvector.toSql(embedding), versionIdentifier ?? null]
       );
     }
     await client.query('COMMIT');

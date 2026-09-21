@@ -88,6 +88,7 @@ async function processChunk(lines, totals) {
         title: article.name,
         wikitext,
         versionIdentifier: article.version?.identifier,
+        pageId: article.identifier,
       });
       totals.articles++;
       totals.paragraphs += result.paragraphCount;

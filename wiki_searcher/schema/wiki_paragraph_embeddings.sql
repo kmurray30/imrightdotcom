@@ -10,7 +10,8 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TABLE IF NOT EXISTS wiki_paragraph_embeddings (
   id                 BIGSERIAL PRIMARY KEY,
-  title              TEXT NOT NULL,
+  title              TEXT NOT NULL,        -- the join key search actually uses (see providers/wikimedia.js) — the On-demand API only supports title-based lookup, no ID-based fetch endpoint exists
+  page_id            BIGINT,               -- Wikimedia's article.identifier — a stable per-page ID that survives renames, title can't. Not usable to fetch content (see above), but used to detect and clean up a since-renamed title's stale rows (see embeddingIndex.js's upsertArticleEmbeddings)
   paragraph_index    INT NOT NULL,
   section            TEXT NOT NULL,        -- section this paragraph came from; also folded into the embedded text (see embeddingIndex.js)
   paragraph_text     TEXT NOT NULL,        -- cleaned (markup/ref-stripped), unprefixed — the embedding prefix is search-time only, not stored
@@ -19,6 +20,14 @@ CREATE TABLE IF NOT EXISTS wiki_paragraph_embeddings (
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (title, paragraph_index)
 );
+
+-- ADD COLUMN, not just part of CREATE TABLE above, so re-running this file
+-- against a database that already has the table (pre-dating page_id) picks
+-- it up too, instead of silently no-op'ing on the CREATE TABLE IF NOT EXISTS.
+ALTER TABLE wiki_paragraph_embeddings ADD COLUMN IF NOT EXISTS page_id BIGINT;
+
+CREATE INDEX IF NOT EXISTS wiki_paragraph_embeddings_page_id
+  ON wiki_paragraph_embeddings (page_id);
 
 -- Disk-backed ANN index (not held fully in RAM) — see the cost/latency
 -- discussion this schema came out of. ivfflat is a reasonable default;
