@@ -10,6 +10,32 @@ test.describe('Discover feed', () => {
     await expect(page.getByRole('button', { name: 'Following' })).toBeVisible();
   });
 
+  test('Discover tab lists articles newest-first', async ({ page }) => {
+    // Real report: a just-submitted article was hard to spot on the feed
+    // (the popularity-ranked order could place a brand-new, zero-engagement
+    // article anywhere on the page, and its headline isn't 1:1 with the
+    // claim text typed in) — sorting strictly by created_at DESC means a new
+    // submission always lands ahead of anything older, no hunting required.
+    // Asserts newer-before-older by relative position, not "newer is card
+    // #1" — this dev DB is shared across parallel test workers that publish
+    // their own fixtures concurrently, so something else can legitimately be
+    // newer still by the time this loads (see C17+C20's note on the same
+    // hazard for the popularity-ranked feed).
+    const owner = await seedGuestUser();
+    const older = await seedArticle({ ownerUserId: owner.id, claim: `chrono older ${uniqueSlug('a')}`, isPublic: true });
+    await boostEngagement(older.id, { likeCount: 999_999 }); // would win under the old ranked order
+    const newer = await seedArticle({ ownerUserId: owner.id, claim: `chrono newer ${uniqueSlug('b')}`, isPublic: true });
+
+    await page.goto('/');
+    await expect(page.locator('.article-card')).not.toHaveCount(0);
+    const hrefs = await page.locator('.article-card').evaluateAll((els) => els.map((el) => el.getAttribute('href')));
+    const newerIndex = hrefs.findIndex((h) => h.startsWith(`/a/${newer.id}`));
+    const olderIndex = hrefs.findIndex((h) => h.startsWith(`/a/${older.id}`));
+    expect(newerIndex).toBeGreaterThanOrEqual(0);
+    expect(olderIndex).toBeGreaterThanOrEqual(0);
+    expect(newerIndex).toBeLessThan(olderIndex);
+  });
+
   test('C17+C20: a newly-published public article is discoverable via search, with correct card content (C24)', async ({ page }) => {
     // Deliberately found via search, not the raw ranked feed: several other
     // tests in this file also boost a fixture's engagement to guarantee
@@ -39,13 +65,13 @@ test.describe('Discover feed', () => {
     expect(thumbnailResponse.status()).toBe(200);
   });
 
-  test('C24: a Discover-tab (ranked feed) card renders headline, byline, and stats', async ({ page }) => {
-    // Structural check on whatever's actually on page 1 of the ranked feed —
+  test('C24: a Discover-tab card renders headline, byline, and stats', async ({ page }) => {
+    // Structural check on whatever's actually on page 1 of the feed —
     // deliberately not asserting about one specific fixture (see the test
     // above for why that isn't safe under parallel execution here). Seed one
     // directly so the feed is guaranteed non-empty regardless of test order.
     const owner = await seedGuestUser();
-    await seedArticle({ ownerUserId: owner.id, claim: `ranked feed fixture ${uniqueSlug('x')}`, isPublic: true });
+    await seedArticle({ ownerUserId: owner.id, claim: `feed fixture ${uniqueSlug('x')}`, isPublic: true });
 
     await page.goto('/');
     const firstCard = page.locator('.article-card').first();

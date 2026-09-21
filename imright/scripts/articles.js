@@ -426,9 +426,23 @@ export async function unlikeComment({ userId, commentId }) {
 // section for why these use a client-supplied `seed` instead of raw random().
 // ---------------------------------------------------------------------------
 
+// Temporarily plain reverse-chronological instead of the popularity+jitter
+// ranking below (kept, commented out, not deleted — this is a "for now"
+// request, easy to revert): with so few articles total and most starting at
+// zero engagement, the ranked order scattered brand-new articles anywhere on
+// the page instead of always up top, which made a just-submitted article
+// hard to find (no 1:1 mapping between claim text and headline) and read as
+// "my article isn't showing up" even though it was on the page all along.
 export async function discoverFeed({ seed, cursor = 0, limit = 30 }) {
   const db = getDb();
-  const safeSeed = typeof seed === 'string' && seed ? seed : 'no-seed';
+  void seed; // unused while sorting is plain reverse-chronological
+  // Popularity-weighted ranking with deterministic per-seed jitter (see the
+  // plan's Discover Feed Ranking section) — restore this ORDER BY once
+  // there's enough volume/engagement for it to be worth the shuffle:
+  //   ( (a.like_count * 2 + a.comment_count + a.bookmark_count)
+  //     / POWER(EXTRACT(EPOCH FROM (now() - a.created_at)) / 3600.0 + 2, 1.5)
+  //   ) * (0.6 + 0.8 * ((hashtext(a.id::text || ${safeSeed}) & 65535)::float / 65535)) DESC,
+  //   a.id
   const result = await db.execute(sql`
     SELECT a.id, a.owner_user_id AS "ownerUserId", a.claim_text AS "claimText",
            a.is_public AS "isPublic", a.article_data AS "articleData",
@@ -438,11 +452,7 @@ export async function discoverFeed({ seed, cursor = 0, limit = 30 }) {
     FROM articles a
     JOIN users u ON u.id = a.owner_user_id
     WHERE a.is_public = true
-    ORDER BY
-      ( (a.like_count * 2 + a.comment_count + a.bookmark_count)
-        / POWER(EXTRACT(EPOCH FROM (now() - a.created_at)) / 3600.0 + 2, 1.5)
-      ) * (0.6 + 0.8 * ((hashtext(a.id::text || ${safeSeed}) & 65535)::float / 65535)) DESC,
-      a.id
+    ORDER BY a.created_at DESC, a.id
     LIMIT ${limit} OFFSET ${cursor}
   `);
   return result.rows;
