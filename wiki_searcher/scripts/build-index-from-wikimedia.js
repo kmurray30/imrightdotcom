@@ -11,12 +11,13 @@
  * over one combined file. That doesn't work here: English Wikipedia's
  * snapshot is over a terabyte uncompressed (Wikimedia's own docs: "Some
  * projects (like English Wikipedia) are larger than a terabyte"), and there
- * was never a good reason to materialize all of that on disk at once. So
- * each chunk now goes through its whole lifecycle before the next one
- * starts: download -> extract -> embed every article's paragraphs (see
- * embeddingIndex.js) -> delete the chunk's archive and extracted copy. Peak
- * extra disk usage is a few chunks' worth of raw data (a few GB at
- * EMBED_CONCURRENCY chunks in flight), not the whole corpus.
+ * was never a good reason to materialize all of that on disk — only a
+ * small, citation-filtered slice of it ever gets embedded (see
+ * embeddingIndex.js). So each chunk now goes through its whole lifecycle
+ * before the next one starts: download -> extract -> embed every article's
+ * citation-adjacent paragraphs -> delete the chunk's archive and extracted
+ * copy. Peak extra disk usage is a few chunks' worth of raw data (a few GB
+ * at EMBED_CONCURRENCY chunks in flight), not the whole corpus.
  *
  * Downloads by CHUNK, not as one giant file — this is what the Snapshot API
  * docs recommend for a project this large, and it's what makes concurrency
@@ -370,7 +371,7 @@ async function extractChunk(chunk) {
   return canonicalPath;
 }
 
-/** Streams one chunk's NDJSON, embeds every article's paragraphs, then deletes the raw extracted file. */
+/** Streams one chunk's NDJSON, embeds every article's citation-adjacent paragraphs, then deletes the raw extracted file. */
 async function embedChunkArticles(ndjsonPath) {
   const rl = readline.createInterface({ input: fs.createReadStream(ndjsonPath), crlfDelay: Infinity });
   const stats = { articles: 0, paragraphs: 0, alreadyCurrent: 0 };
