@@ -3,6 +3,13 @@ import { test, expect } from '@playwright/test';
 import { seedGuestUser, seedArticle, boostEngagement, uniqueSlug } from './helpers/db.js';
 import { signupViaApi } from './helpers/auth.js';
 
+/** The sort options collapse into one icon toggle (see DiscoverFeed.jsx) —
+ * opens the dropdown and picks an option by its label. */
+async function pickSort(page, label) {
+  await page.locator('.discover-sort-toggle').click();
+  await page.locator('.discover-sort-menu').getByRole('radio', { name: label }).click();
+}
+
 test.describe('Discover feed', () => {
   test('C15: shows Discover and Following tabs', async ({ page }) => {
     await page.goto('/');
@@ -43,18 +50,33 @@ test.describe('Discover feed', () => {
     // needed here to actually switch to it.
     await signupViaApi(page);
     await page.goto('/');
-    const sortControl = page.locator('.discover-sort');
-    await expect(sortControl).toBeVisible();
-    await expect(sortControl.getByRole('radio', { name: 'Newest' })).toHaveAttribute('aria-checked', 'true');
+    const sortToggle = page.locator('.discover-sort-toggle');
+    await expect(sortToggle).toBeVisible();
+    await expect(sortToggle).toHaveAttribute('aria-label', 'Sort: Newest');
+
+    await sortToggle.click();
+    await expect(page.locator('.discover-sort-menu').getByRole('radio', { name: 'Newest' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+    await sortToggle.click(); // close it back up before switching tabs
 
     await page.getByRole('button', { name: 'Following' }).click();
-    await expect(sortControl).toHaveCount(0);
+    await expect(sortToggle).toHaveCount(0);
     await page.getByRole('button', { name: 'Discover' }).click();
-    await expect(sortControl).toBeVisible();
+    await expect(sortToggle).toBeVisible();
 
     await page.getByPlaceholder('Search public articles...').fill('anything');
     await page.getByRole('button', { name: 'Search' }).click();
-    await expect(sortControl).toHaveCount(0);
+    await expect(sortToggle).toHaveCount(0);
+  });
+
+  test('Discover sort control: the dropdown closes on an outside click', async ({ page }) => {
+    await page.goto('/');
+    await page.locator('.discover-sort-toggle').click();
+    await expect(page.locator('.discover-sort-menu')).toBeVisible();
+    await page.locator('.site-logo').click();
+    await expect(page.locator('.discover-sort-menu')).toHaveCount(0);
   });
 
   test('Discover sort control: switching to Popular ranks by raw engagement, ignoring recency', async ({ page }) => {
@@ -77,11 +99,8 @@ test.describe('Discover feed', () => {
     await seedArticle({ ownerUserId: owner.id, claim: `sort popular newer but quiet ${uniqueSlug('b')}`, isPublic: true });
 
     await page.goto('/');
-    await page.locator('.discover-sort').getByRole('radio', { name: 'Popular' }).click();
-    await expect(page.locator('.discover-sort').getByRole('radio', { name: 'Popular' })).toHaveAttribute(
-      'aria-checked',
-      'true'
-    );
+    await pickSort(page, 'Popular');
+    await expect(page.locator('.discover-sort-toggle')).toHaveAttribute('aria-label', 'Sort: Popular');
     await expect(page.locator('.article-card').first()).toHaveAttribute('href', new RegExp(`^/a/${mostPopular.id}`));
   });
 
@@ -91,12 +110,9 @@ test.describe('Discover feed', () => {
 
     await page.goto('/');
     const algoRequest = page.waitForRequest((req) => /\/api\/discover\?.*sort=algo/.test(req.url()));
-    await page.locator('.discover-sort').getByRole('radio', { name: 'Algo' }).click();
+    await pickSort(page, 'Algo');
     await algoRequest;
-    await expect(page.locator('.discover-sort').getByRole('radio', { name: 'Algo' })).toHaveAttribute(
-      'aria-checked',
-      'true'
-    );
+    await expect(page.locator('.discover-sort-toggle')).toHaveAttribute('aria-label', 'Sort: Algo');
     await expect(page.locator('.article-card').first()).toBeVisible();
   });
 
