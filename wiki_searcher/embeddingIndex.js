@@ -17,17 +17,11 @@
  * costing recall: a query's only textual match inside an article might sit
  * in an uncited paragraph (or one cited by a source type outside the
  * allowed list), and filtering it out could mean that article never
- * surfaces as a candidate at all.
- *
- * That said, a fixed top-N search budget means every candidate slot is
- * precious: an article that only surfaced via an uncited paragraph, with no
- * citable match anywhere else in it either, is a wasted slot once
- * ref_extractor's own citation+keyword check comes up empty for it. So
- * has_citation is still tracked per paragraph — not to filter what's
- * indexed, but so utils/vectorIndex.js can rank cited matches first and
- * fall back to uncited ones only when there aren't enough cited candidates
- * to fill the budget. Best of both: nothing is invisible just for lacking a
- * citation, but the scarce top-N slots go to citable evidence first.
+ * surfaces as a candidate at all. Given the priority here is recall —
+ * finding an article if the corpus has ANYTHING relevant, false positives
+ * being far cheaper than false negatives — indexing everything and letting
+ * embedding similarity (plus ref_extractor's later, real citation check)
+ * sort out precision is the better tradeoff.
  *
  * Each paragraph is embedded with a "{title} — {section}: " prefix, so the
  * embedding model has enough context to resolve bare pronouns ("he killed
@@ -36,32 +30,15 @@
  * paragraph_text is the plain paragraph, since that's what a human or
  * downstream LLM would want to see, not the search-time prefix.
  */
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import yaml from 'yaml';
 import { getPool } from '../imright/scripts/db.js';
 import { embedText } from './textEmbeddings.js';
-import { findAllRefs, stripWikiMarkup } from '../ref_extractor/parser/index.js';
-import { parseAllCiteTemplates } from '../ref_extractor/parser/citeTemplate.js';
+import { stripWikiMarkup } from '../ref_extractor/parser/index.js';
 import pgvector from 'pgvector/pg';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIN_PARAGRAPH_LENGTH = 30;
 
-// Reuses ref_extractor's own definition of "citable source" rather than
-// re-deciding it here — see ref_extractor/config.yaml. Used only to compute
-// the has_citation flag below, not to filter what gets indexed.
-const refExtractorConfigPath = path.join(__dirname, '..', 'ref_extractor', 'config.yaml');
-const refExtractorConfig = fs.existsSync(refExtractorConfigPath)
-  ? yaml.parse(fs.readFileSync(refExtractorConfigPath, 'utf8'))
-  : {};
-const CITATION_TYPES = new Set(
-  (refExtractorConfig.citation_types ?? ['web', 'news', 'journal', 'magazine']).map((t) => t.toLowerCase())
-);
-
 /** Same section-splitting regex used in ref_extractor/searchThenExtract.js and parser/index.js's parseRefs. */
-function buildSectionsWithRanges(source) {
+function buildSections(source) {
   const sections = [];
   const headerRegex = /^\s*(={2,6})\s*(.+?)\s*\1\s*$/gm;
   let lastEnd = 0;
@@ -69,67 +46,39 @@ function buildSectionsWithRanges(source) {
   let match;
 
   while ((match = headerRegex.exec(source)) !== null) {
-    const headerEnd = match.index + match[0].length;
     const content = source.slice(lastEnd, match.index);
     if (content.trim()) {
-      sections.push({ name: prevName, content, start: lastEnd, end: match.index });
+      sections.push({ name: prevName, content });
     }
     prevName = match[2].trim();
-    lastEnd = headerEnd;
+    lastEnd = match.index + match[0].length;
   }
   if (lastEnd < source.length) {
-    sections.push({ name: prevName, content: source.slice(lastEnd), start: lastEnd, end: source.length });
+    sections.push({ name: prevName, content: source.slice(lastEnd) });
   }
   return sections;
 }
 
-/** Paragraphs within one section, with source-relative [start, end) offsets for ref-overlap checks. */
-function splitParagraphsWithRanges(sectionContent, sectionStart) {
-  const paragraphs = [];
-  const parts = sectionContent.split(/\n\n+/);
-  let offset = 0;
-  for (const part of parts) {
-    const start = sectionStart + offset;
-    const end = start + part.length;
-    offset += part.length + 2;
-    if (part.trim().length >= MIN_PARAGRAPH_LENGTH) {
-      paragraphs.push({ text: part, start, end });
-    }
-  }
-  return paragraphs;
-}
-
-/** True if any ref overlapping this paragraph parses to at least one allowed, well-formed citation. */
-function hasValidCitation(paragraph, refs) {
-  const overlapping = refs.filter((ref) => ref.start < paragraph.end && ref.end > paragraph.start);
-  for (const ref of overlapping) {
-    const parsedList = parseAllCiteTemplates(ref.content ?? '');
-    for (const parsed of parsedList) {
-      if (CITATION_TYPES.has(parsed.type?.toLowerCase()) && parsed.url?.startsWith('http')) {
-        return true;
-      }
-    }
-  }
-  return false;
+/** Paragraphs within one section — the unit this index stores and embeds. */
+function splitParagraphs(sectionContent) {
+  return sectionContent.split(/\n\n+/).filter((part) => part.trim().length >= MIN_PARAGRAPH_LENGTH);
 }
 
 /**
  * Splits an article's wikitext into paragraphs, cleaned of wiki markup and
- * ref tags, each flagged with whether it sits next to a real citation.
- * Every paragraph above the length floor is included regardless of that
- * flag — see the file header for why.
- * @returns {Array<{ section: string, text: string, hasCitation: boolean }>}
+ * ref tags. Every paragraph above the length floor is included — see the
+ * file header for why this isn't filtered down to citation-adjacent ones.
+ * @returns {Array<{ section: string, text: string }>}
  */
 function extractParagraphs(wikitext) {
-  const refs = findAllRefs(wikitext);
-  const sections = buildSectionsWithRanges(wikitext);
+  const sections = buildSections(wikitext);
   const results = [];
 
   for (const section of sections) {
-    for (const paragraph of splitParagraphsWithRanges(section.content, section.start)) {
-      const cleaned = stripWikiMarkup(paragraph.text.replace(/<ref[\s\S]*?<\/ref\s*>|<ref[^>]*\/\s*>/gi, ''));
+    for (const paragraphText of splitParagraphs(section.content)) {
+      const cleaned = stripWikiMarkup(paragraphText.replace(/<ref[\s\S]*?<\/ref\s*>|<ref[^>]*\/\s*>/gi, ''));
       if (cleaned.length >= MIN_PARAGRAPH_LENGTH) {
-        results.push({ section: section.name, text: cleaned, hasCitation: hasValidCitation(paragraph, refs) });
+        results.push({ section: section.name, text: cleaned });
       }
     }
   }
@@ -186,12 +135,12 @@ export async function upsertArticleEmbeddings({ title, wikitext, versionIdentifi
     await client.query('DELETE FROM wiki_paragraph_embeddings WHERE title = $1', [title]);
 
     for (let index = 0; index < paragraphs.length; index++) {
-      const { section, text, hasCitation } = paragraphs[index];
+      const { section, text } = paragraphs[index];
       const embedding = await embedText(`${title} — ${section}: ${text}`);
       await client.query(
-        `INSERT INTO wiki_paragraph_embeddings (title, page_id, paragraph_index, section, paragraph_text, embedding, has_citation, version_identifier)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [title, pageId ?? null, index, section, text, pgvector.toSql(embedding), hasCitation, versionIdentifier ?? null]
+        `INSERT INTO wiki_paragraph_embeddings (title, page_id, paragraph_index, section, paragraph_text, embedding, version_identifier)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [title, pageId ?? null, index, section, text, pgvector.toSql(embedding), versionIdentifier ?? null]
       );
     }
     await client.query('COMMIT');
