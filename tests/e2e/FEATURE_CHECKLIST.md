@@ -42,7 +42,7 @@ handling and overlapped/ran off-screen at phone width).
 | 16 | Switching tabs reloads the list | discover.spec.js C16 |
 | 17 | Discover surfaces a newly-published public article | discover.spec.js C17+C20 |
 | 72 | Discover tab defaults to newest-first so a just-submitted article is always easy to find | discover.spec.js "Discover tab lists articles newest-first" |
-| 73 | Discover sort control (Newest / Popular / Algo): visible only on the Discover tab (not Following or while searching), Newest selected by default | discover.spec.js "Discover sort control: Newest is selected by default..." |
+| 73 | Discover sort control (Newest / Popular / Algo) collapses into one icon toggle (↕) in the search row, opening a dropdown menu; visible only on the Discover tab (not Following or while searching), Newest selected by default, closes on an outside click | discover.spec.js "Discover sort control: Newest is selected by default...", "Discover sort control: the dropdown closes on an outside click" |
 | 74 | Popular sort ranks by raw all-time engagement, ignoring recency | discover.spec.js "Discover sort control: switching to Popular..." |
 | 75 | Algo sort restores the popularity+time-decay+jitter ranking (the original Discover Feed Ranking design) | discover.spec.js "Discover sort control: Algo re-requests..." |
 | 18 | Following tab disabled + inline prompt for guests | discover.spec.js C18 |

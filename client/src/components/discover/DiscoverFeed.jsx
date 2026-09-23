@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../api/client.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { ArticleCard } from './ArticleCard.jsx';
@@ -24,6 +24,8 @@ export function DiscoverFeed() {
   const { isGuest } = useAuth();
   const [tab, setTab] = useState('discover');
   const [sort, setSort] = useState('new');
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
+  const sortMenuRef = useRef(null);
   const [query, setQuery] = useState('');
   const [activeQuery, setActiveQuery] = useState('');
   const [seed, setSeed] = useState(newSeed);
@@ -31,6 +33,15 @@ export function DiscoverFeed() {
   const [cursor, setCursor] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    if (!sortMenuOpen) return undefined;
+    function handleClickOutside(event) {
+      if (sortMenuRef.current && !sortMenuRef.current.contains(event.target)) setSortMenuOpen(false);
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [sortMenuOpen]);
 
   const load = useCallback(
     async (nextCursor, replace) => {
@@ -72,6 +83,7 @@ export function DiscoverFeed() {
   }
 
   function changeSort(nextSort) {
+    setSortMenuOpen(false);
     if (nextSort === sort) return;
     setSort(nextSort);
     // A fresh seed so "Algo"'s jitter reshuffles right away instead of
@@ -104,24 +116,38 @@ export function DiscoverFeed() {
         <p className="guest-prompt-inline">Sign up to follow people and see their articles here.</p>
       )}
 
-      {tab === 'discover' && !activeQuery && (
-        <div className="discover-sort" role="radiogroup" aria-label="Sort Discover feed">
-          {SORT_OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              role="radio"
-              aria-checked={sort === option.value}
-              className={sort === option.value ? 'is-active' : ''}
-              onClick={() => changeSort(option.value)}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-      )}
-
       <form className="discover-search" onSubmit={handleSearchSubmit}>
+        {tab === 'discover' && !activeQuery && (
+          <div className="discover-sort" ref={sortMenuRef}>
+            <button
+              type="button"
+              className="discover-sort-toggle"
+              aria-haspopup="true"
+              aria-expanded={sortMenuOpen}
+              aria-label={`Sort: ${SORT_OPTIONS.find((o) => o.value === sort)?.label}`}
+              title={`Sort: ${SORT_OPTIONS.find((o) => o.value === sort)?.label}`}
+              onClick={() => setSortMenuOpen((open) => !open)}
+            >
+              ↕
+            </button>
+            {sortMenuOpen && (
+              <div className="discover-sort-menu" role="radiogroup" aria-label="Sort Discover feed">
+                {SORT_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={sort === option.value}
+                    className={sort === option.value ? 'is-active' : ''}
+                    onClick={() => changeSort(option.value)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}

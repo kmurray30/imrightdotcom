@@ -356,27 +356,55 @@ textarea:focus {
   font-size: 0.9rem;
 }
 
-.discover-sort {
-  display: flex;
-  gap: 0.4rem;
-  margin-top: 0.75rem;
-}
-
-.discover-sort button {
-  font-size: 0.85rem;
-  padding: 0.3rem 0.7rem;
-}
-
-.discover-sort button.is-active {
-  background: var(--accent);
-  color: white;
-  border-color: var(--accent);
-}
-
 .discover-search {
   display: flex;
   gap: 0.5rem;
   margin: 1rem 0;
+}
+
+/* Sits inline in the search row — a relative anchor for the dropdown menu
+ * below, kept small since it's one icon among the search input/buttons. */
+.discover-sort {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.discover-sort-toggle {
+  width: 2.4rem;
+  height: 100%;
+  padding: 0;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.discover-sort-menu {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  left: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0.4rem;
+  box-shadow: var(--shadow-dropdown);
+  min-width: 7rem;
+}
+
+.discover-sort-menu button {
+  border: none;
+  background: none;
+  text-align: left;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+}
+
+.discover-sort-menu button.is-active {
+  background: var(--accent);
+  color: white;
 }
 
 .article-grid {
