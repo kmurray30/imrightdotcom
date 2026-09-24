@@ -46,6 +46,21 @@ socialRouter.get('/articles/:id', async (req, res, next) => {
   }
 });
 
+// Guest-ok, and deliberately not keyed to the guest/account identity system
+// (see schema.js's articleViews docstring) — a view has to count for every
+// visitor, including one who has never generated or liked anything, without
+// minting a permanent `users` row on every single pageview. req.identity is
+// set for every request by the global middleware in serve-site.js, so this
+// never fails for lack of an identity the way an account-gated action might.
+socialRouter.post('/articles/:id/view', async (req, res, next) => {
+  try {
+    const result = await Articles.recordArticleView({ articleId: req.params.id, visitorId: req.identity.visitorId });
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
 socialRouter.patch('/articles/:id/visibility', requireAccount, async (req, res, next) => {
   try {
     const { isPublic } = req.body ?? {};

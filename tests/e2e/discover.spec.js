@@ -161,8 +161,26 @@ test.describe('Discover feed', () => {
     // Bookmark count is deliberately not shown on the card (kept on the
     // article page itself) — a real request to declutter the thumbnail.
     await expect(firstCard.locator('.article-card-stats')).toContainText('♥');
+    await expect(firstCard.locator('.article-card-stats')).toContainText('👁');
     await expect(firstCard.locator('.article-card-stats')).toContainText('💬');
     await expect(firstCard.locator('.article-card-stats')).not.toContainText('🔖');
+  });
+
+  test('a Discover card shows the article\'s view count', async ({ page }) => {
+    const owner = await seedGuestUser();
+    const article = await seedArticle({ ownerUserId: owner.id, claim: `view count card ${uniqueSlug('x')}`, isPublic: true });
+    // Directly record a couple of views (bypassing the browser UI, which is
+    // covered end-to-end in article.spec.js's view-count test) so this test
+    // only has to check the card reflects a non-zero count correctly.
+    const { recordArticleView } = await import('../../imright/scripts/articles.js');
+    await recordArticleView({ articleId: article.id, visitorId: crypto.randomUUID() });
+    await recordArticleView({ articleId: article.id, visitorId: crypto.randomUUID() });
+
+    await page.goto('/');
+    await page.getByPlaceholder('Search public articles...').fill(`view count card`);
+    await page.getByRole('button', { name: 'Search' }).click();
+    const card = page.locator('.article-card', { hasText: article.claimText });
+    await expect(card.locator('.article-card-stats')).toContainText('👁 2');
   });
 
 

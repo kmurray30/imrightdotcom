@@ -56,6 +56,7 @@ export async function getArticleById(id, viewerId) {
       likeCount: schema.articles.likeCount,
       commentCount: schema.articles.commentCount,
       bookmarkCount: schema.articles.bookmarkCount,
+      viewCount: schema.articles.viewCount,
       createdAt: schema.articles.createdAt,
       updatedAt: schema.articles.updatedAt,
       ownerUsername: schema.users.username,
@@ -162,6 +163,37 @@ export async function unlikeArticle({ userId, articleId }) {
         .where(eq(schema.articles.id, articleId));
     }
     return { liked: false };
+  });
+}
+
+/** Dedupes by the anonymous visitor cookie (req.identity.visitorId), not by
+ * account/guest identity — see schema.js's articleViews docstring for why.
+ * Idempotent: a second view from the same visitor for the same article is a
+ * no-op (ON CONFLICT DO NOTHING), same pattern as likeArticle above, so a
+ * session re-opening the page never double-counts. */
+export async function recordArticleView({ articleId, visitorId }) {
+  const db = getDb();
+  return db.transaction(async (tx) => {
+    const article = await getArticleRow(tx, articleId);
+    if (!article) throw new HttpError(404, 'article_not_found');
+    const inserted = await tx
+      .insert(schema.articleViews)
+      .values({ articleId, visitorId })
+      .onConflictDoNothing()
+      .returning();
+    if (inserted.length > 0) {
+      const [row] = await tx
+        .update(schema.articles)
+        .set({ viewCount: sql`${schema.articles.viewCount} + 1` })
+        .where(eq(schema.articles.id, articleId))
+        .returning({ viewCount: schema.articles.viewCount });
+      return { counted: true, viewCount: row?.viewCount ?? null };
+    }
+    const [row] = await tx
+      .select({ viewCount: schema.articles.viewCount })
+      .from(schema.articles)
+      .where(eq(schema.articles.id, articleId));
+    return { counted: false, viewCount: row?.viewCount ?? null };
   });
 }
 
@@ -464,7 +496,7 @@ export async function discoverFeed({ seed, cursor = 0, limit = 30, sort = 'new' 
     SELECT a.id, a.owner_user_id AS "ownerUserId", a.claim_text AS "claimText",
            a.is_public AS "isPublic", a.article_data AS "articleData",
            a.like_count AS "likeCount", a.comment_count AS "commentCount",
-           a.bookmark_count AS "bookmarkCount", a.created_at AS "createdAt",
+           a.bookmark_count AS "bookmarkCount", a.view_count AS "viewCount", a.created_at AS "createdAt",
            u.username, u.display_name AS "displayName"
     FROM articles a
     JOIN users u ON u.id = a.owner_user_id
@@ -487,6 +519,7 @@ export async function followingFeed({ userId, cursor = 0, limit = 30 }) {
       likeCount: schema.articles.likeCount,
       commentCount: schema.articles.commentCount,
       bookmarkCount: schema.articles.bookmarkCount,
+      viewCount: schema.articles.viewCount,
       createdAt: schema.articles.createdAt,
       username: schema.users.username,
       displayName: schema.users.displayName,
@@ -536,6 +569,7 @@ export async function searchArticles({ query, cursor = 0, limit = 30 }) {
       likeCount: schema.articles.likeCount,
       commentCount: schema.articles.commentCount,
       bookmarkCount: schema.articles.bookmarkCount,
+      viewCount: schema.articles.viewCount,
       createdAt: schema.articles.createdAt,
       username: schema.users.username,
       displayName: schema.users.displayName,
