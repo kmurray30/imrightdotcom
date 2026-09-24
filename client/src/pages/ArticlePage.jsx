@@ -35,6 +35,28 @@ export function ArticlePage() {
     };
   }, [id]);
 
+  // Recorded once the article's loaded, keyed off the same anonymous visitor
+  // cookie every page already sets — deduped server-side, so reopening this
+  // same page later in the same browser doesn't recount (see the backend's
+  // articleViews docstring). Not gated on login/guest status: a view counts
+  // for anyone, including a visitor with no account/guest identity at all.
+  useEffect(() => {
+    if (!article) return undefined;
+    let cancelled = false;
+    api
+      .post(`/api/articles/${article.id}/view`)
+      .then((data) => {
+        if (!cancelled && typeof data?.viewCount === 'number') {
+          setArticle((a) => (a ? { ...a, viewCount: data.viewCount } : a));
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [article?.id]);
+
   if (notFound) return <p className="empty-state">Article not found.</p>;
   if (!article) return <p className="empty-state">Loading…</p>;
 
@@ -56,6 +78,7 @@ export function ArticlePage() {
           </p>
           <div className="article-stats">
             <span>♥ {article.likeCount}</span>
+            <span>👁 {article.viewCount}</span>
             <span>💬 {article.commentCount}</span>
             <span>🔖 {article.bookmarkCount}</span>
           </div>
