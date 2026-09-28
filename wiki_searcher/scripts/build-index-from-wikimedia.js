@@ -96,12 +96,19 @@ const EMBED_CONCURRENCY = 4; // full download+extract+embed pipeline — keep at
 const METADATA_TIMEOUT_MS = 15_000; // HEAD/info calls should be fast; don't hang forever if one stalls
 const STALL_TIMEOUT_MS = 30_000; // abort a chunk download if no bytes arrive for this long
 
-const PROGRESS_BAR_WIDTH = 30;
+const PROGRESS_BAR_WIDTH = 20; // kept narrow — the numeric fields (count/rate/ETA) matter more than the bar itself on a one-line, width-constrained status display
 const PROGRESS_RENDER_INTERVAL_MS = 200;
 const SPEED_WINDOW_MS = 5000; // recent-window speed, more responsive than a lifetime average on a multi-hour download
 
 function formatGB(bytes) {
   return (bytes / 1e9).toFixed(2);
+}
+
+/** Compact "902.1K" / "7.33M" style formatting — a raw comma-grouped 7,332,159 is needlessly wide for a one-line status display. */
+function formatCount(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return String(Math.round(n));
 }
 
 function formatDuration(seconds) {
@@ -110,6 +117,22 @@ function formatDuration(seconds) {
   const m = Math.floor((seconds % 3600) / 60);
   const s = Math.floor(seconds % 60);
   return [h, m, s].map((n) => String(n).padStart(2, '0')).join(':');
+}
+
+/**
+ * Truncates to the terminal's actual width and clears any leftover
+ * characters from a previous, longer render. Without this, a line that
+ * exceeds the terminal width wraps onto a second row, and "\r" then only
+ * returns to the start of THAT wrapped row rather than the true beginning
+ * of the logical line — which is what turns a one-line progress display
+ * into what looks like a new line being printed on every tick, each one
+ * cut off mid-word. process.stdout.columns is undefined when stdout isn't
+ * a TTY (e.g. piped to a file), in which case there's no wrapping concern.
+ */
+function fitToTerminal(line) {
+  const width = process.stdout.columns;
+  const fitted = width && line.length > width - 1 ? line.slice(0, width - 1) : line;
+  return `\r${fitted}\x1b[K`; // \x1b[K: clear from cursor to end of line
 }
 
 /** A single rolling-window counter: total so far, plus a recent-window rate for ETA purposes. */
@@ -163,13 +186,19 @@ function createProgressDisplay(totalArticles) {
       const filled = Math.round(fraction * PROGRESS_BAR_WIDTH);
       const bar = '█'.repeat(filled) + '░'.repeat(PROGRESS_BAR_WIDTH - filled);
       const pct = (fraction * 100).toFixed(1).padStart(5, ' ');
+      // Kept deliberately compact (short labels, K/M-suffixed counts) and
+      // still run through fitToTerminal — see the header printed once at
+      // startup (main()) for what each field means, since a one-line format
+      // this dense isn't self-explanatory the first time you see it.
       process.stdout.write(
-        `\r[${bar}] ${pct}%  ${articlesDone.toLocaleString()} / ${totalArticles.toLocaleString()} articles` +
-          `  ${articleRate.toFixed(1)} articles/s  ETA ${formatDuration(etaSeconds)}  (${formatGB(bytesDone)} GB downloaded)   `
+        fitToTerminal(
+          `[${bar}] ${pct}%  ${formatCount(articlesDone)}/${formatCount(totalArticles)} art` +
+            `  ${articleRate.toFixed(1)} art/s  ETA ${formatDuration(etaSeconds)}  ${formatGB(bytesDone)}GB dl`
+        )
       );
     } else {
       // No article-count denominator to compute a % or ETA against — fall back to raw counts.
-      process.stdout.write(`\r${articlesDone.toLocaleString()} articles processed, ${formatGB(bytesDone)} GB downloaded   `);
+      process.stdout.write(fitToTerminal(`${formatCount(articlesDone)} articles processed, ${formatGB(bytesDone)}GB downloaded`));
     }
   }
 
@@ -627,6 +656,9 @@ async function main() {
       `run "tail -f wiki-snapshots/debug.log" in another terminal to see exactly which chunk and stage it's stuck on.`
   );
   logDebug(`=== run started: ${chunks.length} chunks, ${formatGB(totalBytes)} GB total ===`);
+  console.log(
+    'Progress line below: [bar] % done   articles done/total   embedding rate   ETA   total downloaded so far'
+  );
 
   const tracker = createProgressDisplay(recordCount);
   const avgArticlesPerChunk = recordCount > 0 ? recordCount / chunks.length : 0;
