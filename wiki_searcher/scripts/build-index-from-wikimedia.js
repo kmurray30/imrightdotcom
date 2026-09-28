@@ -106,7 +106,6 @@ const STALL_TIMEOUT_MS = 30_000; // abort a chunk download if no bytes arrive fo
 
 const PROGRESS_BAR_WIDTH = 30; // fitToTerminal() truncates safely on a narrow terminal, so there's no need to keep this cramped for width's sake
 const PROGRESS_RENDER_INTERVAL_MS = 200;
-const SPEED_WINDOW_MS = 5000; // recent-window speed, more responsive than a lifetime average on a multi-hour download
 
 function formatGB(bytes) {
   return (bytes / 1e9).toFixed(2);
@@ -186,41 +185,49 @@ function tableRow(cells, widths, aligns = []) {
   );
 }
 
-/** A single rolling-window counter: total so far, plus a recent-window rate for ETA purposes. */
+/**
+ * A single counter: total so far, plus this RUN's lifetime-average rate for
+ * ETA purposes — total real progress divided by total elapsed time since
+ * this counter was created (effectively, since the run started; a counter
+ * is created and immediately used by createProgressDisplay, right before
+ * tracker.start()).
+ *
+ * Deliberately NOT a short rolling window: work here lands in bursts (a
+ * batch of ARTICLE_CONCURRENCY articles all finish together, then nothing
+ * until the next batch flushes), so a few-second window alternates between
+ * "everything in the batch landed just now" and "nothing has happened in
+ * seconds" — a real rate, just sampled at the wrong granularity — and the
+ * ETA it drives swings wildly tick to tick instead of settling anywhere.
+ * Averaging over the whole run smooths that out without needing to guess a
+ * window size that fits every batch-flush cadence.
+ */
 function createCounter() {
   let done = 0;
-  const samples = []; // { time, done } — pruned to the last SPEED_WINDOW_MS
+  let realDone = 0; // like `done`, but excludes burst credits (see addBurst) — only this counts toward the rate
+  const startTime = Date.now();
   return {
     add(n) {
       done += n;
+      realDone += n;
     },
     /**
-     * Credits `n` toward the total WITHOUT it registering as throughput in
-     * the rate window — for catch-up credits (a resumed chunk's checkpoint,
-     * a prior run's already-.done chunk) that reflect work finished in a
-     * PAST process, not something that just happened. Without this, such a
-     * credit lands inside the current 5s window and looks like an enormous
-     * burst of real-time throughput, producing a wildly-too-fast ETA that
-     * then "corrects" back down to reality as the window ages past it —
-     * exactly backwards from useful. Re-baselining every existing sample by
-     * the same amount keeps (done - oldest.done) — the rate's numerator —
-     * unchanged by the jump, while `done` itself (used for %) reflects it
-     * immediately.
+     * Credits `n` toward the total WITHOUT it counting toward the rate — for
+     * catch-up credits (a resumed chunk's checkpoint, a prior run's
+     * already-.done chunk) that reflect work finished in a PAST process, not
+     * something that happened during this run's measured window. Without
+     * this, such a credit would inflate realDone by work this run never
+     * actually spent time on, understating how long the remaining real work
+     * will take.
      */
     addBurst(n) {
       done += n;
-      for (const sample of samples) sample.done += n;
     },
     get done() {
-      return done; // raw cumulative total, no rolling-window bookkeeping — for callers that just want the number, not the rate
+      return done; // raw cumulative total, including burst credits — for callers that just want the number, not the rate
     },
     stats() {
-      const now = Date.now();
-      samples.push({ time: now, done });
-      while (samples.length > 1 && now - samples[0].time > SPEED_WINDOW_MS) samples.shift();
-      const oldest = samples[0];
-      const elapsedSec = (now - oldest.time) / 1000;
-      const rate = elapsedSec > 0 ? (done - oldest.done) / elapsedSec : 0;
+      const elapsedSec = (Date.now() - startTime) / 1000;
+      const rate = elapsedSec > 0 ? realDone / elapsedSec : 0;
       return { done, rate };
     },
   };
