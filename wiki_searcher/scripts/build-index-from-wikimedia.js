@@ -379,8 +379,23 @@ async function extractChunk(chunk) {
   return canonicalPath;
 }
 
+/**
+ * Appends a timestamped line to destDir/debug.log — the answer to "why is
+ * this stuck" for a multi-hour, multi-chunk-concurrent run where the single
+ * aggregate progress bar can't tell you which of the EMBED_CONCURRENCY
+ * chunks (if any) has stalled, or at which stage. `tail -f` this file
+ * instead of guessing from the outside (lsof, ps, etc.) next time something
+ * looks hung. fs.appendFileSync is safe to call from multiple concurrent
+ * async tasks here — this is one process with one event loop, not multiple
+ * OS processes racing to write, so there's no interleaving/corruption risk.
+ */
+function logDebug(message) {
+  const line = `[${new Date().toISOString()}] ${message}\n`;
+  fs.appendFileSync(path.join(destDir, 'debug.log'), line);
+}
+
 /** Streams one chunk's NDJSON, embeds every article's citation-adjacent paragraphs, then deletes the raw extracted file. */
-async function embedChunkArticles(ndjsonPath) {
+async function embedChunkArticles(chunkId, ndjsonPath) {
   const rl = readline.createInterface({ input: fs.createReadStream(ndjsonPath), crlfDelay: Infinity });
   const stats = { articles: 0, paragraphs: 0, alreadyCurrent: 0 };
 
@@ -404,6 +419,9 @@ async function embedChunkArticles(ndjsonPath) {
     stats.articles++;
     stats.paragraphs += result.paragraphCount;
     if (result.skipped) stats.alreadyCurrent++;
+    if (stats.articles % 1000 === 0) {
+      logDebug(`${chunkId}: embedding in progress — ${stats.articles} articles, ${stats.paragraphs} paragraphs so far`);
+    }
   }
 
   fs.rmSync(ndjsonPath, { force: true }); // already embedded — don't keep the raw extracted copy around
@@ -423,23 +441,28 @@ async function processChunk(chunk, accessToken, tracker, totals) {
   if (fs.existsSync(alreadyExtractedPath)) {
     // Downloaded and extracted in a prior run, but not yet embedded when
     // that run stopped — pick up from here instead of re-downloading.
+    logDebug(`${chunk.chunkId}: resuming from already-extracted .ndjson, skipping straight to embedding`);
     tracker.addBytes(chunk.contentLength);
     ndjsonPath = alreadyExtractedPath;
   } else {
+    logDebug(`${chunk.chunkId}: starting download`);
     await downloadOne(chunk.url, chunk.filePath, accessToken, tracker, {
       contentLength: chunk.contentLength,
       etag: chunk.etag,
       acceptsRanges: chunk.acceptsRanges,
     });
+    logDebug(`${chunk.chunkId}: download complete, extracting`);
     ndjsonPath = await extractChunk(chunk);
+    logDebug(`${chunk.chunkId}: extraction complete, starting embed`);
   }
 
-  const stats = await embedChunkArticles(ndjsonPath);
+  const stats = await embedChunkArticles(chunk.chunkId, ndjsonPath);
   totals.chunksDone++;
   totals.articles += stats.articles;
   totals.paragraphs += stats.paragraphs;
   totals.alreadyCurrent += stats.alreadyCurrent;
 
+  logDebug(`${chunk.chunkId}: done — ${stats.articles} articles, ${stats.paragraphs} paragraphs, ${stats.alreadyCurrent} already current`);
   fs.writeFileSync(donePath, new Date().toISOString());
 }
 
@@ -526,6 +549,11 @@ async function main() {
     `Total: ${formatGB(totalBytes)} GB across ${chunks.length} chunks. Downloading, extracting, and embedding ` +
       `${EMBED_CONCURRENCY} chunks at a time (never holding more than a few chunks' worth of raw data on disk)...`
   );
+  console.log(
+    `Per-chunk stage progress is logged to wiki-snapshots/debug.log — if the progress bar below stalls, ` +
+      `run "tail -f wiki-snapshots/debug.log" in another terminal to see exactly which chunk and stage it's stuck on.`
+  );
+  logDebug(`=== run started: ${chunks.length} chunks, ${formatGB(totalBytes)} GB total ===`);
 
   const tracker = createProgressTracker(totalBytes);
   const totals = { chunksDone: 0, articles: 0, paragraphs: 0, alreadyCurrent: 0 };
@@ -543,5 +571,10 @@ async function main() {
 main().catch((error) => {
   console.error('\nFatal error:', error.message);
   console.error('Re-run this script to resume — completed chunks (marked .done) are skipped, others pick up where they left off.');
+  try {
+    logDebug(`=== fatal error: ${error.message} ===`);
+  } catch {
+    // best-effort — don't let a logging failure hide the real error above
+  }
   process.exit(1);
 });

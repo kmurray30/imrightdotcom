@@ -43,6 +43,13 @@ export function getPool() {
       connectionString,
       ssl: shouldUseSsl(connectionString) ? { rejectUnauthorized: false } : false,
       max: 5,
+      // Without these, a connection that goes half-open (e.g. an SSH tunnel
+      // whose process died but whose local socket hasn't noticed yet) hangs
+      // a query forever with no error and no output — indistinguishable from
+      // the process just being slow. Bounding both means a dead tunnel fails
+      // loudly within seconds instead of silently stalling a multi-hour job.
+      connectionTimeoutMillis: 10_000,
+      statement_timeout: 30_000,
     });
     pool.on('error', (poolError) => {
       // Idle client errors (e.g. a dropped connection) shouldn't crash the process.
