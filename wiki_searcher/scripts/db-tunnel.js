@@ -28,6 +28,7 @@
  * Ctrl-C stops both this and the tunnel underneath it.
  */
 import { spawn } from 'child_process';
+import net from 'net';
 import pg from 'pg';
 import { loadEnv } from '../../imright/load-env.js';
 
@@ -39,6 +40,8 @@ const HEALTH_CHECK_TIMEOUT_MS = 5_000;
 const CONSECUTIVE_FAILURES_BEFORE_RESTART = 2; // tolerate one blip; two in a row means the tunnel is actually dead, not just slow
 const RESTART_BACKOFF_MS = 2_000; // brief pause before respawning, so a crash loop doesn't spin hot
 const FORCE_KILL_GRACE_MS = 3_000; // how long SIGTERM gets before SIGKILL
+const PORT_FREE_CHECK_INTERVAL_MS = 300;
+const PORT_FREE_TIMEOUT_MS = 10_000; // give up waiting and attempt the start anyway -- railway's own error is at least visible then, instead of hanging forever
 
 if (!process.env.DATABASE_URL) {
   console.error(
@@ -69,7 +72,45 @@ let child = null;
 let stopping = false;
 let consecutiveFailures = 0;
 
-function startTunnel() {
+/**
+ * Resolves once `port` is actually free to bind on 127.0.0.1, or after
+ * PORT_FREE_TIMEOUT_MS regardless (so a port that never frees up doesn't
+ * hang the supervisor forever -- it just proceeds and lets railway's own
+ * error surface, same as before this existed).
+ *
+ * Exists because killing `railway connect` (SIGTERM, waiting for its
+ * process-group 'exit') doesn't guarantee the OS has released the port it
+ * was listening on by the moment that 'exit' event fires — there can be a
+ * brief lag (lingering sockets, TIME_WAIT-ish states) between "the process
+ * is gone" and "the port is bindable again". Restarting the tunnel quickly
+ * after a kill (e.g. right after the machine wakes from sleep) can race
+ * that gap: `railway connect` refuses to start with "Local port X is
+ * already in use" even though nothing is actually using it anymore in any
+ * meaningful sense, it just hasn't been released yet. Waiting here instead
+ * of immediately spawning closes that race for every (re)start path — the
+ * first start, an exit-triggered restart, and a health-check-triggered one.
+ */
+function waitForPortFree(targetPort) {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + PORT_FREE_TIMEOUT_MS;
+    function attempt() {
+      const probe = net.createServer();
+      probe.once('error', () => {
+        if (Date.now() >= deadline) {
+          resolve();
+          return;
+        }
+        setTimeout(attempt, PORT_FREE_CHECK_INTERVAL_MS);
+      });
+      probe.once('listening', () => probe.close(() => resolve()));
+      probe.listen(targetPort, '127.0.0.1');
+    }
+    attempt();
+  });
+}
+
+async function startTunnel() {
+  await waitForPortFree(port);
   log(`⏳ starting — railway connect postgres --tunnel-only -P ${port}`);
   // detached so `railway` (and anything it forks internally, e.g. its own
   // ssh subprocess) lands in its own process group — killing that whole
