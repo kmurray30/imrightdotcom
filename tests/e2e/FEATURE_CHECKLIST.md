@@ -80,6 +80,7 @@ handling and overlapped/ran off-screen at phone width).
 | 62 | On mobile, Enter submits a comment (Shift+Enter for a newline) without needing the Post button visible | article.spec.js D39 mobile |
 | 66 | Every remaining guest-gated control (Bookmark/Follow/Comment/Visibility — Like is no longer gated, see #29/#40) renders normally and prompts via one shared modal only on click, instead of hiding behind inline "Sign up to..." text | article.spec.js D27 (guest-owner), D30 (guest), D38+D41 |
 | 67 | Delete an article: buried/muted trigger, owner-only, a plain confirm for a private/no-interaction article, a stronger email-match confirm for a public article with likes/comments/bookmarks, guests can delete their own | article.spec.js "Delete article" describe block |
+| 77 | Admin-only "View debug" link on any article, opening the full pipeline visualization (angles → wiki search/filter → link validation → tabloid generation → counterarguer) — durably persisted per article (survives a redeploy, unlike the old disk-cache-only CLI tool), 404s for anyone whose account isn't flagged is_admin (including guests) and for an article with no debug data yet | article.spec.js "Admin pipeline debug page" describe block |
 
 ## Visual legibility (found from real user reports, not covered by the areas above)
 | # | Feature | Test |

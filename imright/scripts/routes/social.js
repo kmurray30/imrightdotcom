@@ -7,8 +7,10 @@
 
 import { Router } from 'express';
 import { requireAccount } from '../require-account.js';
+import { requireAdmin } from '../require-admin.js';
 import { ensureOwner } from '../auth-accounts.js';
 import { HttpError } from '../http-error.js';
+import { buildHtml as buildDebugHtml } from '../generate-debug.js';
 import * as Articles from '../articles.js';
 
 export const socialRouter = Router();
@@ -81,6 +83,23 @@ socialRouter.delete('/articles/:id', async (req, res, next) => {
     if (!req.user) throw new HttpError(403, 'account_required');
     await Articles.deleteArticle({ articleId: req.params.id, userId: req.user.id });
     res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Admin-only: the full pipeline visualization (angles, wiki search/filter,
+// link validation, raw LLM inputs/outputs, counterarguer) for any article,
+// durable across redeploys — see schema.js's pipelineDebug docstring for why
+// this couldn't just stay the existing disk-cache-based CLI tool. Served as
+// a plain self-contained HTML page (buildHtml() already embeds its own CSS/
+// JS), not JSON for a React view — same reasoning as the CLI's debug output,
+// there's no reason to rebuild that visualization as a SPA page.
+socialRouter.get('/articles/:id/debug', requireAdmin, async (req, res, next) => {
+  try {
+    const debugData = await Articles.getDebugDataForArticle(req.params.id);
+    if (!debugData) throw new HttpError(404, 'debug_data_not_found');
+    res.type('html').send(buildDebugHtml(debugData));
   } catch (error) {
     next(error);
   }

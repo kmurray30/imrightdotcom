@@ -18,7 +18,7 @@ import fs from 'fs';
 import path from 'path';
 import { eq } from 'drizzle-orm';
 import { getDb, schema } from '../../../imright/scripts/db/index.js';
-import { createArticle } from '../../../imright/scripts/articles.js';
+import { createArticle, saveDebugData } from '../../../imright/scripts/articles.js';
 import { getArticleImagesRoot } from '../../../utils/image-cache.js';
 
 // A 1x1 transparent PNG — enough for the <img> to actually resolve (200, a
@@ -144,6 +144,22 @@ export async function seedArticle({
   await db.update(schema.articles).set({ isPublic }).where(eq(schema.articles.id, row.id));
   row.isPublic = isPublic;
   return { ...row, url: `/a/${row.id}` };
+}
+
+/** Flips an already-created account's is_admin flag directly (same effect as
+ * imright/scripts/grant-admin.js), so a test can exercise the admin-gated
+ * debug route without a signup flow that grants it. */
+export async function makeAdmin(userId) {
+  const db = getDb();
+  await db.update(schema.users).set({ isAdmin: true }).where(eq(schema.users.id, userId));
+}
+
+/** Seeds a pipeline_debug row directly — the real pipeline only ever writes
+ * one at the end of a full (slow, Grok-calling) run, so tests exercising the
+ * admin debug route go straight to the DB the same way seedArticle bypasses
+ * the pipeline for article content. */
+export async function seedDebugData(articleId, debugData = { slug: 'fixture-debug-run' }) {
+  await saveDebugData(articleId, debugData);
 }
 
 /** Directly sets denormalized engagement counters sky-high so a fixture

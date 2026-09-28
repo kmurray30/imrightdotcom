@@ -15,6 +15,7 @@ function toPublicUser(user) {
   return {
     id: user.id,
     isGuest: user.isGuest,
+    isAdmin: user.isAdmin ?? false,
     username: user.username ?? null,
     displayName: user.displayName,
     email: user.email ?? null,

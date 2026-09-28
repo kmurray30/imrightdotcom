@@ -63,6 +63,7 @@ function toPublicUser(row) {
   return {
     id: row.id,
     isGuest: row.isGuest,
+    isAdmin: row.isAdmin,
     username: row.username,
     displayName: row.displayName,
     email: row.email,
