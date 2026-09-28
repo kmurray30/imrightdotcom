@@ -164,12 +164,24 @@ async function attemptUpsert(pool, { title, wikitext, versionIdentifier, pageId 
   // whole process, bypassing the try/catch below entirely. The in-flight
   // client.query() call still rejects on its own and is handled normally;
   // this only stops the redundant raw socket error from being "unhandled".
-  client.on('error', (err) => {
+  const onClientError = (err) => {
     console.error(`[embed] DB connection error while embedding "${title}":`, err.message);
-  });
+  };
+  client.on('error', onClientError);
+  // pool.connect() hands back the SAME underlying client across many calls
+  // to this function (it's a pool of 5, reused for every article) -- leaving
+  // the listener above attached after release would pile up one more on
+  // every reuse of that connection, which is exactly what caused the
+  // "MaxListenersExceededWarning: 11 error listeners added to [Client]"
+  // seen in practice. Always pair release with removing our own listener
+  // first, on every exit path.
+  const release = (err) => {
+    client.removeListener('error', onClientError);
+    client.release(err);
+  };
   try {
     if (await isAlreadyCurrent(client, title, versionIdentifier)) {
-      client.release();
+      release();
       return { title, paragraphCount: 0, skipped: true };
     }
 
@@ -191,7 +203,7 @@ async function attemptUpsert(pool, { title, wikitext, versionIdentifier, pageId 
       );
     }
     await client.query('COMMIT');
-    client.release();
+    release();
     return { title, paragraphCount: paragraphs.length, skipped: false };
   } catch (error) {
     try {
@@ -201,7 +213,7 @@ async function attemptUpsert(pool, { title, wikitext, versionIdentifier, pageId 
       // nothing to roll back to. The original `error` below is what matters,
       // not whatever this rollback attempt raised.
     }
-    client.release(error); // tell pg-pool to discard this client rather than hand a possibly-broken connection to the next caller
+    release(error); // tell pg-pool to discard this client rather than hand a possibly-broken connection to the next caller
     throw error;
   }
 }

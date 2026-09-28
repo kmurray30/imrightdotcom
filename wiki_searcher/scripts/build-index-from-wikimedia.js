@@ -399,10 +399,22 @@ function logDebug(message) {
   fs.appendFileSync(path.join(destDir, 'debug.log'), line);
 }
 
-/** Streams one chunk's NDJSON, embeds every article's citation-adjacent paragraphs, then deletes the raw extracted file. */
+/**
+ * Streams one chunk's NDJSON, embeds every article's citation-adjacent
+ * paragraphs, then deletes the raw extracted file. Local CPU embedding of
+ * every paragraph, fully sequential (one article at a time, no internal
+ * concurrency here), is genuinely slow for a chunk with thousands of
+ * qualifying articles — logging on a fixed article-count threshold (the
+ * original approach) meant a chunk with fewer articles than that threshold
+ * produced zero visible progress for however long the whole thing took,
+ * indistinguishable from a real hang. Logging on a time interval instead
+ * (plus immediately on the very first article) adapts to that regardless of
+ * chunk size or speed.
+ */
 async function embedChunkArticles(chunkId, ndjsonPath) {
   const rl = readline.createInterface({ input: fs.createReadStream(ndjsonPath), crlfDelay: Infinity });
   const stats = { articles: 0, paragraphs: 0, alreadyCurrent: 0 };
+  let lastLoggedAt = 0;
 
   for await (const line of rl) {
     if (!line.trim()) continue;
@@ -424,8 +436,11 @@ async function embedChunkArticles(chunkId, ndjsonPath) {
     stats.articles++;
     stats.paragraphs += result.paragraphCount;
     if (result.skipped) stats.alreadyCurrent++;
-    if (stats.articles % 1000 === 0) {
+
+    const now = Date.now();
+    if (stats.articles === 1 || now - lastLoggedAt >= 10_000) {
       logDebug(`${chunkId}: embedding in progress — ${stats.articles} articles, ${stats.paragraphs} paragraphs so far`);
+      lastLoggedAt = now;
     }
   }
 
