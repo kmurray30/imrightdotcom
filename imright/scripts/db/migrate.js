@@ -34,6 +34,14 @@ export async function runMigrations() {
   // checked-out client, not the pool (which could hand out a different
   // connection per query).
   const client = await pool.connect();
+  // See wiki_searcher/embeddingIndex.js's identical listener for why this is
+  // needed: pg-pool removes its own error listener the moment a client is
+  // checked out, so an unexpected connection drop here would otherwise crash
+  // the process via an unhandled 'error' event instead of surfacing as a
+  // normal query rejection.
+  client.on('error', (err) => {
+    console.error('[migrate] DB connection error:', err.message);
+  });
   try {
     await client.query('SELECT pg_advisory_lock(hashtext($1))', [MIGRATION_LOCK_KEY]);
     await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });

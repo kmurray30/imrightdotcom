@@ -155,6 +155,17 @@ export async function upsertArticleEmbeddings({ title, wikitext, versionIdentifi
   }
 
   const client = await pool.connect();
+  // pg-pool removes its own idle-client error listener the instant a client
+  // is handed off via pool.connect() (see _acquireClient in pg-pool's
+  // source) -- from here until client.release(), an unexpected connection
+  // drop (e.g. a flaky SSH tunnel) has no listener at all unless we add one,
+  // which Node then treats as an unhandled 'error' event and crashes the
+  // whole process, bypassing the try/catch below entirely. The in-flight
+  // client.query() call still rejects on its own and is handled normally;
+  // this only stops the redundant raw socket error from being "unhandled".
+  client.on('error', (err) => {
+    console.error(`[embed] DB connection error while embedding "${title}":`, err.message);
+  });
   try {
     if (await isAlreadyCurrent(client, title, versionIdentifier)) {
       return { title, paragraphCount: 0, skipped: true };
