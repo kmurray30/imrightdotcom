@@ -106,6 +106,11 @@ const STALL_TIMEOUT_MS = 30_000; // abort a chunk download if no bytes arrive fo
 
 const PROGRESS_BAR_WIDTH = 30; // fitToTerminal() truncates safely on a narrow terminal, so there's no need to keep this cramped for width's sake
 const PROGRESS_RENDER_INTERVAL_MS = 200;
+// Long enough to span several ARTICLE_CONCURRENCY batch-flush cycles (so
+// Art/s doesn't swing between "a batch just landed" and "nothing yet," the
+// problem with the old 5s window), short enough to actually reflect a real
+// slowdown/speedup well before the whole-run average (ETA's basis) would.
+const RECENT_RATE_WINDOW_MS = 20_000;
 
 function formatGB(bytes) {
   return (bytes / 1e9).toFixed(2);
@@ -186,49 +191,61 @@ function tableRow(cells, widths, aligns = []) {
 }
 
 /**
- * A single counter: total so far, plus this RUN's lifetime-average rate for
- * ETA purposes — total real progress divided by total elapsed time since
- * this counter was created (effectively, since the run started; a counter
- * is created and immediately used by createProgressDisplay, right before
- * tracker.start()).
+ * A single counter reporting TWO different rates from the same underlying
+ * progress, deliberately biased differently:
  *
- * Deliberately NOT a short rolling window: work here lands in bursts (a
- * batch of ARTICLE_CONCURRENCY articles all finish together, then nothing
- * until the next batch flushes), so a few-second window alternates between
- * "everything in the batch landed just now" and "nothing has happened in
- * seconds" — a real rate, just sampled at the wrong granularity — and the
- * ETA it drives swings wildly tick to tick instead of settling anywhere.
- * Averaging over the whole run smooths that out without needing to guess a
- * window size that fits every batch-flush cadence.
+ *  - `rate`: this RUN's lifetime average (total real progress / total
+ *    elapsed time since the counter was created, effectively since the run
+ *    started) — what ETA is computed from. Stable on purpose: an ETA that
+ *    jumps around every tick is worse than useless, and a multi-hour/day job
+ *    shouldn't have its time-remaining estimate whipsawed by a few seconds
+ *    of variance.
+ *  - `recentRate`: a rolling window (RECENT_RATE_WINDOW_MS) over the same
+ *    real progress — what the Art/s column shows. More reactive than `rate`
+ *    on purpose: it's the "what's happening right now" number, and should
+ *    move if the run genuinely speeds up or slows down, well before that
+ *    shows up in a whole-run average.
+ *
+ * Both exclude burst credits (see addBurst) from their numerator — a
+ * resumed chunk's checkpoint or an already-.done chunk from a PRIOR process
+ * reflects work this run never spent any time on, so crediting it toward
+ * either rate would overstate real throughput, not just briefly (the old 5s
+ * window's problem) but for as long as that credit stays inside whichever
+ * window is looking at it.
  */
 function createCounter() {
   let done = 0;
-  let realDone = 0; // like `done`, but excludes burst credits (see addBurst) — only this counts toward the rate
+  let realDone = 0; // like `done`, but excludes burst credits — only this counts toward either rate
   const startTime = Date.now();
+  const recentSamples = []; // { time, realDone } — pruned to RECENT_RATE_WINDOW_MS, feeds recentRate only
   return {
     add(n) {
       done += n;
       realDone += n;
     },
     /**
-     * Credits `n` toward the total WITHOUT it counting toward the rate — for
-     * catch-up credits (a resumed chunk's checkpoint, a prior run's
-     * already-.done chunk) that reflect work finished in a PAST process, not
-     * something that happened during this run's measured window. Without
-     * this, such a credit would inflate realDone by work this run never
-     * actually spent time on, understating how long the remaining real work
-     * will take.
+     * Credits `n` toward the total WITHOUT it counting toward either rate —
+     * see the class-level comment above for why.
      */
     addBurst(n) {
       done += n;
     },
     get done() {
-      return done; // raw cumulative total, including burst credits — for callers that just want the number, not the rate
+      return done; // raw cumulative total, including burst credits — for callers that just want the number, not a rate
     },
     stats() {
-      const elapsedSec = (Date.now() - startTime) / 1000;
-      const rate = elapsedSec > 0 ? realDone / elapsedSec : 0;
-      return { done, rate };
+      const now = Date.now();
+
+      const lifetimeElapsedSec = (now - startTime) / 1000;
+      const rate = lifetimeElapsedSec > 0 ? realDone / lifetimeElapsedSec : 0;
+
+      recentSamples.push({ time: now, realDone });
+      while (recentSamples.length > 1 && now - recentSamples[0].time > RECENT_RATE_WINDOW_MS) recentSamples.shift();
+      const oldest = recentSamples[0];
+      const recentElapsedSec = (now - oldest.time) / 1000;
+      const recentRate = recentElapsedSec > 0 ? (realDone - oldest.realDone) / recentElapsedSec : rate;
+
+      return { done, rate, recentRate };
     },
   };
 }
@@ -272,13 +289,16 @@ function createProgressDisplay(totalArticles, totalBytes) {
   const aligns = ['left', 'right', 'right', 'right', 'right', 'right'];
 
   function render() {
-    const { done: articlesDone, rate: articleRate } = articles.stats();
+    // rate (lifetime average) drives the ETA; recentRate (short rolling
+    // window) drives the displayed Art/s — see createCounter's comment for
+    // why these are deliberately different numbers.
+    const { done: articlesDone, rate: lifetimeRate, recentRate: articleRate } = articles.stats();
     const { done: bytesDone } = bytes.stats();
 
     let cells;
     if (totalArticles > 0) {
       const remaining = totalArticles - articlesDone;
-      const etaSeconds = articleRate > 0 ? remaining / articleRate : NaN;
+      const etaSeconds = lifetimeRate > 0 ? remaining / lifetimeRate : NaN;
       const fraction = Math.min(1, articlesDone / totalArticles);
       const filled = Math.round(fraction * PROGRESS_BAR_WIDTH);
       const bar = '[' + '█'.repeat(filled) + '░'.repeat(PROGRESS_BAR_WIDTH - filled) + ']';
