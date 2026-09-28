@@ -112,44 +112,80 @@ function formatDuration(seconds) {
   return [h, m, s].map((n) => String(n).padStart(2, '0')).join(':');
 }
 
-/** Tracks aggregate download progress across all in-flight chunks and renders one combined status line. */
-function createProgressTracker(totalBytes) {
-  let downloadedBytes = 0;
-  const samples = []; // { time, bytes } — pruned to the last SPEED_WINDOW_MS
-  let lastRenderAt = 0;
+/** A single rolling-window counter: total so far, plus a recent-window rate for ETA purposes. */
+function createCounter() {
+  let done = 0;
+  const samples = []; // { time, done } — pruned to the last SPEED_WINDOW_MS
+  return {
+    add(n) {
+      done += n;
+    },
+    stats() {
+      const now = Date.now();
+      samples.push({ time: now, done });
+      while (samples.length > 1 && now - samples[0].time > SPEED_WINDOW_MS) samples.shift();
+      const oldest = samples[0];
+      const elapsedSec = (now - oldest.time) / 1000;
+      const rate = elapsedSec > 0 ? (done - oldest.done) / elapsedSec : 0;
+      return { done, rate };
+    },
+  };
+}
+
+/**
+ * Renders one combined status line, driven by ARTICLES EMBEDDED as the
+ * primary metric (bar/%/ETA), with bytes downloaded shown as secondary
+ * context. Articles, not bytes, are what actually track overall completion
+ * here: downloading is the fast part, and once the first EMBED_CONCURRENCY
+ * chunks finish downloading, the byte counter can sit still for a long time
+ * — sequential local CPU embedding of thousands of articles per chunk is
+ * the real bottleneck — while real work keeps happening in the background.
+ * A byte-only bar (the original design) looks stalled for exactly that
+ * reason even when everything's fine.
+ *
+ * Runs its own render interval rather than piggybacking on addArticles/
+ * addBytes calls, so the printed line updates at a steady cadence
+ * regardless of how bursty either counter's actual updates are.
+ */
+function createProgressDisplay(totalArticles) {
+  const articles = createCounter();
+  const bytes = createCounter();
+  let intervalId = null;
 
   function render() {
-    const now = Date.now();
-    samples.push({ time: now, bytes: downloadedBytes });
-    while (samples.length > 1 && now - samples[0].time > SPEED_WINDOW_MS) samples.shift();
+    const { done: articlesDone, rate: articleRate } = articles.stats();
+    const { done: bytesDone } = bytes.stats();
 
-    const oldest = samples[0];
-    const elapsedSec = (now - oldest.time) / 1000;
-    const speedBps = elapsedSec > 0 ? (downloadedBytes - oldest.bytes) / elapsedSec : 0;
-    const remainingBytes = totalBytes - downloadedBytes;
-    const etaSeconds = speedBps > 0 ? remainingBytes / speedBps : NaN;
-
-    const fraction = totalBytes > 0 ? Math.min(1, downloadedBytes / totalBytes) : 0;
-    const filled = Math.round(fraction * PROGRESS_BAR_WIDTH);
-    const bar = '█'.repeat(filled) + '░'.repeat(PROGRESS_BAR_WIDTH - filled);
-    const pct = (fraction * 100).toFixed(1).padStart(5, ' ');
-
-    process.stdout.write(
-      `\r[${bar}] ${pct}%  ${formatGB(downloadedBytes)} / ${formatGB(totalBytes)} GB` +
-        `  ${(speedBps / 1e6).toFixed(2)} MB/s  ETA ${formatDuration(etaSeconds)}   `
-    );
+    if (totalArticles > 0) {
+      const remaining = totalArticles - articlesDone;
+      const etaSeconds = articleRate > 0 ? remaining / articleRate : NaN;
+      const fraction = Math.min(1, articlesDone / totalArticles);
+      const filled = Math.round(fraction * PROGRESS_BAR_WIDTH);
+      const bar = '█'.repeat(filled) + '░'.repeat(PROGRESS_BAR_WIDTH - filled);
+      const pct = (fraction * 100).toFixed(1).padStart(5, ' ');
+      process.stdout.write(
+        `\r[${bar}] ${pct}%  ${articlesDone.toLocaleString()} / ${totalArticles.toLocaleString()} articles` +
+          `  ${articleRate.toFixed(1)} articles/s  ETA ${formatDuration(etaSeconds)}  (${formatGB(bytesDone)} GB downloaded)   `
+      );
+    } else {
+      // No article-count denominator to compute a % or ETA against — fall back to raw counts.
+      process.stdout.write(`\r${articlesDone.toLocaleString()} articles processed, ${formatGB(bytesDone)} GB downloaded   `);
+    }
   }
 
   return {
+    addArticles(n) {
+      articles.add(n);
+    },
     addBytes(n) {
-      downloadedBytes += n;
-      const now = Date.now();
-      if (now - lastRenderAt >= PROGRESS_RENDER_INTERVAL_MS) {
-        render();
-        lastRenderAt = now;
-      }
+      bytes.add(n);
+    },
+    start() {
+      intervalId = setInterval(render, PROGRESS_RENDER_INTERVAL_MS);
+      intervalId.unref(); // don't let this timer alone keep the process alive if something else goes wrong before finish() runs
     },
     finish() {
+      if (intervalId) clearInterval(intervalId);
       render();
       process.stdout.write('\n');
     },
@@ -411,13 +447,21 @@ function logDebug(message) {
  * (plus immediately on the very first article) adapts to that regardless of
  * chunk size or speed.
  */
-async function embedChunkArticles(chunkId, ndjsonPath) {
+async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
   const rl = readline.createInterface({ input: fs.createReadStream(ndjsonPath), crlfDelay: Infinity });
   const stats = { articles: 0, paragraphs: 0, alreadyCurrent: 0 };
   let lastLoggedAt = 0;
 
   for await (const line of rl) {
     if (!line.trim()) continue;
+    // Counted here, before the parse/wikitext checks below, so the live
+    // article tracker's numerator converges with recordCount (the total
+    // record count across the whole corpus, used as its denominator)
+    // regardless of how many records get skipped for lacking wikitext —
+    // those are still "done" from a progress-percentage standpoint, just
+    // not embeddable.
+    tracker.addArticles(1);
+
     let article;
     try {
       article = JSON.parse(line);
@@ -448,11 +492,20 @@ async function embedChunkArticles(chunkId, ndjsonPath) {
   return stats;
 }
 
-/** Runs one chunk through its whole lifecycle: download -> extract -> embed -> cleanup -> mark done. */
-async function processChunk(chunk, accessToken, tracker, totals) {
+/**
+ * Runs one chunk through its whole lifecycle: download -> extract -> embed
+ * -> cleanup -> mark done. avgArticlesPerChunk credits an *estimate* to the
+ * live article tracker for a chunk that's already fully .done from a prior
+ * run — its actual per-article counting happened in that earlier process
+ * (and isn't persisted anywhere finer-grained than the .done marker itself),
+ * so without this a resumed run's progress display would understate true
+ * completion by however many chunks were already finished before it started.
+ */
+async function processChunk(chunk, accessToken, tracker, totals, avgArticlesPerChunk) {
   const donePath = path.join(destDir, `${chunk.chunkId}.done`);
   if (fs.existsSync(donePath)) {
     tracker.addBytes(chunk.contentLength); // already fully processed in a prior run
+    tracker.addArticles(avgArticlesPerChunk);
     return;
   }
 
@@ -476,7 +529,7 @@ async function processChunk(chunk, accessToken, tracker, totals) {
     logDebug(`${chunk.chunkId}: extraction complete, starting embed`);
   }
 
-  const stats = await embedChunkArticles(chunk.chunkId, ndjsonPath);
+  const stats = await embedChunkArticles(chunk.chunkId, ndjsonPath, tracker);
   totals.chunksDone++;
   totals.articles += stats.articles;
   totals.paragraphs += stats.paragraphs;
@@ -575,10 +628,16 @@ async function main() {
   );
   logDebug(`=== run started: ${chunks.length} chunks, ${formatGB(totalBytes)} GB total ===`);
 
-  const tracker = createProgressTracker(totalBytes);
+  const tracker = createProgressDisplay(recordCount);
+  const avgArticlesPerChunk = recordCount > 0 ? recordCount / chunks.length : 0;
   const totals = { chunksDone: 0, articles: 0, paragraphs: 0, alreadyCurrent: 0 };
 
-  await runWithConcurrency(chunks, (chunk) => processChunk(chunk, accessToken, tracker, totals), EMBED_CONCURRENCY);
+  tracker.start();
+  await runWithConcurrency(
+    chunks,
+    (chunk) => processChunk(chunk, accessToken, tracker, totals, avgArticlesPerChunk),
+    EMBED_CONCURRENCY
+  );
   tracker.finish();
 
   console.log(
