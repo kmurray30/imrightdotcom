@@ -167,6 +167,20 @@ function isRetryableConnectionError(error) {
   return typeof error?.message === 'string' && RETRYABLE_ERROR_MESSAGES.some((msg) => error.message.includes(msg));
 }
 
+let logConnectionWarning = console.error;
+
+/**
+ * Redirects this module's connection-drop warnings (below) away from a bare
+ * console.error — e.g. so a caller with its own live display (the progress
+ * table in build-index-from-wikimedia.js) can redraw around them instead of
+ * having them print mid-table and desync its in-place cursor tracking.
+ * Defaults to console.error, so nothing changes for callers that never call
+ * this (refresh-daily.js, build-index-from-ndjson.js).
+ */
+export function setConnectionWarningLogger(fn) {
+  logConnectionWarning = fn;
+}
+
 /** One attempt at the full upsert — pulled out of upsertArticleEmbeddings so that function can wrap it in a retry loop. */
 async function attemptUpsert(pool, { title, wikitext, versionIdentifier, pageId }) {
   const client = await pool.connect();
@@ -176,11 +190,11 @@ async function attemptUpsert(pool, { title, wikitext, versionIdentifier, pageId 
   // drop (e.g. a flaky SSH tunnel) has no listener at all unless we add one,
   // which Node then treats as an unhandled 'error' event and crashes the
   // whole process, bypassing the try/catch below entirely. The in-flight
-  // client.query() call still rejects on its own and is handled normally;
-  // this only stops the redundant raw socket error from being "unhandled".
-  const onClientError = (err) => {
-    console.error(`[embed] DB connection error while embedding "${title}":`, err.message);
-  };
+  // client.query() call still rejects on its own and surfaces through the
+  // retry loop's own (louder, more useful) warning below -- so this one
+  // stays silent on purpose, purely to stop the raw socket error from being
+  // "unhandled"; logging it too would just print the same drop twice.
+  const onClientError = () => {};
   client.on('error', onClientError);
   // pool.connect() hands back the SAME underlying client across many calls
   // to this function (it's a pool of 5, reused for every article) -- leaving
@@ -299,10 +313,7 @@ export async function upsertArticleEmbeddings({ title, wikitext, versionIdentifi
     } catch (error) {
       if (!isRetryableConnectionError(error)) throw error;
       const delayMs = Math.min(DB_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), DB_RETRY_MAX_DELAY_MS);
-      console.error(
-        `[embed] DB connection problem while embedding "${title}" (attempt ${attempt}): ${error.message} ` +
-          `— retrying in ${(delayMs / 1000).toFixed(0)}s...`
-      );
+      logConnectionWarning(`⚠ connection lost (attempt ${attempt}) — ${error.message}, retrying in ${(delayMs / 1000).toFixed(0)}s`);
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }

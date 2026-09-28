@@ -78,7 +78,7 @@ import { promisify } from 'util';
 import { loadEnv } from '../../imright/load-env.js';
 import { getAccessToken } from '../../utils/wikimediaAuth.js';
 import { callExternalApi, HttpStatusError, timeoutSignal } from '../../utils/external-api.js';
-import { upsertArticleEmbeddings } from '../embeddingIndex.js';
+import { upsertArticleEmbeddings, setConnectionWarningLogger } from '../embeddingIndex.js';
 import { setLogger as setEmbedLogger } from '../textEmbeddings.js';
 
 loadEnv();
@@ -312,6 +312,12 @@ function createProgressDisplay(totalArticles, totalBytes) {
     if (isTTY) process.stdout.write('\x1b[2B');
   }
 
+  function printHeaderBlock() {
+    console.log(tableBorder(widths));
+    console.log(tableRow(headers, widths, headers.map(() => 'center')));
+    console.log(tableBorder(widths));
+  }
+
   return {
     addArticles(n) {
       articles.add(n);
@@ -327,9 +333,7 @@ function createProgressDisplay(totalArticles, totalBytes) {
     },
     totalArticles,
     start() {
-      console.log(tableBorder(widths));
-      console.log(tableRow(headers, widths, headers.map(() => 'center')));
-      console.log(tableBorder(widths));
+      printHeaderBlock();
       render(); // first data row — cursor ends up mid-row, no newline yet
       if (isTTY) {
         process.stdout.write(`\n${tableBorder(widths)}\n`); // closes the row's line, prints the bottom border, lands on a fresh line below it
@@ -338,6 +342,27 @@ function createProgressDisplay(totalArticles, totalBytes) {
         intervalId = setInterval(render, PROGRESS_RENDER_INTERVAL_MS);
       }
       intervalId.unref(); // don't let this timer alone keep the process alive if something else goes wrong before finish() runs
+    },
+    /**
+     * Prints a one-off message (a connection warning, say) above a freshly
+     * reprinted table, instead of letting it land mid-table and desync
+     * renderInPlace's "row is always 2 lines above the resting cursor"
+     * assumption. The whole block (top border, header, separator, row,
+     * bottom border — 5 lines) sits directly above that resting position, so
+     * jumping up 5, wiping everything from there to the end of the screen,
+     * and rebuilding it the same way start() originally laid it out restores
+     * that same invariant for every renderInPlace tick afterward.
+     */
+    logWarning(message) {
+      if (!isTTY) {
+        console.log(message); // no cursor tricks to worry about when this isn't a real terminal
+        return;
+      }
+      process.stdout.write('\x1b[5A\r\x1b[0J');
+      console.log(message);
+      printHeaderBlock();
+      render();
+      process.stdout.write(`\n${tableBorder(widths)}\n`);
     },
     finish() {
       if (intervalId) clearInterval(intervalId);
@@ -858,6 +883,13 @@ async function main() {
   const tracker = createProgressDisplay(recordCount, totalBytes);
   const avgArticlesPerChunk = recordCount > 0 ? recordCount / chunks.length : 0;
   const totals = { chunksDone: 0, articles: 0, paragraphs: 0, alreadyCurrent: 0 };
+
+  // Routes DB connection-drop warnings through the table (full redraw, not a
+  // bare console.error mid-row) as well as into debug.log for later tailing.
+  setConnectionWarningLogger((message) => {
+    logDebug(message);
+    tracker.logWarning(message);
+  });
 
   tracker.start();
   await runWithConcurrency(
