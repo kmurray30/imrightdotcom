@@ -41,6 +41,14 @@
  *     hasn't changed) — so even re-processing an already-done chunk is
  *     cheap, this just avoids the wasted re-download/re-extract on top.
  *
+ * The chunk list and sizing pass (identifier lookup + a HEAD per chunk) are
+ * cached to destDir/snapshot-metadata.json after the first run, since that
+ * data only changes when Wikimedia rotates the snapshot (monthly on the free
+ * tier) — every resume was otherwise repeating the exact same 436 HEAD
+ * requests, which is also what kept tripping the rate limit before a run
+ * even got to downloading anything. Delete that file to force a fresh
+ * lookup (e.g. if you suspect the snapshot rotated).
+ *
  * Concurrency: CONCURRENCY (6) governs the network-only sizing pass, well
  * under Wikimedia Enterprise's free-tier 10 QPS limit. EMBED_CONCURRENCY (4)
  * governs the full per-chunk pipeline once embedding (CPU-bound, and each
@@ -435,42 +443,85 @@ async function processChunk(chunk, accessToken, tracker, totals) {
   fs.writeFileSync(donePath, new Date().toISOString());
 }
 
+/**
+ * The chunk list and each chunk's {contentLength, etag, acceptsRanges} only
+ * change when Wikimedia rotates this identifier's snapshot (monthly on the
+ * free tier) — re-fetching them on every run/resume was 1 + 436 requests for
+ * data that's almost always identical to last time, and the sole reason the
+ * sizing pass kept tripping the free tier's rate limit. Cached here, keyed by
+ * identifier; delete the file (or change the identifier) to force a refresh.
+ * If the snapshot did rotate underneath a stale cache, downloadOne's own
+ * final size check still catches it (throws on a mismatch) rather than
+ * silently writing wrong data — this is a speed optimization, not a
+ * correctness dependency.
+ */
+function loadCachedSnapshotMetadata() {
+  const cachePath = path.join(destDir, 'snapshot-metadata.json');
+  if (!fs.existsSync(cachePath)) return null;
+  try {
+    const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+    if (cached.identifier !== identifier || !Array.isArray(cached.chunks)) return null;
+    return cached;
+  } catch {
+    return null; // corrupt/partial cache file — treat as absent, re-fetch
+  }
+}
+
+function saveSnapshotMetadata(recordCount, chunks) {
+  const cachePath = path.join(destDir, 'snapshot-metadata.json');
+  fs.writeFileSync(cachePath, JSON.stringify({ identifier, recordCount, chunks }, null, 2));
+}
+
 async function main() {
   fs.mkdirSync(destDir, { recursive: true });
   const accessToken = await getAccessToken();
 
-  console.log(`Looking up chunks for ${identifier}...`);
-  const info = await fetchJson(`${API_BASE}/v2/snapshots/${identifier}`, accessToken, 'POST');
-  const chunkIds = info.chunks ?? [];
-  if (chunkIds.length === 0) {
-    throw new Error(`No chunks found for ${identifier} — double-check the identifier.`);
+  let chunks;
+  let recordCount;
+  const cached = loadCachedSnapshotMetadata();
+  if (cached) {
+    chunks = cached.chunks;
+    recordCount = cached.recordCount;
+    console.log(
+      `Using cached chunk list from a previous run (${chunks.length} chunks, ${recordCount ?? '?'} articles) — ` +
+        `delete wiki-snapshots/snapshot-metadata.json to force a fresh lookup.`
+    );
+  } else {
+    console.log(`Looking up chunks for ${identifier}...`);
+    const info = await fetchJson(`${API_BASE}/v2/snapshots/${identifier}`, accessToken, 'POST');
+    const chunkIds = info.chunks ?? [];
+    if (chunkIds.length === 0) {
+      throw new Error(`No chunks found for ${identifier} — double-check the identifier.`);
+    }
+    recordCount = info.record_count;
+
+    chunks = chunkIds.map((chunkId) => ({
+      chunkId,
+      url: `${API_BASE}/v2/snapshots/${identifier}/chunks/${chunkId}/download`,
+      filePath: path.join(destDir, `${chunkId}.tar.gz`),
+    }));
+
+    console.log(`${chunks.length} chunks, ${recordCount ?? '?'} articles total. Checking sizes (concurrency ${CONCURRENCY})...`);
+    let checked = 0;
+    await runWithConcurrency(
+      chunks,
+      async (chunk) => {
+        const { contentLength, etag, acceptsRanges } = await headDownload(chunk.url, accessToken);
+        chunk.contentLength = contentLength;
+        chunk.etag = etag;
+        chunk.acceptsRanges = acceptsRanges;
+        checked++;
+        if (checked % 25 === 0 || checked === chunks.length) {
+          process.stdout.write(`\r  ...checked ${checked}/${chunks.length} chunks`);
+        }
+      },
+      CONCURRENCY
+    );
+    process.stdout.write('\n');
+    saveSnapshotMetadata(recordCount, chunks);
   }
 
-  const chunks = chunkIds.map((chunkId) => ({
-    chunkId,
-    url: `${API_BASE}/v2/snapshots/${identifier}/chunks/${chunkId}/download`,
-    filePath: path.join(destDir, `${chunkId}.tar.gz`),
-  }));
-
-  console.log(`${chunks.length} chunks, ${info.record_count ?? '?'} articles total. Checking sizes (concurrency ${CONCURRENCY})...`);
-  let totalBytes = 0;
-  let checked = 0;
-  await runWithConcurrency(
-    chunks,
-    async (chunk) => {
-      const { contentLength, etag, acceptsRanges } = await headDownload(chunk.url, accessToken);
-      chunk.contentLength = contentLength;
-      chunk.etag = etag;
-      chunk.acceptsRanges = acceptsRanges;
-      totalBytes += contentLength;
-      checked++;
-      if (checked % 25 === 0 || checked === chunks.length) {
-        process.stdout.write(`\r  ...checked ${checked}/${chunks.length} chunks`);
-      }
-    },
-    CONCURRENCY
-  );
-  process.stdout.write('\n');
+  const totalBytes = chunks.reduce((sum, chunk) => sum + chunk.contentLength, 0);
   console.log(
     `Total: ${formatGB(totalBytes)} GB across ${chunks.length} chunks. Downloading, extracting, and embedding ` +
       `${EMBED_CONCURRENCY} chunks at a time (never holding more than a few chunks' worth of raw data on disk)...`
