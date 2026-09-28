@@ -92,7 +92,15 @@ const API_BASE = 'https://api.enterprise.wikimedia.com';
 const identifier = process.argv[2] || 'enwiki_namespace_0';
 const destDir = process.argv[3] || './wiki-snapshots';
 const CONCURRENCY = 6; // sizing pass only — pure network, raise if you're on a paid plan with a higher QPS limit
-const EMBED_CONCURRENCY = 4; // full download+extract+embed pipeline — keep at/below the DB pool's max (5)
+const EMBED_CONCURRENCY = 4; // chunks in flight at once — bounds peak disk usage (raw archive + extracted NDJSON per chunk), not DB load
+// Articles processed concurrently WITHIN each chunk. upsertArticleEmbeddings
+// spends most of its wall-clock time waiting on DB round-trips over a
+// tunnel to a remote Postgres, not on local CPU — processing them one at a
+// time (the original design) left that wait time completely unoverlapped.
+// Combined with EMBED_CONCURRENCY, this is EMBED_CONCURRENCY * this many
+// simultaneous DB connections, so DB_POOL_MAX below is sized to match.
+const ARTICLE_CONCURRENCY = 8;
+process.env.DB_POOL_MAX ??= String(EMBED_CONCURRENCY * ARTICLE_CONCURRENCY + 2); // +2 headroom for other occasional queries (refresh-daily.js, etc. sharing the same Postgres); only takes effect if the user hasn't already set this themselves
 const METADATA_TIMEOUT_MS = 15_000; // HEAD/info calls should be fast; don't hang forever if one stalls
 const STALL_TIMEOUT_MS = 30_000; // abort a chunk download if no bytes arrive for this long
 
@@ -186,6 +194,23 @@ function createCounter() {
     add(n) {
       done += n;
     },
+    /**
+     * Credits `n` toward the total WITHOUT it registering as throughput in
+     * the rate window — for catch-up credits (a resumed chunk's checkpoint,
+     * a prior run's already-.done chunk) that reflect work finished in a
+     * PAST process, not something that just happened. Without this, such a
+     * credit lands inside the current 5s window and looks like an enormous
+     * burst of real-time throughput, producing a wildly-too-fast ETA that
+     * then "corrects" back down to reality as the window ages past it —
+     * exactly backwards from useful. Re-baselining every existing sample by
+     * the same amount keeps (done - oldest.done) — the rate's numerator —
+     * unchanged by the jump, while `done` itself (used for %) reflects it
+     * immediately.
+     */
+    addBurst(n) {
+      done += n;
+      for (const sample of samples) sample.done += n;
+    },
     get done() {
       return done; // raw cumulative total, no rolling-window bookkeeping — for callers that just want the number, not the rate
     },
@@ -265,9 +290,34 @@ function createProgressDisplay(totalArticles, totalBytes) {
     process.stdout.write(fitToTerminal(tableRow(cells, widths, aligns)));
   }
 
+  // Only do real cursor-repositioning when stdout is an actual terminal —
+  // on a non-TTY (redirected to a file, piped) these ANSI codes would just
+  // be written as literal garbage characters, and there's no "line above"
+  // to move back up to anyway.
+  const isTTY = Boolean(process.stdout.isTTY);
+
+  /**
+   * Re-renders the data row in place while keeping a static bottom border
+   * permanently visible below it. The row sits one line above the bottom
+   * border, which sits one line above wherever the cursor currently rests
+   * (see start(), which leaves the cursor there right after printing the
+   * border) — so: move up 2 lines to reach the row, rewrite it, move back
+   * down 2 to restore the resting position for the next call. Cursor-up/
+   * down (not newlines) are pure repositioning within the terminal's
+   * existing rows; they don't insert anything.
+   */
+  function renderInPlace() {
+    if (isTTY) process.stdout.write('\x1b[2A');
+    render();
+    if (isTTY) process.stdout.write('\x1b[2B');
+  }
+
   return {
     addArticles(n) {
       articles.add(n);
+    },
+    addArticlesBurst(n) {
+      articles.addBurst(n);
     },
     addBytes(n) {
       bytes.add(n);
@@ -280,14 +330,23 @@ function createProgressDisplay(totalArticles, totalBytes) {
       console.log(tableBorder(widths));
       console.log(tableRow(headers, widths, headers.map(() => 'center')));
       console.log(tableBorder(widths));
-      render();
-      intervalId = setInterval(render, PROGRESS_RENDER_INTERVAL_MS);
+      render(); // first data row — cursor ends up mid-row, no newline yet
+      if (isTTY) {
+        process.stdout.write(`\n${tableBorder(widths)}\n`); // closes the row's line, prints the bottom border, lands on a fresh line below it
+        intervalId = setInterval(renderInPlace, PROGRESS_RENDER_INTERVAL_MS);
+      } else {
+        intervalId = setInterval(render, PROGRESS_RENDER_INTERVAL_MS);
+      }
       intervalId.unref(); // don't let this timer alone keep the process alive if something else goes wrong before finish() runs
     },
     finish() {
       if (intervalId) clearInterval(intervalId);
-      render();
-      process.stdout.write(`\n${tableBorder(widths)}\n`);
+      if (isTTY) {
+        renderInPlace(); // one final in-place update with the true final numbers; the bottom border is already in place from start()
+      } else {
+        render();
+        process.stdout.write(`\n${tableBorder(widths)}\n`);
+      }
     },
   };
 }
@@ -555,25 +614,24 @@ function saveLineCheckpoint(chunkId, lineNumber) {
 
 /**
  * Streams one chunk's NDJSON, embeds every article's citation-adjacent
- * paragraphs, then deletes the raw extracted file. Local CPU embedding of
- * every paragraph, fully sequential (one article at a time, no internal
- * concurrency here), is genuinely slow for a chunk with thousands of
- * qualifying articles — logging on a fixed article-count threshold (the
- * original approach) meant a chunk with fewer articles than that threshold
- * produced zero visible progress for however long the whole thing took,
- * indistinguishable from a real hang. Logging on a time interval instead
- * (plus immediately on the very first article) adapts to that regardless of
- * chunk size or speed.
+ * paragraphs, then deletes the raw extracted file.
  *
- * Also checkpoints its own line position (same time interval as the debug
- * log) to progressCheckpointPath(chunkId), so a crash mid-chunk — this
- * corpus's tunnel has been flaky enough that "mid-chunk" is a real, repeated
- * case, not a hypothetical — doesn't force the NEXT run to re-stream the
- * whole file from line 1. A restart resumes from the checkpoint and credits
- * that many articles to the live tracker immediately, instead of the
- * progress display resetting to 0 while quietly re-doing (cheap, since
- * upsertArticleEmbeddings skips anything already current, but not free)
- * everything already embedded before the crash.
+ * Processes ARTICLE_CONCURRENCY articles at a time (read into a batch, all
+ * awaited together via Promise.all) rather than one at a time — each
+ * upsertArticleEmbeddings call spends most of its wall-clock time waiting on
+ * DB round-trips over a tunnel to a remote Postgres, not on local CPU, so
+ * overlapping several is a close-to-linear speedup up to whatever the DB/
+ * tunnel can actually sustain concurrently. Batches (not a fully streaming
+ * worker pool) specifically because the checkpoint below needs a clean
+ * "everything up to line N is definitely done" boundary: with a bounded
+ * batch awaited via Promise.all, the checkpoint only ever advances past a
+ * batch that has FULLY completed, so a crash mid-batch can't leave the
+ * checkpoint claiming more progress than actually landed in Postgres.
+ *
+ * Logs (and checkpoints) on a time interval rather than a fixed article
+ * count, so a chunk with few qualifying articles (or one that's just slow)
+ * still produces visible progress instead of looking indistinguishable from
+ * a hang for however long the whole chunk takes.
  */
 async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
   const resumeFromLine = loadLineCheckpoint(chunkId);
@@ -583,43 +641,41 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
   let lineNumber = 0;
 
   if (resumeFromLine > 0) {
-    tracker.addArticles(resumeFromLine);
+    tracker.addArticlesBurst(resumeFromLine);
     logDebug(`${chunkId}: resuming embed from line ${resumeFromLine} (checkpoint from a prior run)`);
   }
 
-  for await (const line of rl) {
-    lineNumber++;
-    if (lineNumber <= resumeFromLine) continue; // already accounted for by a prior run's checkpoint
-    if (!line.trim()) continue;
-    // Counted here, before the parse/wikitext checks below, so the live
-    // article tracker's numerator converges with recordCount (the total
-    // record count across the whole corpus, used as its denominator)
-    // regardless of how many records get skipped for lacking wikitext —
-    // those are still "done" from a progress-percentage standpoint, just
-    // not embeddable.
-    tracker.addArticles(1);
+  let batch = [];
 
-    let article;
-    try {
-      article = JSON.parse(line);
-    } catch {
-      article = null; // still checkpoint past this line below rather than aborting the whole chunk
-    }
-    const wikitext = article?.article_body?.wikitext;
-    if (article && wikitext) {
-      const result = await upsertArticleEmbeddings({
-        title: article.name,
-        wikitext,
-        versionIdentifier: article.version?.identifier,
-        pageId: article.identifier,
-      });
-      stats.articles++;
-      stats.paragraphs += result.paragraphCount;
-      if (result.skipped) stats.alreadyCurrent++;
-    } // else: malformed line or a record with no embeddable body (deleted/visibility-changed/empty) — nothing to embed, but still a line to check past on resume
+  async function flushBatch() {
+    if (batch.length === 0) return;
 
+    await Promise.all(
+      batch.map(async ({ article }) => {
+        const wikitext = article?.article_body?.wikitext;
+        if (!article || !wikitext) return; // malformed line or a record with no embeddable body (deleted/visibility-changed/empty)
+        const result = await upsertArticleEmbeddings({
+          title: article.name,
+          wikitext,
+          versionIdentifier: article.version?.identifier,
+          pageId: article.identifier,
+        });
+        stats.articles++;
+        stats.paragraphs += result.paragraphCount;
+        if (result.skipped) stats.alreadyCurrent++;
+      })
+    );
+
+    // Counted per line in the batch (not just embeddable ones), so the live
+    // tracker's numerator converges with recordCount (the corpus-wide
+    // denominator) regardless of how many records get skipped for lacking
+    // wikitext — those are still "done" from a progress-percentage
+    // standpoint, just not embeddable.
+    tracker.addArticles(batch.length);
+
+    const lastLineInBatch = batch[batch.length - 1].lineNumber;
     const now = Date.now();
-    if (lineNumber === resumeFromLine + 1 || now - lastLoggedAt >= 10_000) {
+    if (lastLoggedAt === 0 || now - lastLoggedAt >= 10_000) {
       // Both counts, not just this chunk's own: "this session" alone tells
       // you this one chunk is alive, but not how the actual job (the thing
       // anyone tailing debug.log actually cares about) is doing overall.
@@ -629,10 +685,29 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
         `${chunkId}: embedding in progress — ${stats.articles} articles, ${stats.paragraphs} paragraphs this chunk` +
           ` | overall: ${formatCount(overallDone)}/${formatCount(tracker.totalArticles)} articles (${overallPct}%)`
       );
-      saveLineCheckpoint(chunkId, lineNumber);
+      saveLineCheckpoint(chunkId, lastLineInBatch); // only ever advances past a batch that Promise.all above has already fully completed
       lastLoggedAt = now;
     }
+    batch = [];
   }
+
+  for await (const line of rl) {
+    lineNumber++;
+    if (lineNumber <= resumeFromLine) continue; // already accounted for by a prior run's checkpoint
+    if (!line.trim()) continue;
+
+    let article;
+    try {
+      article = JSON.parse(line);
+    } catch {
+      article = null; // still counted/checkpointed below rather than aborting the whole chunk
+    }
+    batch.push({ article, lineNumber });
+    if (batch.length >= ARTICLE_CONCURRENCY) {
+      await flushBatch();
+    }
+  }
+  await flushBatch(); // final partial batch
 
   fs.rmSync(progressCheckpointPath(chunkId), { force: true }); // chunk fully embedded — checkpoint no longer needed, .done supersedes it
   fs.rmSync(ndjsonPath, { force: true }); // already embedded — don't keep the raw extracted copy around
@@ -652,7 +727,7 @@ async function processChunk(chunk, accessToken, tracker, totals, avgArticlesPerC
   const donePath = path.join(destDir, `${chunk.chunkId}.done`);
   if (fs.existsSync(donePath)) {
     tracker.addBytes(chunk.contentLength); // already fully processed in a prior run
-    tracker.addArticles(avgArticlesPerChunk);
+    tracker.addArticlesBurst(avgArticlesPerChunk);
     return;
   }
 

@@ -188,18 +188,45 @@ async function attemptUpsert(pool, { title, wikitext, versionIdentifier, pageId 
     const paragraphs = extractCitableParagraphs(wikitext ?? '');
 
     await client.query('BEGIN');
-    if (pageId != null) {
-      await client.query('DELETE FROM wiki_paragraph_embeddings WHERE page_id = $1 AND title != $2', [pageId, title]);
-    }
-    await client.query('DELETE FROM wiki_paragraph_embeddings WHERE title = $1', [title]);
+    // One combined DELETE instead of two separate round-trips. When pageId
+    // is null, `page_id = $2` compares against SQL NULL, which is never
+    // true for any row — so the second branch simply never matches, with
+    // no need for an explicit "IS NOT NULL" guard.
+    await client.query('DELETE FROM wiki_paragraph_embeddings WHERE title = $1 OR (page_id = $2 AND title != $1)', [
+      title,
+      pageId ?? null,
+    ]);
 
-    for (let index = 0; index < paragraphs.length; index++) {
-      const { section, text } = paragraphs[index];
-      const embedding = await embedText(`${title} — ${section}: ${text}`);
+    // Embeddings still computed one at a time (embedText is CPU-bound
+    // locally, not worth complicating), but the writes land in a single
+    // multi-row INSERT instead of one round-trip per paragraph — this is
+    // the single biggest lever here: an article with 5 paragraphs went from
+    // ~7 DB round-trips (2 deletes + 5 inserts) to 2 (1 delete + 1 insert),
+    // and every one of those round-trips crosses a tunnel to a remote DB.
+    if (paragraphs.length > 0) {
+      const embeddings = [];
+      for (const { section, text } of paragraphs) {
+        embeddings.push(await embedText(`${title} — ${section}: ${text}`));
+      }
+
+      const values = [];
+      const placeholders = paragraphs.map((paragraph, index) => {
+        const base = index * 7;
+        values.push(
+          title,
+          pageId ?? null,
+          index,
+          paragraph.section,
+          paragraph.text,
+          pgvector.toSql(embeddings[index]),
+          versionIdentifier ?? null
+        );
+        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7})`;
+      });
       await client.query(
         `INSERT INTO wiki_paragraph_embeddings (title, page_id, paragraph_index, section, paragraph_text, embedding, version_identifier)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [title, pageId ?? null, index, section, text, pgvector.toSql(embedding), versionIdentifier ?? null]
+         VALUES ${placeholders.join(', ')}`,
+        values
       );
     }
     await client.query('COMMIT');

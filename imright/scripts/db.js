@@ -42,7 +42,11 @@ export function getPool() {
     pool = new Pool({
       connectionString,
       ssl: shouldUseSsl(connectionString) ? { rejectUnauthorized: false } : false,
-      max: 5,
+      // Overridable per-process via DB_POOL_MAX (e.g. by the bulk embedding
+      // build, which processes many articles concurrently and needs more
+      // than the live app's usual 5) without changing the default every
+      // other process — including the deployed server — gets when unset.
+      max: Number(process.env.DB_POOL_MAX) || 5,
       // Without these, a connection that goes half-open (e.g. an SSH tunnel
       // whose process died but whose local socket hasn't noticed yet) hangs
       // a query forever with no error and no output — indistinguishable from
