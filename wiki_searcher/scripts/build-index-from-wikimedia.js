@@ -111,12 +111,22 @@ function formatCount(n) {
   return String(Math.round(n));
 }
 
+/** "3d14h" / "23h5m" / "5m32s" / "45s" — the two largest non-zero units only, not every unit down to seconds. */
 function formatDuration(seconds) {
-  if (!Number.isFinite(seconds) || seconds < 0) return '--:--:--';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  return [h, m, s].map((n) => String(n).padStart(2, '0')).join(':');
+  if (!Number.isFinite(seconds) || seconds < 0) return '--';
+  const totalSeconds = Math.floor(seconds);
+  const units = [
+    { label: 'd', value: Math.floor(totalSeconds / 86400) },
+    { label: 'h', value: Math.floor((totalSeconds % 86400) / 3600) },
+    { label: 'm', value: Math.floor((totalSeconds % 3600) / 60) },
+    { label: 's', value: totalSeconds % 60 },
+  ];
+  const firstNonZero = units.findIndex((u) => u.value > 0);
+  if (firstNonZero === -1) return '0s';
+  return units
+    .slice(firstNonZero, firstNonZero + 2)
+    .map((u) => `${u.value}${u.label}`)
+    .join('');
 }
 
 /**
