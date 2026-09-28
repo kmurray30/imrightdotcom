@@ -27,10 +27,13 @@
  * Leave this running in its own terminal for the duration of a long build;
  * Ctrl-C stops both this and the tunnel underneath it.
  */
-import { spawn } from 'child_process';
+import { spawn, execFile } from 'child_process';
+import { promisify } from 'util';
 import net from 'net';
 import pg from 'pg';
 import { loadEnv } from '../../imright/load-env.js';
+
+const execFileAsync = promisify(execFile);
 
 loadEnv();
 
@@ -73,6 +76,52 @@ let stopping = false;
 let consecutiveFailures = 0;
 
 /**
+ * Kills whatever is actually LISTENING on `targetPort` right now, whether or
+ * not it's a process this script itself started or still tracks.
+ *
+ * Waiting for a port to free on its own (see waitForPortFree below) only
+ * helps when whatever was using it is already gone or on its way out. It
+ * does nothing when the real problem is a still-ALIVE, ORPHANED tunnel
+ * process from a previous run — e.g. one that survived the Mac sleeping
+ * (observed live: a wake-from-sleep left a `railway connect` process
+ * running with a broken tunnel underneath it, spewing "channel N: open
+ * failed" forever, still holding the port, with no living parent process
+ * left to signal it). A brand-new invocation of this script has no
+ * `child` reference to that orphan at all, so it would otherwise just loop
+ * forever: wait for the port, time out, try to start, hit "already in
+ * use", exit, back off, repeat -- never actually clearing the real
+ * blocker. Finding and killing whatever owns the port directly, regardless
+ * of its origin, is the only thing that reliably unblocks this case.
+ */
+async function killWhateverIsOnPort(targetPort) {
+  let pids;
+  try {
+    const { stdout } = await execFileAsync('lsof', ['-ti', `:${targetPort}`]);
+    pids = [...new Set(stdout.split('\n').map((line) => line.trim()).filter(Boolean))];
+  } catch {
+    return; // lsof exits non-zero (with no output) when nothing matches the port -- nothing to kill
+  }
+  if (pids.length === 0) return;
+
+  log(`⚠ port ${targetPort} is already held by PID(s) ${pids.join(', ')} (likely a leftover from a previous run) — killing directly`);
+  for (const pid of pids) {
+    try {
+      process.kill(Number(pid), 'SIGTERM');
+    } catch {
+      // already gone
+    }
+  }
+  await new Promise((resolve) => setTimeout(resolve, FORCE_KILL_GRACE_MS));
+  for (const pid of pids) {
+    try {
+      process.kill(Number(pid), 'SIGKILL');
+    } catch {
+      // already gone, or SIGTERM alone finished the job
+    }
+  }
+}
+
+/**
  * Resolves once `port` is actually free to bind on 127.0.0.1, or after
  * PORT_FREE_TIMEOUT_MS regardless (so a port that never frees up doesn't
  * hang the supervisor forever -- it just proceeds and lets railway's own
@@ -89,6 +138,11 @@ let consecutiveFailures = 0;
  * meaningful sense, it just hasn't been released yet. Waiting here instead
  * of immediately spawning closes that race for every (re)start path — the
  * first start, an exit-triggered restart, and a health-check-triggered one.
+ *
+ * killWhateverIsOnPort (above) handles the OTHER half of this: something
+ * still alive and never going to free the port on its own. Both run before
+ * every start attempt -- kill anything that's there, then confirm the OS
+ * has actually let go of the port before trying to bind it ourselves.
  */
 function waitForPortFree(targetPort) {
   return new Promise((resolve) => {
@@ -110,6 +164,7 @@ function waitForPortFree(targetPort) {
 }
 
 async function startTunnel() {
+  await killWhateverIsOnPort(port);
   await waitForPortFree(port);
   log(`⏳ starting — railway connect postgres --tunnel-only -P ${port}`);
   // detached so `railway` (and anything it forks internally, e.g. its own
