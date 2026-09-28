@@ -73,11 +73,37 @@ function getExtractor() {
 }
 
 /**
+ * Embeds many texts in ONE forward pass instead of one at a time. The
+ * feature-extraction pipeline tokenizes the whole array together (padded to
+ * a common length) and runs a single batched pass through the model —
+ * verified against transformers.js's own source (FeatureExtractionPipeline
+ * ._call in src/pipelines.js): passing an array skips straight to one
+ * `this.model(model_inputs)` call, not one per item. For a small model like
+ * this, most of the per-call cost is fixed overhead (tokenizer dispatch,
+ * tensor allocation, thread-pool handoff into the native ONNX runtime), not
+ * the matmul itself — so batching is a much bigger lever than firing off N
+ * separate calls, even N concurrent ones.
+ *
+ * Returns embeddings in the same order as `texts`. Uses the Tensor's own
+ * `.tolist()` (reshapes its flat data by `.dims`) rather than reading `.data`
+ * directly — for a batch, `.data` is one flat Float32Array covering every
+ * item, and slicing it correctly by hand isn't worth the risk when `.tolist()`
+ * already does it.
+ * @param {string[]} texts
+ * @returns {Promise<number[][]>} One unit-normalized embedding vector per input text, each length EMBEDDING_DIMENSIONS.
+ */
+export async function embedTexts(texts) {
+  if (texts.length === 0) return [];
+  const extractor = await getExtractor();
+  const output = await extractor(texts, { pooling: 'mean', normalize: true });
+  return output.tolist();
+}
+
+/**
  * @param {string} text
  * @returns {Promise<number[]>} A unit-normalized embedding vector, length EMBEDDING_DIMENSIONS.
  */
 export async function embedText(text) {
-  const extractor = await getExtractor();
-  const output = await extractor(text, { pooling: 'mean', normalize: true });
-  return Array.from(output.data);
+  const [embedding] = await embedTexts([text]);
+  return embedding;
 }

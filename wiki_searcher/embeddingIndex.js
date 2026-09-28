@@ -26,7 +26,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import yaml from 'yaml';
 import { getPool } from '../imright/scripts/db.js';
-import { embedText } from './textEmbeddings.js';
+import { embedTexts } from './textEmbeddings.js';
 import { findAllRefs, stripWikiMarkup } from '../ref_extractor/parser/index.js';
 import { parseAllCiteTemplates } from '../ref_extractor/parser/citeTemplate.js';
 import pgvector from 'pgvector/pg';
@@ -119,14 +119,28 @@ function extractCitableParagraphs(wikitext) {
   return results;
 }
 
-/** True if this article's stored embeddings are already current — skips re-embedding on a re-run. */
+/**
+ * True if this article's stored embeddings are already current — skips
+ * re-embedding on a re-run.
+ *
+ * version_identifier is BIGINT, which node-postgres returns as a JS STRING
+ * (not a number — a bigint can exceed Number's safe integer range), while
+ * every caller passes versionIdentifier as whatever type it already had
+ * (usually a plain JS number, e.g. from Wikimedia's article.version.identifier
+ * being JSON-parsed). A strict `===` between those never matches ("100" !==
+ * 100), which means this check had never actually skipped anything —
+ * confirmed against a live Postgres, where re-embedding an article with an
+ * UNCHANGED version still went through the full extract+embed+write path
+ * every time instead of returning early. String-normalizing both sides
+ * fixes the comparison regardless of which type either side arrives as.
+ */
 async function isAlreadyCurrent(client, title, versionIdentifier) {
   if (versionIdentifier == null) return false;
   const { rows } = await client.query(
     'SELECT version_identifier FROM wiki_paragraph_embeddings WHERE title = $1 LIMIT 1',
     [title]
   );
-  return rows.length > 0 && rows[0].version_identifier === versionIdentifier;
+  return rows.length > 0 && rows[0].version_identifier != null && String(rows[0].version_identifier) === String(versionIdentifier);
 }
 
 const DB_RETRY_BASE_DELAY_MS = 2000;
@@ -187,59 +201,56 @@ async function attemptUpsert(pool, { title, wikitext, versionIdentifier, pageId 
 
     const paragraphs = extractCitableParagraphs(wikitext ?? '');
 
-    await client.query('BEGIN');
-    // One combined DELETE instead of two separate round-trips. When pageId
-    // is null, `page_id = $2` compares against SQL NULL, which is never
-    // true for any row — so the second branch simply never matches, with
-    // no need for an explicit "IS NOT NULL" guard.
-    await client.query('DELETE FROM wiki_paragraph_embeddings WHERE title = $1 OR (page_id = $2 AND title != $1)', [
-      title,
-      pageId ?? null,
-    ]);
-
-    // Embeddings still computed one at a time (embedText is CPU-bound
-    // locally, not worth complicating), but the writes land in a single
-    // multi-row INSERT instead of one round-trip per paragraph — this is
-    // the single biggest lever here: an article with 5 paragraphs went from
-    // ~7 DB round-trips (2 deletes + 5 inserts) to 2 (1 delete + 1 insert),
-    // and every one of those round-trips crosses a tunnel to a remote DB.
-    if (paragraphs.length > 0) {
-      const embeddings = [];
-      for (const { section, text } of paragraphs) {
-        embeddings.push(await embedText(`${title} — ${section}: ${text}`));
-      }
-
-      const values = [];
-      const placeholders = paragraphs.map((paragraph, index) => {
-        const base = index * 7;
-        values.push(
-          title,
-          pageId ?? null,
-          index,
-          paragraph.section,
-          paragraph.text,
-          pgvector.toSql(embeddings[index]),
-          versionIdentifier ?? null
-        );
-        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7})`;
-      });
-      await client.query(
-        `INSERT INTO wiki_paragraph_embeddings (title, page_id, paragraph_index, section, paragraph_text, embedding, version_identifier)
-         VALUES ${placeholders.join(', ')}`,
-        values
-      );
+    // When pageId is null, `page_id = $2` compares against SQL NULL, which
+    // is never true for any row — so the rename-cleanup branch simply never
+    // matches, with no need for an explicit "IS NOT NULL" guard.
+    if (paragraphs.length === 0) {
+      // Nothing to embed for this version, but a prior version's rows (or a
+      // renamed page's stale rows under this title/page_id) may still need
+      // cleaning up — a lone DELETE, no INSERT half to combine it with.
+      await client.query('DELETE FROM wiki_paragraph_embeddings WHERE title = $1 OR (page_id = $2 AND title != $1)', [
+        title,
+        pageId ?? null,
+      ]);
+      release();
+      return { title, paragraphCount: 0, skipped: false };
     }
-    await client.query('COMMIT');
+
+    // One batched forward pass for every paragraph in this article instead
+    // of one call per paragraph — see textEmbeddings.js's embedTexts.
+    const embeddings = await embedTexts(paragraphs.map(({ section, text }) => `${title} — ${section}: ${text}`));
+
+    // DELETE and INSERT combined into ONE round-trip via a data-modifying
+    // CTE, instead of two round-trips wrapped in BEGIN/COMMIT. The INSERT's
+    // SELECT is CROSS JOINed against the DELETE CTE's row count (always
+    // exactly one row, whether or not anything was deleted) purely to create
+    // a real data dependency between them — verified against a live
+    // Postgres that without this, an *unreferenced* data-modifying CTE runs
+    // "concurrently" with the main query (per Postgres's own documented
+    // semantics for WITH), so the INSERT's unique(title, paragraph_index)
+    // check can run against a snapshot that hasn't seen the DELETE yet and
+    // throw a duplicate-key error — which would have fired on every single
+    // re-embed of an article whose paragraph count didn't change.
+    const insertValues = [title, pageId ?? null];
+    const placeholders = paragraphs.map((paragraph, index) => {
+      const base = insertValues.length;
+      insertValues.push(index, paragraph.section, paragraph.text, pgvector.toSql(embeddings[index]), versionIdentifier ?? null);
+      return `($1::text, $2::bigint, $${base + 1}::int, $${base + 2}::text, $${base + 3}::text, $${base + 4}::vector, $${base + 5}::bigint)`;
+    });
+    await client.query(
+      `WITH deleted AS (
+         DELETE FROM wiki_paragraph_embeddings WHERE title = $1 OR (page_id = $2 AND title != $1)
+         RETURNING 1
+       )
+       INSERT INTO wiki_paragraph_embeddings (title, page_id, paragraph_index, section, paragraph_text, embedding, version_identifier)
+       SELECT v.title, v.page_id, v.paragraph_index, v.section, v.paragraph_text, v.embedding, v.version_identifier
+       FROM (VALUES ${placeholders.join(', ')}) AS v(title, page_id, paragraph_index, section, paragraph_text, embedding, version_identifier)
+       CROSS JOIN (SELECT count(*) FROM deleted) AS dep(n)`,
+      insertValues
+    );
     release();
     return { title, paragraphCount: paragraphs.length, skipped: false };
   } catch (error) {
-    try {
-      await client.query('ROLLBACK');
-    } catch {
-      // The connection is very likely already dead (often WHY we're here) --
-      // nothing to roll back to. The original `error` below is what matters,
-      // not whatever this rollback attempt raised.
-    }
     release(error); // tell pg-pool to discard this client rather than hand a possibly-broken connection to the next caller
     throw error;
   }
