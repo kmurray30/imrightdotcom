@@ -43,6 +43,13 @@
       "when": 1789946793662,
       "tag": "0005_publicize_guest_owned_private_articles",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790183775907,
+      "tag": "0006_add_article_views",
+      "breakpoints": true
     }
   ]
 }

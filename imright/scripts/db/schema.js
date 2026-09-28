@@ -92,6 +92,7 @@ export const articles = pgTable(
     likeCount: integer('like_count').notNull().default(0),
     commentCount: integer('comment_count').notNull().default(0),
     bookmarkCount: integer('bookmark_count').notNull().default(0),
+    viewCount: integer('view_count').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -99,6 +100,28 @@ export const articles = pgTable(
     index('articles_owner_user_id_idx').on(table.ownerUserId, table.createdAt.desc()),
     index('articles_is_public_idx').on(table.isPublic, table.createdAt.desc()).where(sql`${table.isPublic} = true`),
     index('articles_claim_text_trgm_idx').using('gin', sql`${table.claimText} gin_trgm_ops`),
+  ]
+);
+
+/** Dedupes views by the existing anonymous `imright_vid` visitor cookie
+ * (identity.js), not by users.id — a view has to work for a total drive-by
+ * visitor who has never generated or liked anything, and keying it to the
+ * guest/account identity system would mean minting a permanent `users` row
+ * on every single article pageview (the exact per-pageview-row problem that
+ * system was deliberately designed to avoid). visitor_id is therefore a bare
+ * cookie value, not a foreign key into users. */
+export const articleViews = pgTable(
+  'article_views',
+  {
+    articleId: uuid('article_id')
+      .notNull()
+      .references(() => articles.id, { onDelete: 'cascade' }),
+    visitorId: uuid('visitor_id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.articleId, table.visitorId] }),
+    index('article_views_article_id_idx').on(table.articleId),
   ]
 );
 

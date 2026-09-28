@@ -466,6 +466,46 @@ test.describe('Article page', () => {
     await expect(stats).toContainText('♥ 0');
     await expect(stats).toContainText('💬 0');
     await expect(stats).toContainText('🔖 0');
+    // Not asserting an exact view count here — visiting this same page is
+    // what records a view (see the dedicated test below), so a 0-vs-1 check
+    // here would race against that.
+    await expect(stats).toContainText('👁');
+  });
+
+  test('D42 views: viewing an article counts once per visitor, and a reload does not double-count', async ({
+    page,
+  }) => {
+    // Real request: view counts must be genuinely unique-per-visitor, not a
+    // raw pageview counter — reopening the same article in the same browser
+    // session must never increment it again. Deduped server-side against the
+    // existing anonymous visitor cookie (see articles.js's recordArticleView).
+    const owner = await seedGuestUser();
+    const article = await seedArticle({ ownerUserId: owner.id });
+
+    await page.goto(article.url);
+    await expect(page.locator('.article-stats')).toContainText('👁 1');
+
+    await page.reload();
+    await expect(page.locator('.article-stats')).toContainText('👁 1');
+    // Give a would-be duplicate view POST time to land before checking the
+    // database directly — a flaky bug here would show up as 2, not 1.
+    await page.waitForTimeout(300);
+    const check = await (await page.request.get(`/api/articles/${article.id}`)).json();
+    expect(check.article.viewCount).toBe(1);
+  });
+
+  test('D42 views: two different visitors viewing the same article both count', async ({ page, browser }) => {
+    const owner = await seedGuestUser();
+    const article = await seedArticle({ ownerUserId: owner.id });
+
+    await page.goto(article.url);
+    await expect(page.locator('.article-stats')).toContainText('👁 1');
+
+    const otherContext = await browser.newContext();
+    const otherPage = await otherContext.newPage();
+    await otherPage.goto(article.url);
+    await expect(otherPage.locator('.article-stats')).toContainText('👁 2');
+    await otherContext.close();
   });
 
   test('D42: the byline links to the owner\'s profile when they have an account', async ({ page }) => {

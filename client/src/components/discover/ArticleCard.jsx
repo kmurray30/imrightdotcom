@@ -25,6 +25,7 @@ export function ArticleCard({ article }) {
       <p className="article-card-byline">by {article.displayName || 'Anonymous'}</p>
       <div className="article-card-stats">
         <span>♥ {article.likeCount}</span>
+        <span>👁 {article.viewCount}</span>
         <span>💬 {article.commentCount}</span>
       </div>
     </Link>
