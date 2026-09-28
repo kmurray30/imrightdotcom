@@ -1,7 +1,7 @@
 // Feature area D — Article page (see FEATURE_CHECKLIST.md #25-41), plus the
 // cross-cutting guest-gating / direct-link requirements (#55-56).
 import { test, expect } from '@playwright/test';
-import { seedGuestUser, seedArticle, uniqueSlug } from './helpers/db.js';
+import { seedGuestUser, seedArticle, uniqueSlug, makeAdmin, seedDebugData } from './helpers/db.js';
 import { signupViaApi } from './helpers/auth.js';
 import { mergeArticleData, createArticle } from '../../imright/scripts/articles.js';
 import { minContrastRatio } from './helpers/contrast.js';
@@ -624,5 +624,56 @@ test.describe('Delete article', () => {
 
     const check = await page.request.get(`/api/articles/${article.id}`);
     expect(check.status()).toBe(404);
+  });
+});
+
+test.describe('Admin pipeline debug page', () => {
+  test("D77: an admin sees a 'View debug' link on any article once its debug data is persisted, and it renders the real pipeline visualization", async ({ page }) => {
+    const owner = await seedGuestUser();
+    const article = await seedArticle({ ownerUserId: owner.id, claim: 'the government controls the weather' });
+    await seedDebugData(article.id, { slug: article.articleData.slug });
+
+    const { user: admin } = await signupViaApi(page);
+    await makeAdmin(admin.id);
+
+    await page.goto(article.url);
+    const debugLink = page.locator('a.admin-debug-link');
+    await expect(debugLink).toBeVisible();
+    await expect(debugLink).toHaveAttribute('href', `/api/articles/${article.id}/debug`);
+
+    const response = await page.request.get(`/api/articles/${article.id}/debug`);
+    expect(response.status()).toBe(200);
+    expect(response.headers()['content-type']).toContain('text/html');
+    const body = await response.text();
+    expect(body).toContain(`Pipeline debug: ${article.articleData.slug}`);
+  });
+
+  test('D77: no debug link and a 404 for a logged-in non-admin, and for a guest', async ({ page }) => {
+    const owner = await seedGuestUser();
+    const article = await seedArticle({ ownerUserId: owner.id, claim: 'the government controls the weather' });
+    await seedDebugData(article.id);
+
+    // Logged-in but not an admin.
+    await signupViaApi(page);
+    await page.goto(article.url);
+    await expect(page.locator('a.admin-debug-link')).toHaveCount(0);
+    let response = await page.request.get(`/api/articles/${article.id}/debug`);
+    expect(response.status()).toBe(404);
+
+    // Plain guest, no session at all.
+    await page.context().clearCookies();
+    response = await page.request.get(`/api/articles/${article.id}/debug`);
+    expect(response.status()).toBe(404);
+  });
+
+  test('D77: 404 for an admin when the article has no persisted debug data yet', async ({ page }) => {
+    const owner = await seedGuestUser();
+    const article = await seedArticle({ ownerUserId: owner.id });
+
+    const { user: admin } = await signupViaApi(page);
+    await makeAdmin(admin.id);
+
+    const response = await page.request.get(`/api/articles/${article.id}/debug`);
+    expect(response.status()).toBe(404);
   });
 });

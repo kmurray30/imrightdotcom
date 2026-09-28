@@ -50,6 +50,13 @@
       "when": 1790183775907,
       "tag": "0006_add_article_views",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790604992932,
+      "tag": "0007_elite_terrax",
+      "breakpoints": true
     }
   ]
 }

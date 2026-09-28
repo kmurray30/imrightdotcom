@@ -127,6 +127,34 @@ export async function setArticleVisibility({ articleId, userId, isPublic }) {
 }
 
 // ---------------------------------------------------------------------------
+// Pipeline debug data (admin-only viewing, see require-admin.js)
+// ---------------------------------------------------------------------------
+
+/** Called once, right after a run's pipeline promise resolves (see
+ * serve-site.js's startPipelineRun) — upsert rather than plain insert so a
+ * retried run (see pipelineRuns' retry-on-crash docstring in schema.js)
+ * can't collide with a leftover row from an earlier attempt at the same
+ * article id. */
+export async function saveDebugData(articleId, debugData) {
+  const db = getDb();
+  await db
+    .insert(schema.pipelineDebug)
+    .values({ articleId, debugData })
+    .onConflictDoUpdate({ target: schema.pipelineDebug.articleId, set: { debugData } });
+}
+
+export async function getDebugDataForArticle(articleId) {
+  const db = getDb();
+  if (!UUID_PATTERN.test(articleId)) return null;
+  const [row] = await db
+    .select({ debugData: schema.pipelineDebug.debugData })
+    .from(schema.pipelineDebug)
+    .where(eq(schema.pipelineDebug.articleId, articleId))
+    .limit(1);
+  return row?.debugData ?? null;
+}
+
+// ---------------------------------------------------------------------------
 // Article likes
 // ---------------------------------------------------------------------------
 

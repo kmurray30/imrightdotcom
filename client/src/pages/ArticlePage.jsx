@@ -94,6 +94,16 @@ export function ArticlePage() {
           <LikeButton articleId={article.id} initialLiked={article.likedByViewer} initialCount={article.likeCount} />
           <BookmarkButton articleId={article.id} />
           <ShareButton />
+          {user?.isAdmin && (
+            <a
+              className="admin-debug-link"
+              href={`/api/articles/${article.id}/debug`}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              View debug
+            </a>
+          )}
         </div>
         <ArticleBody articleId={article.id} articleData={article.articleData} />
         {isOwner && (

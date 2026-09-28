@@ -36,6 +36,11 @@ export const users = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     isGuest: boolean('is_guest').notNull().default(true),
+    // Grants access to the pipeline debug page (GET /api/articles/:id/debug)
+    // for any article, not scoped to what this account owns — a support/dev
+    // tool, not a social-layer permission. Set directly in the DB (see
+    // imright/scripts/grant-admin.js); no self-serve signup path, deliberately.
+    isAdmin: boolean('is_admin').notNull().default(false),
     username: citext('username').unique(),
     email: citext('email').unique(),
     passwordHash: text('password_hash'),
@@ -268,3 +273,23 @@ export const pipelineRuns = pgTable(
     check('pipeline_runs_status_check', sql`${table.status} IN ('running', 'ready', 'done', 'error')`),
   ]
 );
+
+/**
+ * Durable copy of the full per-stage pipeline visualization (angles, wiki
+ * search/filter, link validation, raw LLM inputs/outputs, counterarguer) —
+ * exactly the `data` shape generate-debug.js's buildHtml() renders. Without
+ * this, that data only ever existed as per-stage YAML/JSON files under the
+ * project root, which are wiped on every Railway redeploy; this table is
+ * what lets an admin view a given article's debug page at any time, not just
+ * until the next deploy. One row per article, written once right after the
+ * pipeline finishes (see imright/index.js's collectDebugData() call and its
+ * caller in serve-site.js) — never read on a normal article pageview, so it
+ * deliberately isn't a column on `articles` itself.
+ */
+export const pipelineDebug = pgTable('pipeline_debug', {
+  articleId: uuid('article_id')
+    .primaryKey()
+    .references(() => articles.id, { onDelete: 'cascade' }),
+  debugData: jsonb('debug_data').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});

@@ -736,6 +736,25 @@ textarea:focus {
   color: var(--text-secondary);
 }
 
+.admin-debug-link {
+  /* Not a <button> (it's a plain link opening a new tab), so it doesn't pick
+   * up the global `button` base style — matched here so it reads as the same
+   * kind of control as its Like/Bookmark/Share siblings in .article-actions. */
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 1rem;
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+
+.admin-debug-link:hover {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
 .visibility-toggle {
   /* Matches the Save/Share buttons' chrome (border/padding/radius/background)
    * it sits next to in .article-actions — as bare checkbox+text it read as

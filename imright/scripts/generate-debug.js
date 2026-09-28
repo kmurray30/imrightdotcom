@@ -214,7 +214,7 @@ function formatTime(timeMs) {
   return `${Math.round(timeMs)}ms`;
 }
 
-function buildHtml(data) {
+export function buildHtml(data) {
   const conspiracy = data.conspiracy;
   const wikisFetched = data.wikisFetched;
   const wikisFiltered = data.wikisFiltered;
@@ -1414,14 +1414,16 @@ ${renderRefsList(refs, 0, searchTerm)}
   return html;
 }
 
-async function main() {
-  const slug = process.argv[2]?.trim();
-  if (!slug) {
-    console.error('Usage: node imright/scripts/generate-debug.js <slug>');
-    console.error('Example: node imright/scripts/generate-debug.js wireless-headphones-can-give-you-brain-cancer');
-    process.exit(1);
-  }
-
+/**
+ * Reads every per-stage disk cache for a run and assembles the exact `data`
+ * shape buildHtml() renders. Pulled out of main() so the pipeline itself
+ * (imright/index.js) can call this in-process right after a run finishes —
+ * at that point the files were *just* written by this same process, so
+ * reading them back is reliable — and persist the result durably (Postgres),
+ * rather than leaving debug visibility dependent on Railway's ephemeral disk
+ * surviving until someone happens to look.
+ */
+export function collectDebugData(slug) {
   const conspiracy = loadConspiracy(slug);
   const wikisFetched = loadYaml(`wiki_searcher/wikis-fetched/${slug}.yaml`);
   const wikisFiltered = loadYaml(`wiki_filterer/wikis-filtered/${slug}.yaml`);
@@ -1435,7 +1437,7 @@ async function main() {
   const counterarguerRawInput = loadJson(`counterarguer/input/${slug}.json`);
   const counterarguerRawOutput = loadRawText(`counterarguer/output/${slug}.txt`);
 
-  const data = {
+  return {
     slug,
     conspiracy,
     wikisFetched,
@@ -1450,7 +1452,17 @@ async function main() {
     counterarguerRawInput,
     counterarguerRawOutput,
   };
+}
 
+async function main() {
+  const slug = process.argv[2]?.trim();
+  if (!slug) {
+    console.error('Usage: node imright/scripts/generate-debug.js <slug>');
+    console.error('Example: node imright/scripts/generate-debug.js wireless-headphones-can-give-you-brain-cancer');
+    process.exit(1);
+  }
+
+  const data = collectDebugData(slug);
   const html = buildHtml(data);
 
   const outputPath = path.join(PROJECT_ROOT, 'imright', 'debug', `${slug}.html`);
@@ -1463,8 +1475,13 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error('Error:', error.message);
-  if (error.stack) console.error(error.stack);
-  process.exit(1);
-});
+// Only run the CLI when this file is executed directly (`node generate-debug.js ...`
+// or the pipeline's execSync call) — not when imported as a module (buildHtml/
+// collectDebugData reused by the admin debug route).
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((error) => {
+    console.error('Error:', error.message);
+    if (error.stack) console.error(error.stack);
+    process.exit(1);
+  });
+}

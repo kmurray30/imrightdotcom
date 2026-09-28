@@ -15,6 +15,7 @@ import {
   buildArticleData,
 } from '../tabloid_generator/index.js';
 import { generateCounterarguments } from '../counterarguer/index.js';
+import { collectDebugData, buildHtml as buildDebugHtml } from './scripts/generate-debug.js';
 import { slugify } from './utils.js';
 import {
   getTokenUsage,
@@ -407,13 +408,21 @@ export async function runPipeline(claim, options = {}) {
   // errors were already caught and logged above, so this never throws.
   await embeddingBackfillPromise;
 
-  // Generate debug page once at the end (after table is complete)
+  // Collect the full per-stage debug data (angles, wiki search/filter, link
+  // validation, raw LLM inputs/outputs, counterarguer) once at the end, after
+  // every disk cache above has been written — and write the same debug HTML
+  // file as before for local/CLI use (npm run debug). Done in-process, not via
+  // execSync, so debugData can be returned below: this run's disk caches are
+  // ephemeral on Railway, so a caller with DB access (serve-site.js) needs
+  // this value to persist it durably for the admin debug page to survive a
+  // redeploy — see schema.js's pipelineDebug table.
+  let debugData = null;
   try {
-    execSync(`node imright/scripts/generate-debug.js ${slug}`, {
-      cwd: PROJECT_ROOT,
-      stdio: 'pipe',
-      env: { ...process.env, IMRIGHT_SILENT_DEBUG: '1' },
-    });
+    debugData = collectDebugData(slug);
+    const debugHtml = buildDebugHtml(debugData);
+    const debugPath = path.join(PROJECT_ROOT, 'imright', 'debug', `${slug}.html`);
+    fs.mkdirSync(path.dirname(debugPath), { recursive: true });
+    fs.writeFileSync(debugPath, debugHtml, 'utf8');
   } catch (debugErr) {
     console.error(`Warning: could not generate debug page: ${debugErr.message}`);
   }
@@ -431,6 +440,7 @@ export async function runPipeline(claim, options = {}) {
     stageRows,
     refStats,
     counterarguments,
+    debugData,
     tokenUsage: {
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
