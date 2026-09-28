@@ -79,9 +79,14 @@ import { loadEnv } from '../../imright/load-env.js';
 import { getAccessToken } from '../../utils/wikimediaAuth.js';
 import { callExternalApi, HttpStatusError, timeoutSignal } from '../../utils/external-api.js';
 import { upsertArticleEmbeddings } from '../embeddingIndex.js';
+import { setLogger as setEmbedLogger } from '../textEmbeddings.js';
 
 loadEnv();
 const execFileAsync = promisify(execFile);
+// Keeps the terminal to just the aggregate progress bar — the one-time
+// embedding-model-download detail (see textEmbeddings.js) goes to debug.log
+// instead, same as every other per-chunk stage transition below.
+setEmbedLogger(logDebug);
 
 const API_BASE = 'https://api.enterprise.wikimedia.com';
 const identifier = process.argv[2] || 'enwiki_namespace_0';

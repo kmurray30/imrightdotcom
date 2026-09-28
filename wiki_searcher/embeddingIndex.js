@@ -129,31 +129,32 @@ async function isAlreadyCurrent(client, title, versionIdentifier) {
   return rows.length > 0 && rows[0].version_identifier === versionIdentifier;
 }
 
-/**
- * Embeds and upserts an article's citation-adjacent paragraphs. Replaces all
- * of that article's existing rows, so a shrinking article (fewer citable
- * paragraphs than before) doesn't leave stale ones behind. Resumable: a
- * second call with the same versionIdentifier is a no-op.
- *
- * title is the only key search actually uses at fetch time (see
- * providers/wikimedia.js) — Wikimedia's On-demand API has no ID-based lookup,
- * only /v2/articles/{title}. But title alone can't survive a page rename: the
- * old title would keep its embedded rows forever, quietly dead (they'd never
- * again resolve via On-demand, since the article now lives under a different
- * title). pageId (Wikimedia's article.identifier, stable across renames) is
- * what closes that gap — when provided, any other row sharing this pageId
- * under a *different* title is deleted before writing this one, so a rename
- * cleans up its old title's rows instead of leaving them to rot.
- *
- * @param {object} article - { title, wikitext, versionIdentifier, pageId }
- * @returns {Promise<{ title: string, paragraphCount: number, skipped: boolean }>}
- */
-export async function upsertArticleEmbeddings({ title, wikitext, versionIdentifier, pageId }) {
-  const pool = getPool();
-  if (!pool) {
-    throw new Error('DATABASE_URL is not set; cannot write to the wiki paragraph vector index.');
-  }
+const DB_RETRY_BASE_DELAY_MS = 2000;
+const DB_RETRY_MAX_DELAY_MS = 60_000; // cap backoff so "retry forever" doesn't mean waiting an hour between attempts
 
+// Error signatures that mean "the connection itself is the problem" (a flaky
+// tunnel dropping/reconnecting) as opposed to a real bug in the query or
+// data — only these are worth retrying forever. Node's network error codes
+// plus Postgres's connection-related SQLSTATEs (57P0x admin/crash shutdown,
+// 08xxx connection_exception family) and our own statement_timeout firing
+// (57014) all indicate the session is dead, not that the write was wrong.
+// "Connection terminated unexpectedly" has no .code at all (it's a plain
+// Error thrown by pg's own client.js), hence the message-based fallback.
+const RETRYABLE_ERROR_CODES = new Set([
+  'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'EHOSTUNREACH', 'ENETUNREACH', 'EAI_AGAIN',
+  '57P01', '57P02', '57P03',
+  '08000', '08001', '08003', '08004', '08006',
+  '57014',
+]);
+const RETRYABLE_ERROR_MESSAGES = ['Connection terminated unexpectedly', 'Connection terminated due to connection timeout'];
+
+function isRetryableConnectionError(error) {
+  if (error?.code && RETRYABLE_ERROR_CODES.has(error.code)) return true;
+  return typeof error?.message === 'string' && RETRYABLE_ERROR_MESSAGES.some((msg) => error.message.includes(msg));
+}
+
+/** One attempt at the full upsert — pulled out of upsertArticleEmbeddings so that function can wrap it in a retry loop. */
+async function attemptUpsert(pool, { title, wikitext, versionIdentifier, pageId }) {
   const client = await pool.connect();
   // pg-pool removes its own idle-client error listener the instant a client
   // is handed off via pool.connect() (see _acquireClient in pg-pool's
@@ -168,6 +169,7 @@ export async function upsertArticleEmbeddings({ title, wikitext, versionIdentifi
   });
   try {
     if (await isAlreadyCurrent(client, title, versionIdentifier)) {
+      client.release();
       return { title, paragraphCount: 0, skipped: true };
     }
 
@@ -189,11 +191,69 @@ export async function upsertArticleEmbeddings({ title, wikitext, versionIdentifi
       );
     }
     await client.query('COMMIT');
+    client.release();
     return { title, paragraphCount: paragraphs.length, skipped: false };
   } catch (error) {
-    await client.query('ROLLBACK');
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      // The connection is very likely already dead (often WHY we're here) --
+      // nothing to roll back to. The original `error` below is what matters,
+      // not whatever this rollback attempt raised.
+    }
+    client.release(error); // tell pg-pool to discard this client rather than hand a possibly-broken connection to the next caller
     throw error;
-  } finally {
-    client.release();
+  }
+}
+
+/**
+ * Embeds and upserts an article's citation-adjacent paragraphs. Replaces all
+ * of that article's existing rows, so a shrinking article (fewer citable
+ * paragraphs than before) doesn't leave stale ones behind. Resumable: a
+ * second call with the same versionIdentifier is a no-op.
+ *
+ * title is the only key search actually uses at fetch time (see
+ * providers/wikimedia.js) — Wikimedia's On-demand API has no ID-based lookup,
+ * only /v2/articles/{title}. But title alone can't survive a page rename: the
+ * old title would keep its embedded rows forever, quietly dead (they'd never
+ * again resolve via On-demand, since the article now lives under a different
+ * title). pageId (Wikimedia's article.identifier, stable across renames) is
+ * what closes that gap — when provided, any other row sharing this pageId
+ * under a *different* title is deleted before writing this one, so a rename
+ * cleans up its old title's rows instead of leaving them to rot.
+ *
+ * Retries forever (capped backoff, never a max attempt count) on a
+ * connection-shaped failure specifically — e.g. a flaky local SSH tunnel
+ * dropping mid-run — logging loudly on every attempt so a long unattended
+ * run is distinguishable from "stuck" rather than silently hanging or dying.
+ * A non-connection error (a real bug, bad data) still fails immediately;
+ * retrying that forever would just be a different flavor of silent hang.
+ * Safe to retry the whole thing from scratch: nothing commits until the
+ * final COMMIT, so a retried attempt re-does the DELETE+re-INSERT cleanly
+ * rather than risking double-written rows.
+ *
+ * @param {object} article - { title, wikitext, versionIdentifier, pageId }
+ * @returns {Promise<{ title: string, paragraphCount: number, skipped: boolean }>}
+ */
+export async function upsertArticleEmbeddings({ title, wikitext, versionIdentifier, pageId }) {
+  const pool = getPool();
+  if (!pool) {
+    throw new Error('DATABASE_URL is not set; cannot write to the wiki paragraph vector index.');
+  }
+
+  let attempt = 0;
+  while (true) {
+    attempt++;
+    try {
+      return await attemptUpsert(pool, { title, wikitext, versionIdentifier, pageId });
+    } catch (error) {
+      if (!isRetryableConnectionError(error)) throw error;
+      const delayMs = Math.min(DB_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), DB_RETRY_MAX_DELAY_MS);
+      console.error(
+        `[embed] DB connection problem while embedding "${title}" (attempt ${attempt}): ${error.message} ` +
+          `— retrying in ${(delayMs / 1000).toFixed(0)}s...`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
   }
 }

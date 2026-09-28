@@ -18,6 +18,20 @@ const MODEL_NAME = 'Xenova/bge-small-en-v1.5';
 export const EMBEDDING_DIMENSIONS = 384;
 
 let extractorPromise = null;
+let log = console.log;
+
+/**
+ * Redirects this module's own progress logging (model download, below) away
+ * from the console — e.g. to a log file — without changing what gets logged.
+ * Defaults to console.log, so nothing changes for callers that never call
+ * this (providers/wikimedia.js at live query time, refresh-daily.js).
+ * build-index-from-wikimedia.js uses this to keep its terminal output to
+ * just the aggregate progress bar, funneling the one-time model-download
+ * detail into its own debug.log instead.
+ */
+export function setLogger(fn) {
+  log = fn;
+}
 
 /**
  * The first call in any process pulls model weights from Hugging Face Hub if
@@ -39,19 +53,19 @@ function getExtractor() {
     extractorPromise = pipeline('feature-extraction', MODEL_NAME, {
       progress_callback: (progress) => {
         if (progress.status === 'initiate') {
-          console.log(`[embed] Downloading ${progress.file} (first use only, cached after this)...`);
+          log(`[embed] Downloading ${progress.file} (first use only, cached after this)...`);
         } else if (progress.status === 'progress' && progress.file && typeof progress.progress === 'number') {
           const pct = Math.floor(progress.progress / 10) * 10; // log every ~10%, not every stream chunk
           if (pct > (lastLoggedPct[progress.file] ?? -10)) {
             lastLoggedPct[progress.file] = pct;
-            console.log(`[embed]   ${progress.file}: ${pct}%`);
+            log(`[embed]   ${progress.file}: ${pct}%`);
           }
         } else if (progress.status === 'done' && progress.file) {
-          console.log(`[embed]   ${progress.file}: done`);
+          log(`[embed]   ${progress.file}: done`);
         }
       },
     }).then((extractor) => {
-      console.log('[embed] Model ready.');
+      log('[embed] Model ready.');
       return extractor;
     });
   }
