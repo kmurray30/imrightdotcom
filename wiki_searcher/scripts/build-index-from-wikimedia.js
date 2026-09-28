@@ -96,7 +96,7 @@ const EMBED_CONCURRENCY = 4; // full download+extract+embed pipeline — keep at
 const METADATA_TIMEOUT_MS = 15_000; // HEAD/info calls should be fast; don't hang forever if one stalls
 const STALL_TIMEOUT_MS = 30_000; // abort a chunk download if no bytes arrive for this long
 
-const PROGRESS_BAR_WIDTH = 15; // kept narrow — the numeric fields (count/rate/ETA) matter more than the bar itself on a width-constrained table row
+const PROGRESS_BAR_WIDTH = 30; // fitToTerminal() truncates safely on a narrow terminal, so there's no need to keep this cramped for width's sake
 const PROGRESS_RENDER_INTERVAL_MS = 200;
 const SPEED_WINDOW_MS = 5000; // recent-window speed, more responsive than a lifetime average on a multi-hour download
 
@@ -186,6 +186,9 @@ function createCounter() {
     add(n) {
       done += n;
     },
+    get done() {
+      return done; // raw cumulative total, no rolling-window bookkeeping — for callers that just want the number, not the rate
+    },
     stats() {
       const now = Date.now();
       samples.push({ time: now, done });
@@ -269,6 +272,10 @@ function createProgressDisplay(totalArticles, totalBytes) {
     addBytes(n) {
       bytes.add(n);
     },
+    articlesDone() {
+      return articles.done; // for callers (e.g. debug-log lines) that want the corpus-wide running total, not just their own local count
+    },
+    totalArticles,
     start() {
       console.log(tableBorder(widths));
       console.log(tableRow(headers, widths, headers.map(() => 'center')));
@@ -613,7 +620,15 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
 
     const now = Date.now();
     if (lineNumber === resumeFromLine + 1 || now - lastLoggedAt >= 10_000) {
-      logDebug(`${chunkId}: embedding in progress — ${stats.articles} articles, ${stats.paragraphs} paragraphs so far`);
+      // Both counts, not just this chunk's own: "this session" alone tells
+      // you this one chunk is alive, but not how the actual job (the thing
+      // anyone tailing debug.log actually cares about) is doing overall.
+      const overallDone = tracker.articlesDone();
+      const overallPct = tracker.totalArticles > 0 ? ((overallDone / tracker.totalArticles) * 100).toFixed(1) : '?';
+      logDebug(
+        `${chunkId}: embedding in progress — ${stats.articles} articles, ${stats.paragraphs} paragraphs this chunk` +
+          ` | overall: ${formatCount(overallDone)}/${formatCount(tracker.totalArticles)} articles (${overallPct}%)`
+      );
       saveLineCheckpoint(chunkId, lineNumber);
       lastLoggedAt = now;
     }
@@ -667,7 +682,12 @@ async function processChunk(chunk, accessToken, tracker, totals, avgArticlesPerC
   totals.paragraphs += stats.paragraphs;
   totals.alreadyCurrent += stats.alreadyCurrent;
 
-  logDebug(`${chunk.chunkId}: done — ${stats.articles} articles, ${stats.paragraphs} paragraphs, ${stats.alreadyCurrent} already current`);
+  const overallDone = tracker.articlesDone();
+  const overallPct = tracker.totalArticles > 0 ? ((overallDone / tracker.totalArticles) * 100).toFixed(1) : '?';
+  logDebug(
+    `${chunk.chunkId}: done — ${stats.articles} articles, ${stats.paragraphs} paragraphs, ${stats.alreadyCurrent} already current` +
+      ` | overall: ${formatCount(overallDone)}/${formatCount(tracker.totalArticles)} articles (${overallPct}%)`
+  );
   fs.writeFileSync(donePath, new Date().toISOString());
 }
 
