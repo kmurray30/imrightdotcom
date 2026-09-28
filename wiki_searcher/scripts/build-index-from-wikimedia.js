@@ -96,7 +96,7 @@ const EMBED_CONCURRENCY = 4; // full download+extract+embed pipeline — keep at
 const METADATA_TIMEOUT_MS = 15_000; // HEAD/info calls should be fast; don't hang forever if one stalls
 const STALL_TIMEOUT_MS = 30_000; // abort a chunk download if no bytes arrive for this long
 
-const PROGRESS_BAR_WIDTH = 20; // kept narrow — the numeric fields (count/rate/ETA) matter more than the bar itself on a one-line, width-constrained status display
+const PROGRESS_BAR_WIDTH = 15; // kept narrow — the numeric fields (count/rate/ETA) matter more than the bar itself on a width-constrained table row
 const PROGRESS_RENDER_INTERVAL_MS = 200;
 const SPEED_WINDOW_MS = 5000; // recent-window speed, more responsive than a lifetime average on a multi-hour download
 
@@ -145,6 +145,39 @@ function fitToTerminal(line) {
   return `\r${fitted}\x1b[K`; // \x1b[K: clear from cursor to end of line
 }
 
+function padLeft(text, width) {
+  return text.length >= width ? text.slice(0, width) : ' '.repeat(width - text.length) + text;
+}
+function padRight(text, width) {
+  return text.length >= width ? text.slice(0, width) : text + ' '.repeat(width - text.length);
+}
+function center(text, width) {
+  if (text.length >= width) return text.slice(0, width);
+  const pad = width - text.length;
+  const left = Math.floor(pad / 2);
+  return ' '.repeat(left) + text + ' '.repeat(pad - left);
+}
+
+function tableBorder(widths) {
+  return '+' + widths.map((w) => '-'.repeat(w + 2)).join('+') + '+';
+}
+
+/** aligns: one of 'left'/'right'/'center' per column, defaulting to 'right' (numeric data reads naturally right-aligned in a table). */
+function tableRow(cells, widths, aligns = []) {
+  return (
+    '|' +
+    cells
+      .map((cell, i) => {
+        const width = widths[i];
+        const align = aligns[i] ?? 'right';
+        const padded = align === 'center' ? center(cell, width) : align === 'left' ? padRight(cell, width) : padLeft(cell, width);
+        return ` ${padded} `;
+      })
+      .join('|') +
+    '|'
+  );
+}
+
 /** A single rolling-window counter: total so far, plus a recent-window rate for ETA purposes. */
 function createCounter() {
   let done = 0;
@@ -166,50 +199,67 @@ function createCounter() {
 }
 
 /**
- * Renders one combined status line, driven by ARTICLES EMBEDDED as the
- * primary metric (bar/%/ETA), with bytes downloaded shown as secondary
- * context. Articles, not bytes, are what actually track overall completion
- * here: downloading is the fast part, and once the first EMBED_CONCURRENCY
- * chunks finish downloading, the byte counter can sit still for a long time
- * — sequential local CPU embedding of thousands of articles per chunk is
- * the real bottleneck — while real work keeps happening in the background.
- * A byte-only bar (the original design) looks stalled for exactly that
- * reason even when everything's fine.
+ * Renders one combined status TABLE (fixed-width bordered columns, a header
+ * printed once, and a single data row updated in place), driven by ARTICLES
+ * EMBEDDED as the primary metric (bar/%/ETA), with bytes downloaded shown as
+ * a secondary column. Articles, not bytes, are what actually track overall
+ * completion here: downloading is the fast part, and once the first
+ * EMBED_CONCURRENCY chunks finish downloading, the byte counter can sit
+ * still for a long time — sequential local CPU embedding of thousands of
+ * articles per chunk is the real bottleneck — while real work keeps
+ * happening in the background. A byte-only bar looks stalled for exactly
+ * that reason even when everything's fine.
+ *
+ * Column widths are computed once up front from the known totals (so
+ * "articles done" never needs more room than "articles total" already
+ * reserves) and never change after that — this is what keeps the columns
+ * from jittering in width as the numbers grow, and keeps the header cells
+ * aligned with the data cells below them.
  *
  * Runs its own render interval rather than piggybacking on addArticles/
- * addBytes calls, so the printed line updates at a steady cadence
- * regardless of how bursty either counter's actual updates are.
+ * addBytes calls, so the printed row updates at a steady cadence regardless
+ * of how bursty either counter's actual updates are.
  */
-function createProgressDisplay(totalArticles) {
+function createProgressDisplay(totalArticles, totalBytes) {
   const articles = createCounter();
   const bytes = createCounter();
   let intervalId = null;
+
+  const headers = ['Progress', 'Done%', 'Articles', 'Art/s', 'ETA', 'Downloaded'];
+  const widths = [
+    Math.max(headers[0].length, PROGRESS_BAR_WIDTH + 2), // "[" + bar + "]"
+    Math.max(headers[1].length, 6), // "100.0%"
+    Math.max(headers[2].length, formatCount(totalArticles).length * 2 + 1), // "done/total", sized to the known total on both sides
+    Math.max(headers[3].length, 7), // rate, e.g. "9999.9"
+    Math.max(headers[4].length, 8), // "999d23h"-ish worst case
+    Math.max(headers[5].length, formatGB(totalBytes).length + 2), // formatted GB + "GB" suffix
+  ];
+  const aligns = ['left', 'right', 'right', 'right', 'right', 'right'];
 
   function render() {
     const { done: articlesDone, rate: articleRate } = articles.stats();
     const { done: bytesDone } = bytes.stats();
 
+    let cells;
     if (totalArticles > 0) {
       const remaining = totalArticles - articlesDone;
       const etaSeconds = articleRate > 0 ? remaining / articleRate : NaN;
       const fraction = Math.min(1, articlesDone / totalArticles);
       const filled = Math.round(fraction * PROGRESS_BAR_WIDTH);
-      const bar = '█'.repeat(filled) + '░'.repeat(PROGRESS_BAR_WIDTH - filled);
-      const pct = (fraction * 100).toFixed(1).padStart(5, ' ');
-      // Kept deliberately compact (short labels, K/M-suffixed counts) and
-      // still run through fitToTerminal — see the header printed once at
-      // startup (main()) for what each field means, since a one-line format
-      // this dense isn't self-explanatory the first time you see it.
-      process.stdout.write(
-        fitToTerminal(
-          `[${bar}] ${pct}%  ${formatCount(articlesDone)}/${formatCount(totalArticles)} art` +
-            `  ${articleRate.toFixed(1)} art/s  ETA ${formatDuration(etaSeconds)}  ${formatGB(bytesDone)}GB dl`
-        )
-      );
+      const bar = '[' + '█'.repeat(filled) + '░'.repeat(PROGRESS_BAR_WIDTH - filled) + ']';
+      cells = [
+        bar,
+        `${(fraction * 100).toFixed(1)}%`,
+        `${formatCount(articlesDone)}/${formatCount(totalArticles)}`,
+        articleRate.toFixed(1),
+        formatDuration(etaSeconds),
+        `${formatGB(bytesDone)}GB`,
+      ];
     } else {
-      // No article-count denominator to compute a % or ETA against — fall back to raw counts.
-      process.stdout.write(fitToTerminal(`${formatCount(articlesDone)} articles processed, ${formatGB(bytesDone)}GB downloaded`));
+      // No article-count denominator to compute a % or ETA against — fall back to raw counts in the columns that still make sense.
+      cells = ['-', '-', formatCount(articlesDone), articleRate.toFixed(1), '-', `${formatGB(bytesDone)}GB`];
     }
+    process.stdout.write(fitToTerminal(tableRow(cells, widths, aligns)));
   }
 
   return {
@@ -220,13 +270,17 @@ function createProgressDisplay(totalArticles) {
       bytes.add(n);
     },
     start() {
+      console.log(tableBorder(widths));
+      console.log(tableRow(headers, widths, headers.map(() => 'center')));
+      console.log(tableBorder(widths));
+      render();
       intervalId = setInterval(render, PROGRESS_RENDER_INTERVAL_MS);
       intervalId.unref(); // don't let this timer alone keep the process alive if something else goes wrong before finish() runs
     },
     finish() {
       if (intervalId) clearInterval(intervalId);
       render();
-      process.stdout.write('\n');
+      process.stdout.write(`\n${tableBorder(widths)}\n`);
     },
   };
 }
@@ -298,6 +352,7 @@ async function downloadOne(url, filePath, accessToken, tracker, metadata) {
   } else if (startByte > contentLength) {
     // Oversized/corrupted — can't be trusted at any size. Reset and re-download.
     fs.rmSync(filePath, { force: true });
+    fs.rmSync(progressCheckpointPath(path.basename(filePath, '.tar.gz')), { force: true }); // a checkpoint from whatever wrote the corrupted archive no longer applies
     startByte = 0;
   } else if (startByte > 0) {
     // Genuinely partial — only safe to resume if the snapshot hasn't
@@ -305,6 +360,7 @@ async function downloadOne(url, filePath, accessToken, tracker, metadata) {
     const previousEtag = fs.existsSync(etagSidecarPath) ? fs.readFileSync(etagSidecarPath, 'utf8').trim() : null;
     if (previousEtag !== etag) {
       fs.rmSync(filePath, { force: true });
+      fs.rmSync(progressCheckpointPath(path.basename(filePath, '.tar.gz')), { force: true }); // same — a rotated snapshot invalidates any old line checkpoint
       startByte = 0;
     }
   }
@@ -474,6 +530,22 @@ function logDebug(message) {
   fs.appendFileSync(path.join(destDir, 'debug.log'), line);
 }
 
+function progressCheckpointPath(chunkId) {
+  return path.join(destDir, `${chunkId}.progress`);
+}
+
+/** Last NDJSON line number fully accounted for in a prior run of this exact chunk, or 0 if there's no checkpoint. */
+function loadLineCheckpoint(chunkId) {
+  const checkpointPath = progressCheckpointPath(chunkId);
+  if (!fs.existsSync(checkpointPath)) return 0;
+  const parsed = Number(fs.readFileSync(checkpointPath, 'utf8').trim());
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function saveLineCheckpoint(chunkId, lineNumber) {
+  fs.writeFileSync(progressCheckpointPath(chunkId), String(lineNumber));
+}
+
 /**
  * Streams one chunk's NDJSON, embeds every article's citation-adjacent
  * paragraphs, then deletes the raw extracted file. Local CPU embedding of
@@ -485,13 +557,32 @@ function logDebug(message) {
  * indistinguishable from a real hang. Logging on a time interval instead
  * (plus immediately on the very first article) adapts to that regardless of
  * chunk size or speed.
+ *
+ * Also checkpoints its own line position (same time interval as the debug
+ * log) to progressCheckpointPath(chunkId), so a crash mid-chunk — this
+ * corpus's tunnel has been flaky enough that "mid-chunk" is a real, repeated
+ * case, not a hypothetical — doesn't force the NEXT run to re-stream the
+ * whole file from line 1. A restart resumes from the checkpoint and credits
+ * that many articles to the live tracker immediately, instead of the
+ * progress display resetting to 0 while quietly re-doing (cheap, since
+ * upsertArticleEmbeddings skips anything already current, but not free)
+ * everything already embedded before the crash.
  */
 async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
+  const resumeFromLine = loadLineCheckpoint(chunkId);
   const rl = readline.createInterface({ input: fs.createReadStream(ndjsonPath), crlfDelay: Infinity });
   const stats = { articles: 0, paragraphs: 0, alreadyCurrent: 0 };
   let lastLoggedAt = 0;
+  let lineNumber = 0;
+
+  if (resumeFromLine > 0) {
+    tracker.addArticles(resumeFromLine);
+    logDebug(`${chunkId}: resuming embed from line ${resumeFromLine} (checkpoint from a prior run)`);
+  }
 
   for await (const line of rl) {
+    lineNumber++;
+    if (lineNumber <= resumeFromLine) continue; // already accounted for by a prior run's checkpoint
     if (!line.trim()) continue;
     // Counted here, before the parse/wikitext checks below, so the live
     // article tracker's numerator converges with recordCount (the total
@@ -505,28 +596,30 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
     try {
       article = JSON.parse(line);
     } catch {
-      continue; // skip malformed lines rather than aborting the whole chunk
+      article = null; // still checkpoint past this line below rather than aborting the whole chunk
     }
-    const wikitext = article.article_body?.wikitext;
-    if (!wikitext) continue; // deleted/visibility-changed/empty articles omit article_body
-
-    const result = await upsertArticleEmbeddings({
-      title: article.name,
-      wikitext,
-      versionIdentifier: article.version?.identifier,
-      pageId: article.identifier,
-    });
-    stats.articles++;
-    stats.paragraphs += result.paragraphCount;
-    if (result.skipped) stats.alreadyCurrent++;
+    const wikitext = article?.article_body?.wikitext;
+    if (article && wikitext) {
+      const result = await upsertArticleEmbeddings({
+        title: article.name,
+        wikitext,
+        versionIdentifier: article.version?.identifier,
+        pageId: article.identifier,
+      });
+      stats.articles++;
+      stats.paragraphs += result.paragraphCount;
+      if (result.skipped) stats.alreadyCurrent++;
+    } // else: malformed line or a record with no embeddable body (deleted/visibility-changed/empty) — nothing to embed, but still a line to check past on resume
 
     const now = Date.now();
-    if (stats.articles === 1 || now - lastLoggedAt >= 10_000) {
+    if (lineNumber === resumeFromLine + 1 || now - lastLoggedAt >= 10_000) {
       logDebug(`${chunkId}: embedding in progress — ${stats.articles} articles, ${stats.paragraphs} paragraphs so far`);
+      saveLineCheckpoint(chunkId, lineNumber);
       lastLoggedAt = now;
     }
   }
 
+  fs.rmSync(progressCheckpointPath(chunkId), { force: true }); // chunk fully embedded — checkpoint no longer needed, .done supersedes it
   fs.rmSync(ndjsonPath, { force: true }); // already embedded — don't keep the raw extracted copy around
   return stats;
 }
@@ -666,11 +759,8 @@ async function main() {
       `run "tail -f wiki-snapshots/debug.log" in another terminal to see exactly which chunk and stage it's stuck on.`
   );
   logDebug(`=== run started: ${chunks.length} chunks, ${formatGB(totalBytes)} GB total ===`);
-  console.log(
-    'Progress line below: [bar] % done   articles done/total   embedding rate   ETA   total downloaded so far'
-  );
 
-  const tracker = createProgressDisplay(recordCount);
+  const tracker = createProgressDisplay(recordCount, totalBytes);
   const avgArticlesPerChunk = recordCount > 0 ? recordCount / chunks.length : 0;
   const totals = { chunksDone: 0, articles: 0, paragraphs: 0, alreadyCurrent: 0 };
 
