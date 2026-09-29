@@ -688,7 +688,7 @@ function saveLineCheckpoint(chunkId, lineNumber) {
 async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
   const resumeFromLine = loadLineCheckpoint(chunkId);
   const rl = readline.createInterface({ input: fs.createReadStream(ndjsonPath), crlfDelay: Infinity });
-  const stats = { articles: 0, paragraphs: 0, alreadyCurrent: 0 };
+  const stats = { articles: 0, paragraphs: 0, alreadyCurrent: 0, totalLines: 0 };
   let lastLoggedAt = 0;
   let lineNumber = 0;
 
@@ -760,6 +760,7 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
     }
   }
   await flushBatch(); // final partial batch
+  stats.totalLines = lineNumber; // the chunk's TRUE record count, known for free now that the stream has reached EOF — see processChunk's use of this for exact (not averaged) done-chunk crediting
 
   fs.rmSync(progressCheckpointPath(chunkId), { force: true }); // chunk fully embedded — checkpoint no longer needed, .done supersedes it
   fs.rmSync(ndjsonPath, { force: true }); // already embedded — don't keep the raw extracted copy around
@@ -767,19 +768,41 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
 }
 
 /**
+ * The chunk's TRUE record count if the .done marker was written by this
+ * (post-fix) version of the script (a JSON blob, see processChunk), or null
+ * for a .done file from before this existed (a plain ISO timestamp string,
+ * not JSON) — callers fall back to avgArticlesPerChunk's estimate in that
+ * case. Nothing back-fills old .done files with a real count: the archive
+ * and extracted NDJSON they'd need to recount from are already deleted by
+ * the time a chunk is marked done, so getting an exact count for one
+ * retroactively would mean re-downloading it just to count lines. Only
+ * chunks that complete from here on get the exact treatment; that's a
+ * one-way ratchet toward accuracy, not a regression for older ones.
+ */
+function loadChunkTotalLines(donePath) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(donePath, 'utf8'));
+    return Number.isInteger(parsed.totalLines) && parsed.totalLines > 0 ? parsed.totalLines : null;
+  } catch {
+    return null; // old-format (plain timestamp) .done file, or unreadable/corrupt
+  }
+}
+
+/**
  * Runs one chunk through its whole lifecycle: download -> extract -> embed
- * -> cleanup -> mark done. avgArticlesPerChunk credits an *estimate* to the
- * live article tracker for a chunk that's already fully .done from a prior
- * run — its actual per-article counting happened in that earlier process
- * (and isn't persisted anywhere finer-grained than the .done marker itself),
- * so without this a resumed run's progress display would understate true
- * completion by however many chunks were already finished before it started.
+ * -> cleanup -> mark done. For a chunk that's already fully .done from a
+ * prior run, credits its TRUE record count (loadChunkTotalLines) when known
+ * — Wikimedia's chunks aren't uniformly sized, so this is what keeps a
+ * resumed run's progress display from drifting away from reality as chunks
+ * of very different real sizes get credited a wrong flat average instead of
+ * what they actually contain. avgArticlesPerChunk is only the fallback for
+ * a chunk finished before this existed.
  */
 async function processChunk(chunk, accessToken, tracker, totals, avgArticlesPerChunk) {
   const donePath = path.join(destDir, `${chunk.chunkId}.done`);
   if (fs.existsSync(donePath)) {
     tracker.addBytes(chunk.contentLength); // already fully processed in a prior run
-    tracker.addArticlesBurst(avgArticlesPerChunk);
+    tracker.addArticlesBurst(loadChunkTotalLines(donePath) ?? avgArticlesPerChunk);
     return;
   }
 
@@ -815,7 +838,7 @@ async function processChunk(chunk, accessToken, tracker, totals, avgArticlesPerC
     `${chunk.chunkId}: done — ${stats.articles} articles, ${stats.paragraphs} paragraphs, ${stats.alreadyCurrent} already current` +
       ` | overall: ${formatCount(overallDone)}/${formatCount(tracker.totalArticles)} articles (${overallPct}%)`
   );
-  fs.writeFileSync(donePath, new Date().toISOString());
+  fs.writeFileSync(donePath, JSON.stringify({ completedAt: new Date().toISOString(), totalLines: stats.totalLines }));
 }
 
 /**
