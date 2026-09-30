@@ -92,11 +92,24 @@ let consecutiveFailures = 0;
  * use", exit, back off, repeat -- never actually clearing the real
  * blocker. Finding and killing whatever owns the port directly, regardless
  * of its origin, is the only thing that reliably unblocks this case.
+ *
+ * `-sTCP:LISTEN` is load-bearing, not optional. `lsof -ti :PORT` alone
+ * matches every process with ANY socket referencing that port — that
+ * includes every CLIENT connected to the tunnel (the build script's whole
+ * pool of concurrent DB connections, this very script's own health-check
+ * probes, anything else talking to Postgres through it), not just the one
+ * process actually listening on it. Caused a real incident: the build
+ * script got SIGTERM'd and died silently (no debug.log entry -- Node has no
+ * default handler for SIGTERM, so it exits immediately, before any cleanup
+ * or logging runs) every time this function ran and swept up its PID along
+ * with the tunnel's. Verified directly against two separate real processes
+ * (one listening, one only connected as a client) that the unfiltered form
+ * returns both PIDs, while `-sTCP:LISTEN` returns only the listener.
  */
 async function killWhateverIsOnPort(targetPort) {
   let pids;
   try {
-    const { stdout } = await execFileAsync('lsof', ['-ti', `:${targetPort}`]);
+    const { stdout } = await execFileAsync('lsof', ['-ti', `:${targetPort}`, '-sTCP:LISTEN']);
     pids = [...new Set(stdout.split('\n').map((line) => line.trim()).filter(Boolean))];
   } catch {
     return; // lsof exits non-zero (with no output) when nothing matches the port -- nothing to kill
