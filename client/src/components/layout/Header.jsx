@@ -75,6 +75,11 @@ export function Header() {
                 {user.displayName}
               </Link>
             )}
+            {user?.isAdmin && (
+              <Link to="/workshop" onClick={() => setIsOpen(false)}>
+                Workshop
+              </Link>
+            )}
             <button
               type="button"
               className="link-button"

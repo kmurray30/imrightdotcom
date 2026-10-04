@@ -19,6 +19,7 @@ import path from 'path';
 import { eq, desc } from 'drizzle-orm';
 import { getDb, schema } from '../../../imright/scripts/db/index.js';
 import { createArticle, saveDebugData } from '../../../imright/scripts/articles.js';
+import * as Workshop from '../../../imright/scripts/workshop.js';
 import { getArticleImagesRoot } from '../../../utils/image-cache.js';
 
 // A 1x1 transparent PNG — enough for the <img> to actually resolve (200, a
@@ -176,6 +177,24 @@ export async function getFeedbackByEmail(email) {
     .orderBy(desc(schema.feedback.createdAt))
     .limit(1);
   return rows[0] ?? null;
+}
+
+/** Seeds a completed workshop_runs row directly — the real orchestrator
+ * calls the actual Grok-calling stage functions, which this sandboxed test
+ * environment can't reach, so tests exercising the Workshop run-detail/
+ * debug view go straight to the DB the same way seedArticle/seedDebugData
+ * bypass the real pipeline for article content. */
+export async function seedWorkshopRun({
+  createdByUserId,
+  sourceArticleId = null,
+  claimText = 'a workshop fixture claim',
+  startStage = 5,
+  stageConfig = { 5: { provider: 'xai', model: 'grok-4-1-fast-non-reasoning', systemPrompt: 'fixture prompt' } },
+  resultData = { slug: 'workshop-fixture-run' },
+} = {}) {
+  const run = await Workshop.createRun({ createdByUserId, sourceArticleId, claimText, startStage, stageConfig });
+  await Workshop.completeRun(run.id, resultData);
+  return { ...run, status: 'done', resultData };
 }
 
 /** Directly sets denormalized engagement counters sky-high so a fixture

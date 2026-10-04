@@ -829,9 +829,13 @@ ${conclusionHtml}
  * @param {string} claim - The topic/claim string
  * @param {object} extractedByTerm - Output from ref_extractor ({ [searchTerm]: [{ link, title, content }] })
  * @param {string} [slug] - Filename-safe slug for debug page link
+ * @param {object} [options] - Optional config
+ * @param {string} [options.model] - Grok model override (defaults to utils/grok.js's DEFAULT_MODEL)
+ * @param {string} [options.systemPrompt] - System prompt override (defaults to system_prompt.txt's contents)
+ * @param {function} [options.onRawCapture] - Called once with { rawInput: {messages}, rawOutput } — same data the disk-write branches below capture, for callers (e.g. Workshop) that need it without passing a slug
  * @returns {Promise<{ article, condensed, idToUrl, topic }>} - Data needed for HTML generation
  */
-export async function generateArticle(claim, extractedByArticle, slug = null) {
+export async function generateArticle(claim, extractedByArticle, slug = null, options = {}) {
   const allCitations = flattenAndDedupeCitations(extractedByArticle);
   const condensed = condenseForLlm(allCitations);
 
@@ -847,7 +851,7 @@ export async function generateArticle(claim, extractedByArticle, slug = null) {
 Source material (use as evidence; each has id, text, title):
 ${JSON.stringify(candidateArguments, null, 2)}`;
   const messages = [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: options.systemPrompt ?? SYSTEM_PROMPT },
     { role: 'user', content: userMessage },
   ];
   if (slug) {
@@ -862,7 +866,10 @@ ${JSON.stringify(candidateArguments, null, 2)}`;
 
   const { parsed, rawContent } = await callGrokJson(messages, {
     callerName: 'tabloid_generator',
+    model: options.model,
   });
+
+  options.onRawCapture?.({ rawInput: { messages }, rawOutput: rawContent });
 
   if (slug) {
     const outputRawDir = path.join(__dirname, 'output_raw');

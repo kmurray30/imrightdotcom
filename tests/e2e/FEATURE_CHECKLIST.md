@@ -126,3 +126,8 @@ handling and overlapped/ran off-screen at phone width).
 | 55 | Every guest-gated social action shows a sign-up prompt (via the shared modal, see #66), never a raw error | covered per-action across article.spec.js / discover.spec.js |
 | 56 | Direct article links work regardless of visibility | article.spec.js I56 |
 | 71 | One-time backfill: pre-existing guest-owned private articles were retroactively made public (accounts' own deliberate Private choices are left alone) | `imright/scripts/db/migrations/0005_publicize_guest_owned_private_articles.sql`, applied automatically at server startup — not practical to exercise via a fresh-DB e2e test, verified manually against the dev DB |
+
+## J. Workshop (admin-only)
+| # | Feature | Test |
+|---|---|---|
+| 79 | Admin-only "Workshop": resume the pipeline from Conspirator/Tabloid Generator/Counterarguer, reusing an existing article's earlier-stage data, with a different provider/model/system-prompt for the stages that re-run. "Experiment in Workshop" link on the article page and "Workshop" nav link, both admin-only; non-admins and guests get the generic 404/"Page not found" treatment on the page and every `/api/workshop/*` route; resuming from Tabloid Generator/Counterarguer is rejected (and disabled in the UI) when the source article has no persisted pipeline debug data; a completed run's debug view reuses the same `buildHtml()` renderer as the article debug page, shown side-by-side with the original in a compare view | workshop.spec.js |
