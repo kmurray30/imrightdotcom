@@ -19,6 +19,7 @@ handling and overlapped/ran off-screen at phone width).
 | 59 | Menu closes on an outside click and after following a link | header-nav.spec.js "menu closes..." |
 | 60 | Header never overflows/overlaps at phone width | header-nav.spec.js "mobile viewport..." |
 | 63 | Menu toggle is a hamburger icon for guests, a circular avatar (initial) for a logged-in user | header-nav.spec.js A5/A6 |
+| 78 | "Give feedback" item in the menu opens a modal: a logged-in user's account email is used automatically (no email field shown); a guest is asked to type one, required and validated before the message can be sent. Always lands in the `feedback` table, no account required | header-nav.spec.js "Give feedback" describe block |
 
 ## B. Home page / idea generation
 | # | Feature | Test |

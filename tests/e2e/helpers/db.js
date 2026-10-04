@@ -16,7 +16,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { eq } from 'drizzle-orm';
+import { eq, desc } from 'drizzle-orm';
 import { getDb, schema } from '../../../imright/scripts/db/index.js';
 import { createArticle, saveDebugData } from '../../../imright/scripts/articles.js';
 import { getArticleImagesRoot } from '../../../utils/image-cache.js';
@@ -160,6 +160,22 @@ export async function makeAdmin(userId) {
  * the pipeline for article content. */
 export async function seedDebugData(articleId, debugData = { slug: 'fixture-debug-run' }) {
   await saveDebugData(articleId, debugData);
+}
+
+/** Reads back a submitted feedback row by email — tests assert on this
+ * instead of just the UI's "thanks" state, since the UI alone can't tell us
+ * what email/userId actually landed in the DB. Scoped by email (unique per
+ * test, not just "the latest row") so parallel test workers inserting at
+ * the same time can't read back each other's row. */
+export async function getFeedbackByEmail(email) {
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(schema.feedback)
+    .where(eq(schema.feedback.email, email))
+    .orderBy(desc(schema.feedback.createdAt))
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 /** Directly sets denormalized engagement counters sky-high so a fixture

@@ -12,6 +12,7 @@ import { ensureOwner } from '../auth-accounts.js';
 import { HttpError } from '../http-error.js';
 import { buildHtml as buildDebugHtml } from '../generate-debug.js';
 import * as Articles from '../articles.js';
+import * as Feedback from '../feedback.js';
 
 export const socialRouter = Router();
 
@@ -308,6 +309,24 @@ socialRouter.get('/discover/search', async (req, res, next) => {
   try {
     const articles = await Articles.searchArticles({ query: req.query.q, cursor: parseCursor(req) });
     res.json({ articles });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ---- Feedback ----
+
+// Guest-ok, and deliberately not behind ensureOwner: giving feedback
+// shouldn't require minting a permanent guest `users` row for a visitor who
+// has never generated anything (same reasoning as article views/likes).
+// For a real account, the email is always the server-known one, never the
+// client-supplied body field — a logged-in submitter can't be spoofed into
+// having their feedback attributed to a different address.
+socialRouter.post('/feedback', async (req, res, next) => {
+  try {
+    const email = req.user && !req.user.isGuest ? req.user.email : req.body?.email;
+    const feedback = await Feedback.submitFeedback({ userId: req.user?.id ?? null, email, message: req.body?.message });
+    res.json({ ok: true, feedback: { id: feedback.id } });
   } catch (error) {
     next(error);
   }

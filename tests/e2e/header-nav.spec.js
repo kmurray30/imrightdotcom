@@ -6,6 +6,7 @@
 import { test, expect } from '@playwright/test';
 import { signupViaApi } from './helpers/auth.js';
 import { openMenu } from './helpers/nav.js';
+import { getFeedbackByEmail, uniqueSlug } from './helpers/db.js';
 
 test.describe('Header / nav', () => {
   test('A1: logo links back to home', async ({ page }) => {
@@ -101,5 +102,54 @@ test.describe('Header / nav', () => {
 
     await openMenu(page);
     await expect(page.locator('.site-nav-dropdown', { hasText: displayName })).toBeVisible();
+  });
+});
+
+test.describe('Give feedback', () => {
+  test('a guest is asked for an email, and it lands in the DB with the message', async ({ page }) => {
+    const email = `${uniqueSlug('guest-feedback')}@example.test`;
+
+    await page.goto('/');
+    await openMenu(page);
+    await page.getByRole('button', { name: 'Give feedback' }).click();
+    await expect(page.locator('.site-nav-dropdown')).toHaveCount(0);
+
+    const modal = page.locator('.feedback-modal');
+    await expect(modal.getByText('Your email')).toBeVisible();
+    const sendButton = modal.getByRole('button', { name: 'Send feedback' });
+    await expect(sendButton).toBeDisabled();
+
+    await modal.locator('textarea').fill('The Discover feed is great now.');
+    await expect(sendButton).toBeDisabled(); // message alone isn't enough without a valid email
+    await modal.locator('input[type="email"]').fill('not-an-email');
+    await expect(sendButton).toBeDisabled();
+    await modal.locator('input[type="email"]').fill(email);
+    await expect(sendButton).toBeEnabled();
+
+    await sendButton.click();
+    await expect(modal.getByText('Your feedback has been sent.')).toBeVisible();
+
+    const row = await getFeedbackByEmail(email);
+    expect(row.message).toBe('The Discover feed is great now.');
+    expect(row.userId).toBeNull();
+  });
+
+  test("a logged-in user isn't asked for an email — their account email is used", async ({ page }) => {
+    const { user } = await signupViaApi(page);
+    await page.goto('/');
+    await openMenu(page);
+    await page.getByRole('button', { name: 'Give feedback' }).click();
+
+    const modal = page.locator('.feedback-modal');
+    await expect(modal.locator('input[type="email"]')).toHaveCount(0);
+    await expect(modal.getByText(user.email, { exact: false })).toBeVisible();
+
+    await modal.locator('textarea').fill('Please add dark mode.');
+    await modal.getByRole('button', { name: 'Send feedback' }).click();
+    await expect(modal.getByText('Your feedback has been sent.')).toBeVisible();
+
+    const row = await getFeedbackByEmail(user.email);
+    expect(row.message).toBe('Please add dark mode.');
+    expect(row.userId).toBe(user.id);
   });
 });

@@ -293,3 +293,21 @@ export const pipelineDebug = pgTable('pipeline_debug', {
   debugData: jsonb('debug_data').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Feedback submitted from the header menu's "Give feedback" item. `userId`
+ * is whoever req.user resolved to at submit time (guest or real account),
+ * kept only for traceability — `onDelete: 'set null'` so deleting an
+ * account doesn't take its feedback history with it. `email` is always a
+ * real address to follow up at: a real account's own email (server-trusted,
+ * never the client-supplied one — see routes/social.js) for a logged-in
+ * submitter, or a typed one for a guest/anonymous visitor, who has no
+ * account email to fall back on.
+ */
+export const feedback = pgTable('feedback', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+  email: text('email').notNull(),
+  message: text('message').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
