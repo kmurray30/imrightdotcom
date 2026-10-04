@@ -740,7 +740,8 @@ textarea:focus {
   color: var(--text-secondary);
 }
 
-.admin-debug-link {
+.admin-debug-link,
+.workshop-debug-link {
   /* Not a <button> (it's a plain link opening a new tab), so it doesn't pick
    * up the global `button` base style — matched here so it reads as the same
    * kind of control as its Like/Bookmark/Share siblings in .article-actions. */
@@ -755,7 +756,8 @@ textarea:focus {
   text-decoration: none;
 }
 
-.admin-debug-link:hover {
+.admin-debug-link:hover,
+.workshop-debug-link:hover {
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
 }
 
@@ -784,7 +786,8 @@ textarea:focus {
  * gradient background. */
 .history-page,
 .bookmarks-page,
-.profile-page {
+.profile-page,
+.feedback-page {
   background: var(--card-bg);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
@@ -795,7 +798,8 @@ textarea:focus {
 
 .history-page h1,
 .bookmarks-page h1,
-.profile-header h1 {
+.profile-header h1,
+.feedback-page h1 {
   font-size: 1.5rem;
   letter-spacing: -0.01em;
   margin-bottom: 0.25rem;
@@ -822,6 +826,27 @@ textarea:focus {
 .history-list a {
   color: var(--text);
   font-weight: 500;
+}
+
+.feedback-list {
+  list-style: none;
+  padding: 0;
+}
+
+.feedback-list li {
+  border-top: 1px solid var(--border);
+  padding: 0.75rem 0;
+}
+
+.feedback-message {
+  margin: 0 0 0.25rem;
+  white-space: pre-wrap;
+}
+
+.feedback-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
 }
 
 .visibility-badge {
@@ -951,6 +976,144 @@ textarea:focus {
   gap: 0.75rem;
 }
 
+/* Workshop (admin-only) */
+.workshop-page {
+  background: var(--card-bg);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  padding: 1.75rem 2rem;
+  margin-top: 0.5rem;
+  max-width: 1100px;
+}
+
+.workshop-page h1 {
+  font-size: 1.5rem;
+  letter-spacing: -0.01em;
+  margin-bottom: 0.25rem;
+}
+
+select {
+  /* First native <select> in the codebase — matches the global input/textarea chrome. */
+  font: inherit;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card-bg);
+  color: var(--text);
+}
+
+.workshop-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  margin: 1.5rem 0 2.5rem;
+}
+
+.workshop-form > label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.workshop-start-stage,
+.workshop-stage-config {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.workshop-start-stage label,
+.workshop-stage-config label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.workshop-start-stage label {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.workshop-start-stage label.is-disabled {
+  color: var(--muted);
+}
+
+.workshop-run-list {
+  list-style: none;
+  padding: 0;
+}
+
+.workshop-run-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  border-top: 1px solid var(--border);
+  padding: 0.75rem 0;
+}
+
+.workshop-status {
+  font-size: 0.8rem;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  background: var(--border);
+  color: var(--text-secondary);
+}
+
+.workshop-status-done {
+  background: #e6f4ea;
+  color: #1e7e34;
+}
+
+.workshop-status-error {
+  background: #fdecea;
+  color: #b3261e;
+}
+
+.workshop-run-meta {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.workshop-stage-config-dump {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1rem;
+  overflow-x: auto;
+  font-size: 0.85rem;
+}
+
+.workshop-run-compare {
+  display: flex;
+  gap: 1rem;
+}
+
+.workshop-run-compare > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.workshop-compare-label {
+  color: var(--muted);
+  margin: 0 0 0.3rem;
+}
+
+.workshop-run-compare iframe {
+  width: 100%;
+  height: 80vh;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
 /* Mobile: the belief-form's input/button were close to a 50/50 split (the
  * button's own text/padding is a large fraction of a narrow screen's
  * width), and Discover cards fit only one per row despite being easily
@@ -978,6 +1141,10 @@ textarea:focus {
   .article-grid {
     grid-template-columns: repeat(2, 1fr);
     gap: 0.6rem;
+  }
+
+  .workshop-run-compare {
+    flex-direction: column;
   }
 
   .article-card {

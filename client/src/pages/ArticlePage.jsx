@@ -104,6 +104,11 @@ export function ArticlePage() {
               View debug
             </a>
           )}
+          {user?.isAdmin && (
+            <Link className="workshop-debug-link" to={`/workshop?sourceArticleId=${article.id}`}>
+              Experiment in Workshop
+            </Link>
+          )}
         </div>
         <ArticleBody articleId={article.id} articleData={article.articleData} />
         {isOwner && (

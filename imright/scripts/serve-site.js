@@ -68,6 +68,7 @@ import { resolveLinks } from './backup-links.js';
 import { resolveUser, ensureOwner, sweepExpiredSessions } from './auth-accounts.js';
 import { accountRouter } from './routes/account.js';
 import { socialRouter } from './routes/social.js';
+import { workshopRouter } from './routes/workshop.js';
 import { createArticle, mergeArticleData, saveDebugData } from './articles.js';
 import {
   createPipelineRun,
@@ -932,6 +933,7 @@ app.get('/api/placeholder-suggestions', async (req, res, next) => {
 
 app.use('/api/account', accountRouter);
 app.use('/api', socialRouter);
+app.use('/api/workshop', workshopRouter);
 
 // Stable URL namespace for an article's permanent images, decoupled from
 // where getArticleImagesRoot() actually points (a project-relative dev path,

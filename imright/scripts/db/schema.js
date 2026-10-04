@@ -311,3 +311,60 @@ export const feedback = pgTable('feedback', {
   message: text('message').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Admin-only Workshop experiments: resume the pipeline from Conspirator (1),
+ * Tabloid Generator (5), or Counterarguer (7) — the only LLM stages — reusing
+ * an existing article's earlier-stage data (from pipelineDebug) unchanged,
+ * with a different provider/model/system-prompt for the stages that re-run.
+ * Deliberately NOT a view/branch of `articles`/`pipelineDebug` — a Workshop
+ * run must never be reachable from Discover/search/profile/any public
+ * listing, so it lives in its own table with no code path that ever joins
+ * it into those queries.
+ */
+export const workshopRuns = pgTable(
+  'workshop_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdByUserId: uuid('created_by_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    // Nullable: null for a from-scratch stage-1 run with no source article.
+    sourceArticleId: uuid('source_article_id').references(() => articles.id, { onDelete: 'set null' }),
+    claimText: text('claim_text').notNull(),
+    startStage: integer('start_stage').notNull(),
+    // { "1": {provider, model, systemPrompt}, "5": {...}, "7": {...} } — only
+    // keys for LLM stages at or after startStage.
+    stageConfig: jsonb('stage_config').notNull(),
+    status: text('status').notNull().default('running'), // running | done | error
+    errorMessage: text('error_message'),
+    // Populated once done: the same 13-key shape generate-debug.js's
+    // buildHtml() consumes, plus a stageRows array (model/cost/time per
+    // stage actually run, see run-workshop.js).
+    resultData: jsonb('result_data'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('workshop_runs_created_by_user_id_idx').on(table.createdByUserId, table.createdAt.desc()),
+    index('workshop_runs_source_article_id_idx').on(table.sourceArticleId),
+    check('workshop_runs_status_check', sql`${table.status} IN ('running', 'done', 'error')`),
+    check('workshop_runs_start_stage_check', sql`${table.startStage} IN (1, 5, 7)`),
+  ]
+);
+
+/**
+ * Persisted, learned "known models" per provider for the Workshop model
+ * dropdown. Seeded at migration time with the models already known to this
+ * codebase (see utils/grok-pricing.json); grown automatically the first time
+ * a custom model string completes a stage without throwing.
+ */
+export const workshopKnownModels = pgTable(
+  'workshop_known_models',
+  {
+    provider: text('provider').notNull(),
+    modelName: text('model_name').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.provider, table.modelName] })]
+);

@@ -41,11 +41,14 @@ function extractAnglesArray(parsed) {
  * @param {string} topic - The claim or topic to generate angles for
  * @param {object} [options] - Optional config
  * @param {string} [options.slug] - Filename-safe slug for saving raw input (e.g. for debug)
+ * @param {string} [options.model] - Grok model override (defaults to utils/grok.js's DEFAULT_MODEL)
+ * @param {string} [options.systemPrompt] - System prompt override (defaults to system_prompt.txt's contents)
+ * @param {function} [options.onRawCapture] - Called once with { rawInput: {anglesMessages, consolidationMessages}, rawOutput } — same data the disk-write branch below captures, for callers (e.g. Workshop) that need it without passing a slug
  * @returns {Promise<{ topic: string, generated_at: string, search_queries: string[], angles: Array<{ argument: string, search_queries: string[] }> }>}
  */
 export async function generateAngles(topic, options = {}) {
   const slug = options.slug ?? null;
-  const SYSTEM_PROMPT = fs.readFileSync(
+  const SYSTEM_PROMPT = options.systemPrompt ?? fs.readFileSync(
     path.join(__dirname, 'system_prompt.txt'),
     'utf8'
   ).trim();
@@ -62,6 +65,7 @@ export async function generateAngles(topic, options = {}) {
   const { parsed, rawContent: rawAnglesContent } = await callGrokJson(anglesMessages, {
     callerName: 'conspirator/angles',
     response_format: { type: 'json_object' },
+    model: options.model,
   });
 
   const rawAngles = extractAnglesArray(parsed);
@@ -92,7 +96,7 @@ export async function generateAngles(topic, options = {}) {
 
   const { parsed: parsedConsolidated, rawContent: rawConsolidatedContent } = await callGrokJson(
     consolidationMessages,
-    { callerName: 'conspirator/consolidation', response_format: { type: 'json_object' } }
+    { callerName: 'conspirator/consolidation', response_format: { type: 'json_object' }, model: options.model }
   );
 
   let searchQueries;
@@ -114,6 +118,11 @@ export async function generateAngles(topic, options = {}) {
   if (searchQueries.length === 0) {
     throw new Error(`Grok returned empty consolidated queries. Raw response:\n${rawConsolidatedContent}`);
   }
+
+  options.onRawCapture?.({
+    rawInput: { anglesMessages, consolidationMessages },
+    rawOutput: `=== ANGLES ===\n${rawAnglesContent}\n\n=== CONSOLIDATED QUERIES ===\n${rawConsolidatedContent}`,
+  });
 
   if (slug) {
     const rawOutputDir = path.join(__dirname, 'raw_output');
