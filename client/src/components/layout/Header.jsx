@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { api } from '../../api/client.js';
+import { FeedbackModal } from './FeedbackModal.jsx';
 
 /** All nav options live behind one dropdown — previously a flat row of
  * links that, with no responsive handling at all, overlapped and ran off
@@ -12,6 +13,7 @@ export function Header() {
   const navigate = useNavigate();
   const location = useLocation();
   const [isOpen, setIsOpen] = useState(false);
+  const [showFeedback, setShowFeedback] = useState(false);
   const menuRef = useRef(null);
   // Carried to LoginPage/SignupPage so a successful auth returns here
   // instead of always bouncing to home — e.g. logging in from an article
@@ -73,6 +75,16 @@ export function Header() {
                 {user.displayName}
               </Link>
             )}
+            <button
+              type="button"
+              className="link-button"
+              onClick={() => {
+                setIsOpen(false);
+                setShowFeedback(true);
+              }}
+            >
+              Give feedback
+            </button>
             {isGuest ? (
               <>
                 <Link to="/login" state={returnTo} onClick={() => setIsOpen(false)}>
@@ -90,6 +102,7 @@ export function Header() {
           </nav>
         )}
       </div>
+      {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} />}
     </header>
   );
 }

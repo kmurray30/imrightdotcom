@@ -689,6 +689,10 @@ textarea:focus {
   max-width: 90vw;
 }
 
+.feedback-modal {
+  width: 420px;
+}
+
 .folder-list {
   list-style: none;
   padding: 0;
