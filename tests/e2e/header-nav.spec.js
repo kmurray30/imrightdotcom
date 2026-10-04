@@ -6,7 +6,7 @@
 import { test, expect } from '@playwright/test';
 import { signupViaApi } from './helpers/auth.js';
 import { openMenu } from './helpers/nav.js';
-import { getFeedbackByEmail, uniqueSlug } from './helpers/db.js';
+import { getFeedbackByEmail, uniqueSlug, makeAdmin, seedFeedback } from './helpers/db.js';
 
 test.describe('Header / nav', () => {
   test('A1: logo links back to home', async ({ page }) => {
@@ -151,5 +151,41 @@ test.describe('Give feedback', () => {
     const row = await getFeedbackByEmail(user.email);
     expect(row.message).toBe('Please add dark mode.');
     expect(row.userId).toBe(user.id);
+  });
+});
+
+test.describe('Feedback admin page', () => {
+  test('an admin sees the Feedback nav link and the list of submitted feedback', async ({ page }) => {
+    const email = `${uniqueSlug('feedback-viewer')}@example.test`;
+    const message = `This should show up on the admin feedback page — ${uniqueSlug('token')}.`;
+    await seedFeedback({ email, message });
+
+    const { user: admin } = await signupViaApi(page);
+    await makeAdmin(admin.id);
+
+    await page.goto('/');
+    await openMenu(page);
+    await expect(page.getByRole('link', { name: 'Feedback', exact: true })).toBeVisible();
+
+    await page.goto('/feedback');
+    await expect(page.getByText(message)).toBeVisible();
+    await expect(page.getByText(email, { exact: false })).toBeVisible();
+  });
+
+  test('a logged-in non-admin and a guest get the generic not-found treatment', async ({ page }) => {
+    await signupViaApi(page);
+    await page.goto('/');
+    await openMenu(page);
+    await expect(page.getByRole('link', { name: 'Feedback', exact: true })).toHaveCount(0);
+
+    await page.goto('/feedback');
+    await expect(page.locator('.empty-state')).toHaveText('Page not found.');
+
+    let response = await page.request.get('/api/feedback');
+    expect(response.status()).toBe(404);
+
+    await page.context().clearCookies();
+    response = await page.request.get('/api/feedback');
+    expect(response.status()).toBe(404);
   });
 });

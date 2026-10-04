@@ -331,3 +331,14 @@ socialRouter.post('/feedback', async (req, res, next) => {
     next(error);
   }
 });
+
+// Admin-only: view what's been submitted — see require-admin.js for why a
+// non-admin gets 404, not 403, same posture as the pipeline debug route.
+socialRouter.get('/feedback', requireAdmin, async (req, res, next) => {
+  try {
+    const feedback = await Feedback.listFeedback({ cursor: parseCursor(req) });
+    res.json({ feedback });
+  } catch (error) {
+    next(error);
+  }
+});

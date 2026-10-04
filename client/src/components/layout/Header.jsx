@@ -80,6 +80,11 @@ export function Header() {
                 Workshop
               </Link>
             )}
+            {user?.isAdmin && (
+              <Link to="/feedback" onClick={() => setIsOpen(false)}>
+                Feedback
+              </Link>
+            )}
             <button
               type="button"
               className="link-button"

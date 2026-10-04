@@ -20,6 +20,7 @@ import { eq, desc } from 'drizzle-orm';
 import { getDb, schema } from '../../../imright/scripts/db/index.js';
 import { createArticle, saveDebugData } from '../../../imright/scripts/articles.js';
 import * as Workshop from '../../../imright/scripts/workshop.js';
+import { submitFeedback } from '../../../imright/scripts/feedback.js';
 import { getArticleImagesRoot } from '../../../utils/image-cache.js';
 
 // A 1x1 transparent PNG — enough for the <img> to actually resolve (200, a
@@ -177,6 +178,15 @@ export async function getFeedbackByEmail(email) {
     .orderBy(desc(schema.feedback.createdAt))
     .limit(1);
   return rows[0] ?? null;
+}
+
+/** Seeds a feedback row via the real submitFeedback() — no HTTP context
+ * needed, it's a plain DB-access function — so the listing-page tests have
+ * something to list without going through the submission UI/route (that
+ * flow is tested for real elsewhere, header-nav.spec.js's "Give feedback"
+ * describe block). */
+export async function seedFeedback({ userId = null, email = 'fixture-feedback@example.test', message = 'fixture feedback message' } = {}) {
+  return submitFeedback({ userId, email, message });
 }
 
 /** Seeds a completed workshop_runs row directly — the real orchestrator

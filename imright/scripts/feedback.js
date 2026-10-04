@@ -3,6 +3,7 @@
  * concern, same pattern as articles.js/auth-accounts.js.
  */
 
+import { eq, desc } from 'drizzle-orm';
 import { getDb, schema } from './db/index.js';
 import { HttpError } from './http-error.js';
 
@@ -24,4 +25,25 @@ export async function submitFeedback({ userId, email, message }) {
     .values({ userId: userId ?? null, email: trimmedEmail, message: trimmedMessage })
     .returning();
   return row;
+}
+
+/** Admin-only (see routes/social.js's requireAdmin-gated GET /feedback).
+ * Left-joins users since feedback.userId is nullable (a guest/no-identity
+ * submitter has no account to join to). */
+export async function listFeedback({ cursor = 0, limit = 100 } = {}) {
+  const db = getDb();
+  return db
+    .select({
+      id: schema.feedback.id,
+      email: schema.feedback.email,
+      message: schema.feedback.message,
+      createdAt: schema.feedback.createdAt,
+      username: schema.users.username,
+      displayName: schema.users.displayName,
+    })
+    .from(schema.feedback)
+    .leftJoin(schema.users, eq(schema.users.id, schema.feedback.userId))
+    .orderBy(desc(schema.feedback.createdAt))
+    .limit(limit)
+    .offset(cursor);
 }
