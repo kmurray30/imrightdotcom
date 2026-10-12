@@ -78,7 +78,7 @@ import { promisify } from 'util';
 import { loadEnv } from '../../imright/load-env.js';
 import { getAccessToken } from '../../utils/wikimediaAuth.js';
 import { callExternalApi, HttpStatusError, timeoutSignal } from '../../utils/external-api.js';
-import { upsertArticleEmbeddings, setConnectionWarningLogger } from '../embeddingIndex.js';
+import { upsertArticleEmbeddings, setConnectionWarningLogger, setStageTimingReporter } from '../embeddingIndex.js';
 import { setLogger as setEmbedLogger } from '../textEmbeddings.js';
 
 loadEnv();
@@ -252,6 +252,29 @@ function createCounter() {
 }
 
 /**
+ * Tracks a rolling average of how long one stage's calls have recently taken
+ * (as opposed to createCounter's rate-of-progress) — the basis for the
+ * Embed ms / DB ms columns below. A stage that's genuinely the bottleneck
+ * shows up here as a rising recent average well before it'd be obvious from
+ * Art/s alone, the same "recent window, not lifetime average" reasoning as
+ * RECENT_RATE_WINDOW_MS (see createCounter above).
+ */
+function createStageTimer() {
+  const samples = []; // { time, ms }, pruned to RECENT_RATE_WINDOW_MS
+  return {
+    record(ms) {
+      const now = Date.now();
+      samples.push({ time: now, ms });
+      while (samples.length > 1 && now - samples[0].time > RECENT_RATE_WINDOW_MS) samples.shift();
+    },
+    recentAvgMs() {
+      if (samples.length === 0) return 0;
+      return samples.reduce((sum, s) => sum + s.ms, 0) / samples.length;
+    },
+  };
+}
+
+/**
  * Renders one combined status TABLE (fixed-width bordered columns, a header
  * printed once, and a single data row updated in place), driven by ARTICLES
  * EMBEDDED as the primary metric (bar/%/ETA), with bytes downloaded shown as
@@ -276,9 +299,19 @@ function createCounter() {
 function createProgressDisplay(totalArticles, totalBytes) {
   const articles = createCounter();
   const bytes = createCounter();
+  const embedTimer = createStageTimer();
+  const dbTimer = createStageTimer();
   let intervalId = null;
 
-  const headers = ['Progress', 'Done%', 'Articles', 'Art/s', 'ETA', 'Downloaded'];
+  // DL MB/s, Embed ms, and DB ms exist to answer "which of the three usual
+  // suspects — network download, CPU-bound embedding, or the Postgres/tunnel
+  // round trip — is the bottleneck right now," without a separate side
+  // investigation (debug.log, a DB latency probe, etc.) every time Art/s
+  // drops. Whatever's left over (wikitext parsing, tar extraction, event-loop
+  // contention) isn't broken out as its own column — if Art/s is low but all
+  // three of these look normal, that's the signal it's something else, and
+  // debug.log's per-chunk stage-transition lines are the next place to look.
+  const headers = ['Progress', 'Done%', 'Articles', 'Art/s', 'ETA', 'Downloaded', 'DL MB/s', 'Embed ms', 'DB ms'];
   const widths = [
     Math.max(headers[0].length, PROGRESS_BAR_WIDTH + 2), // "[" + bar + "]"
     Math.max(headers[1].length, 6), // "100.0%"
@@ -286,15 +319,21 @@ function createProgressDisplay(totalArticles, totalBytes) {
     Math.max(headers[3].length, 7), // rate, e.g. "9999.9"
     Math.max(headers[4].length, 8), // "999d23h"-ish worst case
     Math.max(headers[5].length, formatGB(totalBytes).length + 2), // formatted GB + "GB" suffix
+    Math.max(headers[6].length, 7), // rate, e.g. "9999.9"
+    Math.max(headers[7].length, 7), // ms, e.g. "9999.9"
+    Math.max(headers[8].length, 7), // ms, e.g. "9999.9"
   ];
-  const aligns = ['left', 'right', 'right', 'right', 'right', 'right'];
+  const aligns = ['left', 'right', 'right', 'right', 'right', 'right', 'right', 'right', 'right'];
 
   function render() {
     // rate (lifetime average) drives the ETA; recentRate (short rolling
     // window) drives the displayed Art/s — see createCounter's comment for
     // why these are deliberately different numbers.
     const { done: articlesDone, rate: lifetimeRate, recentRate: articleRate } = articles.stats();
-    const { done: bytesDone } = bytes.stats();
+    const { done: bytesDone, recentRate: bytesRate } = bytes.stats();
+    const downloadMBps = (bytesRate / 1e6).toFixed(1);
+    const embedMs = embedTimer.recentAvgMs().toFixed(1);
+    const dbMs = dbTimer.recentAvgMs().toFixed(1);
 
     let cells;
     if (totalArticles > 0) {
@@ -310,10 +349,13 @@ function createProgressDisplay(totalArticles, totalBytes) {
         articleRate.toFixed(1),
         formatDuration(etaSeconds),
         `${formatGB(bytesDone)}GB`,
+        downloadMBps,
+        embedMs,
+        dbMs,
       ];
     } else {
       // No article-count denominator to compute a % or ETA against — fall back to raw counts in the columns that still make sense.
-      cells = ['-', '-', formatCount(articlesDone), articleRate.toFixed(1), '-', `${formatGB(bytesDone)}GB`];
+      cells = ['-', '-', formatCount(articlesDone), articleRate.toFixed(1), '-', `${formatGB(bytesDone)}GB`, downloadMBps, embedMs, dbMs];
     }
     process.stdout.write(fitToTerminal(tableRow(cells, widths, aligns)));
   }
@@ -355,6 +397,10 @@ function createProgressDisplay(totalArticles, totalBytes) {
     },
     addBytes(n) {
       bytes.add(n);
+    },
+    recordStageTiming(stage, ms) {
+      if (stage === 'embed') embedTimer.record(ms);
+      else if (stage === 'db') dbTimer.record(ms);
     },
     articlesDone() {
       return articles.done; // for callers (e.g. debug-log lines) that want the corpus-wide running total, not just their own local count
@@ -1061,6 +1107,7 @@ async function main() {
     logDebug(message);
     tracker.logWarning(message);
   });
+  setStageTimingReporter((stage, ms) => tracker.recordStageTiming(stage, ms));
 
   tracker.start();
   await runWithConcurrency(

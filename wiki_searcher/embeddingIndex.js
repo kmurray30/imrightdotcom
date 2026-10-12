@@ -181,6 +181,22 @@ export function setConnectionWarningLogger(fn) {
   logConnectionWarning = fn;
 }
 
+let reportStageTiming = () => {};
+
+/**
+ * Redirects per-stage wall-clock timings (DB round trips vs. the embedding
+ * call itself) to a caller-supplied reporter — e.g. the live progress table
+ * in build-index-from-wikimedia.js, which uses this to show where a slowdown
+ * actually is (network download, CPU-bound embedding, or the Postgres/tunnel
+ * round trip) instead of requiring a side investigation every time Art/s
+ * drops. Defaults to a no-op, so nothing changes for callers that never call
+ * this (refresh-daily.js, build-index-from-ndjson.js).
+ * @param {(stage: 'db' | 'embed', ms: number) => void} fn
+ */
+export function setStageTimingReporter(fn) {
+  reportStageTiming = fn;
+}
+
 /** One attempt at the full upsert — pulled out of upsertArticleEmbeddings so that function can wrap it in a retry loop. */
 async function attemptUpsert(pool, { title, wikitext, versionIdentifier, pageId }) {
   const client = await pool.connect();
@@ -208,7 +224,10 @@ async function attemptUpsert(pool, { title, wikitext, versionIdentifier, pageId 
     client.release(err);
   };
   try {
-    if (await isAlreadyCurrent(client, title, versionIdentifier)) {
+    const dbReadStart = performance.now();
+    const alreadyCurrent = await isAlreadyCurrent(client, title, versionIdentifier);
+    reportStageTiming('db', performance.now() - dbReadStart);
+    if (alreadyCurrent) {
       release();
       return { title, paragraphCount: 0, skipped: true };
     }
@@ -222,17 +241,21 @@ async function attemptUpsert(pool, { title, wikitext, versionIdentifier, pageId 
       // Nothing to embed for this version, but a prior version's rows (or a
       // renamed page's stale rows under this title/page_id) may still need
       // cleaning up — a lone DELETE, no INSERT half to combine it with.
+      const dbDeleteStart = performance.now();
       await client.query('DELETE FROM wiki_paragraph_embeddings WHERE title = $1 OR (page_id = $2 AND title != $1)', [
         title,
         pageId ?? null,
       ]);
+      reportStageTiming('db', performance.now() - dbDeleteStart);
       release();
       return { title, paragraphCount: 0, skipped: false };
     }
 
     // One batched forward pass for every paragraph in this article instead
     // of one call per paragraph — see textEmbeddings.js's embedTexts.
+    const embedStart = performance.now();
     const embeddings = await embedTexts(paragraphs.map(({ section, text }) => `${title} — ${section}: ${text}`));
+    reportStageTiming('embed', performance.now() - embedStart);
 
     // DELETE and INSERT combined into ONE round-trip via a data-modifying
     // CTE, instead of two round-trips wrapped in BEGIN/COMMIT. The INSERT's
@@ -251,6 +274,7 @@ async function attemptUpsert(pool, { title, wikitext, versionIdentifier, pageId 
       insertValues.push(index, paragraph.section, paragraph.text, pgvector.toSql(embeddings[index]), versionIdentifier ?? null);
       return `($1::text, $2::bigint, $${base + 1}::int, $${base + 2}::text, $${base + 3}::text, $${base + 4}::vector, $${base + 5}::bigint)`;
     });
+    const dbWriteStart = performance.now();
     await client.query(
       `WITH deleted AS (
          DELETE FROM wiki_paragraph_embeddings WHERE title = $1 OR (page_id = $2 AND title != $1)
@@ -262,6 +286,7 @@ async function attemptUpsert(pool, { title, wikitext, versionIdentifier, pageId 
        CROSS JOIN (SELECT count(*) FROM deleted) AS dep(n)`,
       insertValues
     );
+    reportStageTiming('db', performance.now() - dbWriteStart);
     release();
     return { title, paragraphCount: paragraphs.length, skipped: false };
   } catch (error) {
