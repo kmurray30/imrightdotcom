@@ -103,6 +103,7 @@ const ARTICLE_CONCURRENCY = 8;
 process.env.DB_POOL_MAX ??= String(EMBED_CONCURRENCY * ARTICLE_CONCURRENCY + 2); // +2 headroom for other occasional queries (refresh-daily.js, etc. sharing the same Postgres); only takes effect if the user hasn't already set this themselves
 const METADATA_TIMEOUT_MS = 15_000; // HEAD/info calls should be fast; don't hang forever if one stalls
 const STALL_TIMEOUT_MS = 30_000; // abort a chunk download if no bytes arrive for this long
+const CONSOLE_WARN_THROTTLE_MS = 10_000; // cap how often a retrying download repaints the live console (debug.log still gets every attempt)
 
 const PROGRESS_BAR_WIDTH = 30; // fitToTerminal() truncates safely on a narrow terminal, so there's no need to keep this cramped for width's sake
 const PROGRESS_RENDER_INTERVAL_MS = 200;
@@ -451,7 +452,11 @@ async function headDownload(url, accessToken) {
  * was already HEAD'd once for its total size.
  */
 async function downloadOne(url, filePath, accessToken, tracker, metadata) {
-  const { contentLength, etag, acceptsRanges } = metadata;
+  // `let`, not `const`: a "received more bytes than reported size" failure
+  // (see the catch block below) means this cached HEAD data is stale, and
+  // gets refreshed in place so later attempts stop re-hitting the same
+  // wrong ceiling.
+  let { contentLength, etag, acceptsRanges } = metadata;
   const etagSidecarPath = `${filePath}.etag`;
 
   // This is the ONE place that decides how many on-disk bytes for this
@@ -516,6 +521,7 @@ async function downloadOne(url, filePath, accessToken, tracker, metadata) {
   // "retry forever, but tell me when it happens" principle already used for
   // DB connection retries).
   let attemptNumber = 0;
+  let lastConsoleWarnAt = 0;
   await withRetry(
     'snapshot_chunk_download',
     async () => {
@@ -593,25 +599,68 @@ async function downloadOne(url, filePath, accessToken, tracker, metadata) {
         // attempt instead of being a one-shot fatal error for the whole
         // process.
         if (Number.isFinite(contentLength) && contentLength > 0 && currentSize + bytesThisAttempt !== contentLength) {
-          throw new Error(
+          const shortfallError = new Error(
             `${path.basename(filePath)}: response ended after ${bytesThisAttempt} bytes this attempt, but ` +
               `${contentLength - currentSize} were expected (${currentSize + bytesThisAttempt}/${contentLength} total) — retrying.`
           );
+          // writeStream.end() above already resolved successfully -- every
+          // one of these bytes is confirmed written and good, just short of
+          // the full chunk. Flagged so the catch block below keeps them
+          // instead of rolling back to currentSize. Observed live keeping
+          // the OLD rollback-everything behavior: the next attempt re-reads
+          // the exact same currentSize and sends the exact same Range
+          // request, so a response that deterministically truncates at the
+          // same point (a flaky CDN edge serving a cached partial response,
+          // for instance -- two different chunks were seen truncating at
+          // the identical byte count on every single retry) can never
+          // succeed no matter how many times it's retried. Keeping the good
+          // bytes means the next attempt asks for a smaller, different
+          // remaining range instead of repeating a request that's already
+          // proven to fail.
+          shortfallError.isCleanShortResponse = true;
+          throw shortfallError;
         }
       } catch (error) {
-        // Undo this attempt's byte count and any bytes it wrote before
-        // failing — a retried attempt otherwise resumes from a file size
-        // that doesn't reflect the failed attempt's still-draining writes,
-        // both end up writing the same region, and every byte gets
-        // double-counted.
-        tracker.addBytes(-bytesThisAttempt);
-        if (writeStream && !writeStream.destroyed) {
-          await new Promise((resolve) => writeStream.destroy(undefined, () => resolve()));
+        if (error.isCleanShortResponse) {
+          // See where this is thrown above -- these bytes are confirmed
+          // good (the stream already ended normally), so no rollback.
+        } else {
+          // Undo this attempt's byte count and any bytes it wrote before
+          // failing — a retried attempt otherwise resumes from a file size
+          // that doesn't reflect the failed attempt's still-draining writes,
+          // both end up writing the same region, and every byte gets
+          // double-counted.
+          tracker.addBytes(-bytesThisAttempt);
+          if (writeStream && !writeStream.destroyed) {
+            await new Promise((resolve) => writeStream.destroy(undefined, () => resolve()));
+          }
+          try {
+            if (fs.existsSync(filePath)) fs.truncateSync(filePath, currentSize);
+          } catch {
+            // best-effort; the next attempt's own currentSize re-read is the real safety net
+          }
         }
-        try {
-          if (fs.existsSync(filePath)) fs.truncateSync(filePath, currentSize);
-        } catch {
-          // best-effort; the next attempt's own currentSize re-read is the real safety net
+
+        // "Received more bytes than its reported size" repeating with
+        // essentially the SAME overshoot on every attempt (observed live:
+        // off by the same few KB, over and over, against a ~345MB chunk)
+        // isn't a transient failure at all -- it means contentLength itself
+        // (cached in snapshot-metadata.json, possibly weeks stale)
+        // understates this chunk's true current size. No amount of
+        // retrying against the same wrong ceiling will ever succeed.
+        // Refreshing it here, in place, is what makes the next attempt
+        // retry against the REAL size instead of repeating a doomed check
+        // forever.
+        if (/received more bytes than its reported size/.test(error.message)) {
+          try {
+            const fresh = await headDownload(url, accessToken);
+            contentLength = fresh.contentLength;
+            etag = fresh.etag;
+            acceptsRanges = fresh.acceptsRanges;
+            logDebug(`${path.basename(filePath)}: cached size was stale — refreshed via HEAD, true size is ${contentLength}`);
+          } catch {
+            // best-effort -- if the refresh itself fails, retry with the old expectation; it'll hit the same wall and try to refresh again next attempt
+          }
         }
 
         const failure =
@@ -620,7 +669,15 @@ async function downloadOne(url, filePath, accessToken, tracker, metadata) {
             : error;
         const message = `${path.basename(filePath)}: download attempt ${attemptNumber} failed — ${failure.message}`;
         logDebug(message);
-        tracker.logWarning(`⚠ ${message} — retrying`);
+        // The live console warning (a full table redraw) is throttled
+        // separately from debug.log -- every attempt is always logged to
+        // disk, but a chunk retrying rapidly shouldn't repaint the console
+        // on every single one of them.
+        const now = Date.now();
+        if (now - lastConsoleWarnAt >= CONSOLE_WARN_THROTTLE_MS) {
+          tracker.logWarning(`⚠ ${message} — retrying`);
+          lastConsoleWarnAt = now;
+        }
         throw failure;
       } finally {
         clearTimeout(stallTimer);
