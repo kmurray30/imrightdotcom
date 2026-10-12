@@ -25,7 +25,9 @@ export const EMBEDDING_DIMENSIONS = 384;
  *    with). 'fp16' can be faster on a GPU but produces slightly different
  *    vectors: only use it if the benchmark's parity check (cosine against the
  *    vectors already stored in the index) stays above ~0.999.
- *  - EMBED_BATCH_SIZE: max texts per model call (default 64) — see embedSorted.
+ *  - EMBED_BATCH_SIZE: max texts per model call (default 8) — see embedSorted.
+ *    Benchmarked on real index paragraphs: 8-16 was fastest on both CPU and
+ *    WebGPU; 64 was ~3x slower on both (padding waste swamped everything).
  * A function, not constants: callers import this module before loadEnv() has
  * read env.local, so these must be read when the model is actually used.
  */
@@ -33,7 +35,7 @@ export function embedConfig() {
   return {
     device: process.env.EMBED_DEVICE || 'cpu',
     dtype: process.env.EMBED_DTYPE || 'fp32',
-    batchSize: Number(process.env.EMBED_BATCH_SIZE) || 64,
+    batchSize: Number(process.env.EMBED_BATCH_SIZE) || 8,
   };
 }
 

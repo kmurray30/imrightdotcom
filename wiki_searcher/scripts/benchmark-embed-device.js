@@ -21,7 +21,7 @@
  *
  * Usage: node wiki_searcher/scripts/benchmark-embed-device.js [device ...]   (default: cpu webgpu)
  *   DTYPES=fp32,fp16          precisions for non-CPU devices (CPU always runs fp32 only, as the baseline)
- *   BATCH_SIZES=8,16,32,64    EMBED_BATCH_SIZE values to sweep
+ *   BATCH_SIZES=2,4,8,16      EMBED_BATCH_SIZE values to sweep
  *   SAMPLE=400                paragraphs to sample from the index
  *   CALL_SIZE=40 IN_FLIGHT=4  call shape
  */
@@ -38,7 +38,7 @@ const listEnv = (name, fallback) =>
     .filter(Boolean);
 const devices = process.argv.length > 2 ? process.argv.slice(2) : ['cpu', 'webgpu'];
 const dtypes = listEnv('DTYPES', 'fp32,fp16');
-const batchSizes = listEnv('BATCH_SIZES', '8,16,32,64').map(Number);
+const batchSizes = listEnv('BATCH_SIZES', '2,4,8,16').map(Number);
 const SAMPLE = Number(process.env.SAMPLE) || 400;
 const CALL_SIZE = Number(process.env.CALL_SIZE) || 40;
 const IN_FLIGHT = Number(process.env.IN_FLIGHT) || 4;
