@@ -490,80 +490,125 @@ async function downloadOne(url, filePath, accessToken, tracker, metadata) {
   if (isResuming) headers.Range = `bytes=${startByte}-`;
 
   let alreadyComplete = false;
-  await withRetry('snapshot_chunk_download', async () => {
-    // Re-check on every retry attempt — a prior attempt may have written
-    // some bytes before failing, so this needs to reflect what's on disk
-    // right now, not what it was when downloadOne started.
-    const currentSize = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
-    const attemptHeaders = { ...headers };
-    if (currentSize > 0 && acceptsRanges) attemptHeaders.Range = `bytes=${currentSize}-`;
+  // Retries effectively forever (a huge but finite ceiling, so a genuinely
+  // non-retryable failure -- callExternalApi still throws immediately for a
+  // 4xx like an expired token -- isn't silently hidden either) rather than
+  // the default 4. Confirmed from callExternalApi's own backoff math (capped
+  // at 5s/attempt) that 4 retries is only ~15-20s of total backoff plus up
+  // to 4 more STALL_TIMEOUT_MS waits -- nowhere near enough to survive a
+  // multi-minute network blip, which is exactly what's been happening here
+  // (observed live: downloads failing in various ways after the laptop's
+  // display sleeps, even with full system sleep disabled -- display sleep
+  // alone is enough to interrupt Wi-Fi for a while on macOS). A long-running
+  // background download should wait this kind of thing out, not give up and
+  // take the whole multi-day job down with it.
+  await withRetry(
+    'snapshot_chunk_download',
+    async () => {
+      // Re-check on every retry attempt — a prior attempt may have written
+      // some bytes before failing, so this needs to reflect what's on disk
+      // right now, not what it was when downloadOne started.
+      const currentSize = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
+      const attemptHeaders = { ...headers };
+      if (currentSize > 0 && acceptsRanges) attemptHeaders.Range = `bytes=${currentSize}-`;
 
-    // Guards against a silent hang mid-transfer too, not just on connect:
-    // the timer resets on every chunk received, so it only fires if bytes
-    // stop arriving for STALL_TIMEOUT_MS, not because the transfer is slow.
-    const controller = new AbortController();
-    let stallTimer = setTimeout(() => controller.abort(), STALL_TIMEOUT_MS);
-    const resetStallTimer = () => {
-      clearTimeout(stallTimer);
-      stallTimer = setTimeout(() => controller.abort(), STALL_TIMEOUT_MS);
-    };
+      // Guards against a silent hang mid-transfer too, not just on connect:
+      // the timer resets on every chunk received, so it only fires if bytes
+      // stop arriving for STALL_TIMEOUT_MS, not because the transfer is slow.
+      const controller = new AbortController();
+      let stallTimer = setTimeout(() => controller.abort(), STALL_TIMEOUT_MS);
+      const resetStallTimer = () => {
+        clearTimeout(stallTimer);
+        stallTimer = setTimeout(() => controller.abort(), STALL_TIMEOUT_MS);
+      };
 
-    let writeStream;
-    let bytesThisAttempt = 0;
-    try {
-      const response = await fetch(url, { headers: attemptHeaders, signal: controller.signal });
-      if (response.status === 416) {
-        alreadyComplete = true;
-        return;
-      }
-      if (!response.ok && response.status !== 206) {
-        throwForBadResponse(response, `Download failed: ${response.status} ${response.statusText}`);
-      }
+      let writeStream;
+      let bytesThisAttempt = 0;
+      try {
+        const response = await fetch(url, { headers: attemptHeaders, signal: controller.signal });
+        if (response.status === 416) {
+          alreadyComplete = true;
+          return;
+        }
+        if (!response.ok && response.status !== 206) {
+          throwForBadResponse(response, `Download failed: ${response.status} ${response.statusText}`);
+        }
 
-      writeStream = fs.createWriteStream(filePath, { flags: currentSize > 0 ? 'a' : 'w' });
-      for await (const chunk of Readable.fromWeb(response.body)) {
-        resetStallTimer();
-        // Hard stop the moment this chunk would exceed its known size —
-        // checked before counting it anywhere, so bytesThisAttempt always
-        // matches exactly what was added to the tracker (needed for a
-        // clean rollback below).
-        if (Number.isFinite(contentLength) && contentLength > 0 && currentSize + bytesThisAttempt + chunk.length > contentLength) {
+        writeStream = fs.createWriteStream(filePath, { flags: currentSize > 0 ? 'a' : 'w' });
+        // Without this, a write that completes (or fails) asynchronously
+        // AFTER the stream has already been destroyed — e.g. racing the
+        // catch block's destroy() below against a stall-triggered abort —
+        // emits an 'error' event with nothing listening for it. Node treats
+        // an unlistened 'error' event as fatal and crashes the WHOLE
+        // process (observed live: "Unhandled 'error' event" /
+        // ERR_STREAM_DESTROYED, taking down a multi-day run over what's
+        // really a transient I/O race). The actual correctness backstop
+        // here is the completeness check below, not this stream's own error
+        // reporting, so it's safe to just log and move on — a short/failed
+        // write surfaces as a size mismatch and gets retried either way.
+        writeStream.on('error', (err) => {
+          logDebug(`${path.basename(filePath)}: write stream error (likely a benign write-after-destroy race from a stall/abort) — ${err.message}`);
+        });
+        for await (const chunk of Readable.fromWeb(response.body)) {
+          resetStallTimer();
+          // Hard stop the moment this chunk would exceed its known size —
+          // checked before counting it anywhere, so bytesThisAttempt always
+          // matches exactly what was added to the tracker (needed for a
+          // clean rollback below).
+          if (Number.isFinite(contentLength) && contentLength > 0 && currentSize + bytesThisAttempt + chunk.length > contentLength) {
+            throw new Error(
+              `${path.basename(filePath)} received more bytes than its reported size ` +
+                `(${currentSize + bytesThisAttempt + chunk.length} > ${contentLength}) — aborting this attempt.`
+            );
+          }
+          bytesThisAttempt += chunk.length;
+          tracker.addBytes(chunk.length);
+          if (!writeStream.write(chunk)) {
+            await new Promise((resolve) => writeStream.once('drain', resolve));
+          }
+        }
+        await new Promise((resolve, reject) => writeStream.end((error) => (error ? reject(error) : resolve())));
+
+        // The response body can end cleanly (no thrown error at all) while
+        // still having delivered fewer bytes than it promised — observed
+        // live as a "Size mismatch" fatal error thrown AFTER this whole
+        // retry call had already returned successfully, meaning it was
+        // never actually retried. Checking per-attempt, inside the retry
+        // loop, is what makes a silently truncated response get another
+        // attempt instead of being a one-shot fatal error for the whole
+        // process.
+        if (Number.isFinite(contentLength) && contentLength > 0 && currentSize + bytesThisAttempt !== contentLength) {
           throw new Error(
-            `${path.basename(filePath)} received more bytes than its reported size ` +
-              `(${currentSize + bytesThisAttempt + chunk.length} > ${contentLength}) — aborting this attempt.`
+            `${path.basename(filePath)}: response ended after ${bytesThisAttempt} bytes this attempt, but ` +
+              `${contentLength - currentSize} were expected (${currentSize + bytesThisAttempt}/${contentLength} total) — retrying.`
           );
         }
-        bytesThisAttempt += chunk.length;
-        tracker.addBytes(chunk.length);
-        if (!writeStream.write(chunk)) {
-          await new Promise((resolve) => writeStream.once('drain', resolve));
+      } catch (error) {
+        // Undo this attempt's byte count and any bytes it wrote before
+        // failing — a retried attempt otherwise resumes from a file size
+        // that doesn't reflect the failed attempt's still-draining writes,
+        // both end up writing the same region, and every byte gets
+        // double-counted.
+        tracker.addBytes(-bytesThisAttempt);
+        if (writeStream && !writeStream.destroyed) {
+          await new Promise((resolve) => writeStream.destroy(undefined, () => resolve()));
         }
-      }
-      await new Promise((resolve, reject) => writeStream.end((error) => (error ? reject(error) : resolve())));
-    } catch (error) {
-      // Undo this attempt's byte count and any bytes it wrote before
-      // failing — a retried attempt otherwise resumes from a file size
-      // that doesn't reflect the failed attempt's still-draining writes,
-      // both end up writing the same region, and every byte gets
-      // double-counted.
-      tracker.addBytes(-bytesThisAttempt);
-      if (writeStream && !writeStream.destroyed) {
-        await new Promise((resolve) => writeStream.destroy(undefined, () => resolve()));
-      }
-      try {
-        if (fs.existsSync(filePath)) fs.truncateSync(filePath, currentSize);
-      } catch {
-        // best-effort; the next attempt's own currentSize re-read is the real safety net
-      }
+        try {
+          if (fs.existsSync(filePath)) fs.truncateSync(filePath, currentSize);
+        } catch {
+          // best-effort; the next attempt's own currentSize re-read is the real safety net
+        }
 
-      if (error.name === 'AbortError') {
-        throw new Error(`Chunk stalled — no data received for ${STALL_TIMEOUT_MS / 1000}s (${path.basename(filePath)}).`);
+        if (error.name === 'AbortError') {
+          throw new Error(`Chunk stalled — no data received for ${STALL_TIMEOUT_MS / 1000}s (${path.basename(filePath)}).`);
+        }
+        throw error;
+      } finally {
+        clearTimeout(stallTimer);
       }
-      throw error;
-    } finally {
-      clearTimeout(stallTimer);
-    }
-  });
+    },
+    100_000 // see comment above withRetry call — effectively unbounded, not the default 4
+  );
 
   if (alreadyComplete) return;
 
