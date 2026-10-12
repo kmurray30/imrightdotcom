@@ -78,7 +78,7 @@ import { promisify } from 'util';
 import { loadEnv } from '../../imright/load-env.js';
 import { getAccessToken } from '../../utils/wikimediaAuth.js';
 import { callExternalApi, HttpStatusError, timeoutSignal } from '../../utils/external-api.js';
-import { upsertArticleEmbeddings, setConnectionWarningLogger, setStageTimingReporter } from '../embeddingIndex.js';
+import { upsertArticlesBatch, setConnectionWarningLogger, setStageTimingReporter } from '../embeddingIndex.js';
 import { setLogger as setEmbedLogger } from '../textEmbeddings.js';
 
 loadEnv();
@@ -93,14 +93,14 @@ const identifier = process.argv[2] || 'enwiki_namespace_0';
 const destDir = process.argv[3] || './wiki-snapshots';
 const CONCURRENCY = 6; // sizing pass only — pure network, raise if you're on a paid plan with a higher QPS limit
 const EMBED_CONCURRENCY = 4; // chunks in flight at once — bounds peak disk usage (raw archive + extracted NDJSON per chunk), not DB load
-// Articles processed concurrently WITHIN each chunk. upsertArticleEmbeddings
-// spends most of its wall-clock time waiting on DB round-trips over a
-// tunnel to a remote Postgres, not on local CPU — processing them one at a
-// time (the original design) left that wait time completely unoverlapped.
-// Combined with EMBED_CONCURRENCY, this is EMBED_CONCURRENCY * this many
-// simultaneous DB connections, so DB_POOL_MAX below is sized to match.
+// Articles embedded concurrently WITHIN each chunk, and how many go into one
+// upsertArticlesBatch call (embeddingIndex.js) — the DB side of that call is
+// now batched into (at most) two round trips for the whole group rather than
+// per article, so each chunk only ever holds ONE DB connection at a time
+// regardless of this number; DB_POOL_MAX below just needs EMBED_CONCURRENCY
+// (+ headroom) connections, not EMBED_CONCURRENCY * ARTICLE_CONCURRENCY.
 const ARTICLE_CONCURRENCY = 8;
-process.env.DB_POOL_MAX ??= String(EMBED_CONCURRENCY * ARTICLE_CONCURRENCY + 2); // +2 headroom for other occasional queries (refresh-daily.js, etc. sharing the same Postgres); only takes effect if the user hasn't already set this themselves
+process.env.DB_POOL_MAX ??= String(EMBED_CONCURRENCY + 2); // one connection per chunk in flight (see ARTICLE_CONCURRENCY above) + 2 headroom for other occasional queries (refresh-daily.js, etc. sharing the same Postgres); only takes effect if the user hasn't already set this themselves
 const METADATA_TIMEOUT_MS = 15_000; // HEAD/info calls should be fast; don't hang forever if one stalls
 const STALL_TIMEOUT_MS = 30_000; // abort a chunk download if no bytes arrive for this long
 const CONSOLE_WARN_THROTTLE_MS = 10_000; // cap how often a retrying download repaints the live console (debug.log still gets every attempt)
@@ -836,17 +836,17 @@ function saveLineCheckpoint(chunkId, lineNumber) {
  * Streams one chunk's NDJSON, embeds every article's citation-adjacent
  * paragraphs, then deletes the raw extracted file.
  *
- * Processes ARTICLE_CONCURRENCY articles at a time (read into a batch, all
- * awaited together via Promise.all) rather than one at a time — each
- * upsertArticleEmbeddings call spends most of its wall-clock time waiting on
- * DB round-trips over a tunnel to a remote Postgres, not on local CPU, so
- * overlapping several is a close-to-linear speedup up to whatever the DB/
- * tunnel can actually sustain concurrently. Batches (not a fully streaming
+ * Processes ARTICLE_CONCURRENCY articles at a time, as one batch handed to
+ * upsertArticlesBatch (embeddingIndex.js) rather than one call per article —
+ * each article's own DB round-trips over the tunnel to a remote Postgres pay
+ * a fixed latency cost regardless of concurrency, so batching them into (at
+ * most) two round-trips for the WHOLE group of articles cuts that overhead
+ * directly instead of just overlapping it. Batches (not a fully streaming
  * worker pool) specifically because the checkpoint below needs a clean
  * "everything up to line N is definitely done" boundary: with a bounded
- * batch awaited via Promise.all, the checkpoint only ever advances past a
- * batch that has FULLY completed, so a crash mid-batch can't leave the
- * checkpoint claiming more progress than actually landed in Postgres.
+ * batch, the checkpoint only ever advances past a batch that has FULLY
+ * completed, so a crash mid-batch can't leave the checkpoint claiming more
+ * progress than actually landed in Postgres.
  *
  * Logs (and checkpoints) on a time interval rather than a fixed article
  * count, so a chunk with few qualifying articles (or one that's just slow)
@@ -870,21 +870,25 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
   async function flushBatch() {
     if (batch.length === 0) return;
 
-    await Promise.all(
-      batch.map(async ({ article }) => {
-        const wikitext = article?.article_body?.wikitext;
-        if (!article || !wikitext) return; // malformed line or a record with no embeddable body (deleted/visibility-changed/empty)
-        const result = await upsertArticleEmbeddings({
+    // Malformed lines or records with no embeddable body (deleted/
+    // visibility-changed/empty) never reach the DB at all — same as before,
+    // just filtered up front instead of bailing out of a per-article call.
+    const embeddable = batch.filter(({ article }) => article?.article_body?.wikitext);
+    if (embeddable.length > 0) {
+      const results = await upsertArticlesBatch(
+        embeddable.map(({ article }) => ({
           title: article.name,
-          wikitext,
+          wikitext: article.article_body.wikitext,
           versionIdentifier: article.version?.identifier,
           pageId: article.identifier,
-        });
+        }))
+      );
+      for (const result of results) {
         stats.articles++;
         stats.paragraphs += result.paragraphCount;
         if (result.skipped) stats.alreadyCurrent++;
-      })
-    );
+      }
+    }
 
     // Counted per line in the batch (not just embeddable ones), so the live
     // tracker's numerator converges with recordCount (the corpus-wide
