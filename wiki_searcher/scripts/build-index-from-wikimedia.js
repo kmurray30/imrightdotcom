@@ -502,9 +502,24 @@ async function downloadOne(url, filePath, accessToken, tracker, metadata) {
   // alone is enough to interrupt Wi-Fi for a while on macOS). A long-running
   // background download should wait this kind of thing out, not give up and
   // take the whole multi-day job down with it.
+  //
+  // But retrying effectively forever MUST be loud, not silent -- caused a
+  // real incident: callExternalApi's own retry loop doesn't log anywhere
+  // (its recordRetryMetric/addTraceEvent calls are internal telemetry, not
+  // console/debug.log output), so a chunk stuck retrying a persistently bad
+  // download held one of EMBED_CONCURRENCY's 4 worker slots hostage with
+  // ZERO visible indication anything was wrong -- just 3 of the 4 chunks
+  // going completely silent in debug.log for minutes on end, while overall
+  // throughput quietly dropped to a quarter of normal. attemptNumber below
+  // and the logging in the catch block make every single retry visible,
+  // both in debug.log and on the live console (matching the exact same
+  // "retry forever, but tell me when it happens" principle already used for
+  // DB connection retries).
+  let attemptNumber = 0;
   await withRetry(
     'snapshot_chunk_download',
     async () => {
+      attemptNumber++;
       // Re-check on every retry attempt — a prior attempt may have written
       // some bytes before failing, so this needs to reflect what's on disk
       // right now, not what it was when downloadOne started.
@@ -599,10 +614,14 @@ async function downloadOne(url, filePath, accessToken, tracker, metadata) {
           // best-effort; the next attempt's own currentSize re-read is the real safety net
         }
 
-        if (error.name === 'AbortError') {
-          throw new Error(`Chunk stalled — no data received for ${STALL_TIMEOUT_MS / 1000}s (${path.basename(filePath)}).`);
-        }
-        throw error;
+        const failure =
+          error.name === 'AbortError'
+            ? new Error(`Chunk stalled — no data received for ${STALL_TIMEOUT_MS / 1000}s (${path.basename(filePath)}).`)
+            : error;
+        const message = `${path.basename(filePath)}: download attempt ${attemptNumber} failed — ${failure.message}`;
+        logDebug(message);
+        tracker.logWarning(`⚠ ${message} — retrying`);
+        throw failure;
       } finally {
         clearTimeout(stallTimer);
       }
