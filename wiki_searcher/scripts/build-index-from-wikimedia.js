@@ -78,7 +78,7 @@ import { promisify } from 'util';
 import { loadEnv } from '../../imright/load-env.js';
 import { getAccessToken } from '../../utils/wikimediaAuth.js';
 import { callExternalApi, HttpStatusError, timeoutSignal } from '../../utils/external-api.js';
-import { upsertArticlesBatch, setConnectionWarningLogger, setStageTimingReporter } from '../embeddingIndex.js';
+import { upsertArticlesBatch, setConnectionWarningLogger } from '../embeddingIndex.js';
 import { setLogger as setEmbedLogger, embedConfig } from '../textEmbeddings.js';
 
 loadEnv();
@@ -92,7 +92,13 @@ const API_BASE = 'https://api.enterprise.wikimedia.com';
 const identifier = process.argv[2] || 'enwiki_namespace_0';
 const destDir = process.argv[3] || './wiki-snapshots';
 const CONCURRENCY = 6; // sizing pass only — pure network, raise if you're on a paid plan with a higher QPS limit
-const EMBED_CONCURRENCY = 4; // chunks in flight at once — bounds peak disk usage (raw archive + extracted NDJSON per chunk), not DB load
+// Chunks in flight at once (CHUNK_CONCURRENCY env, default 4). Each chunk
+// processes its batches strictly in sequence (read → embed → write), so most
+// of a chunk's time is spent waiting on DB round trips over the tunnel; more
+// chunks in parallel overlaps more of that waiting. Costs disk (each chunk in
+// flight holds its archive + extracted NDJSON) and one DB connection each.
+// Safe to change between runs: every chunk resumes from its own checkpoint.
+const EMBED_CONCURRENCY = Number(process.env.CHUNK_CONCURRENCY) || 4;
 // Articles embedded concurrently WITHIN each chunk, and how many go into one
 // upsertArticlesBatch call (embeddingIndex.js) — the DB side of that call is
 // now batched into (at most) two round trips for the whole group rather than
@@ -299,22 +305,20 @@ function createStageTimer() {
 function createProgressDisplay(totalArticles, totalBytes) {
   const articles = createCounter();
   const bytes = createCounter();
-  const embedTimer = createStageTimer();
-  const dbTimer = createStageTimer();
+  const stageNames = ['embed', 'read', 'write', 'other'];
+  const stageTimers = Object.fromEntries(stageNames.map((name) => [name, createStageTimer()]));
   let intervalId = null;
 
-  // DL MB/s, Embed ms, and DB ms exist to answer "which of the three usual
-  // suspects — network download, CPU-bound embedding, or the Postgres/tunnel
-  // round trip — is the bottleneck right now," without a separate side
-  // investigation (debug.log, a DB latency probe, etc.) every time Art/s
-  // drops. Whatever's left over (wikitext parsing, tar extraction, event-loop
-  // contention) isn't broken out as its own column — if Art/s is low but all
-  // three of these look normal, that's the signal it's something else, and
-  // debug.log's per-chunk stage-transition lines are the next place to look.
-  // Progress combines the bar and the done% into one cell ("[████░░] 42.3%")
-  // instead of two separate columns — the bar alone doesn't carry enough
-  // precision to be useful without the number right next to it anyway.
-  const headers = ['Progress', 'Articles', 'Art/s', 'ETA', 'DL GB', 'DL MB/s', 'Embed ms', 'DB ms'];
+  // Embed / Read / Write / Other: milliseconds per article within one chunk,
+  // reported once per batch (see embedChunkArticles' flushBatch). They're
+  // ADDITIVE — they sum to a chunk's wall time per article, so
+  // Art/s ≈ EMBED_CONCURRENCY × 1000 / (their sum), and the biggest one is
+  // the bottleneck. Read is the tiny already-current query and Write the big
+  // DELETE+INSERT upload, so comparing them separates tunnel latency from
+  // tunnel bandwidth; Other is everything else in the chunk's cycle (reading
+  // and JSON-parsing NDJSON lines, paragraph extraction, waiting on the event
+  // loop). Progress combines the bar and the done% into one cell.
+  const headers = ['Progress', 'Articles', 'Art/s', 'ETA', 'DL GB', 'DL MB/s', 'Embed', 'Read', 'Write', 'Other'];
   const widths = [
     Math.max(headers[0].length, PROGRESS_BAR_WIDTH + 2 + 1 + 6), // "[" + bar + "]" + " " + "100.0%"
     Math.max(headers[1].length, formatCount(totalArticles).length * 2 + 1), // "done/total", sized to the known total on both sides
@@ -322,10 +326,9 @@ function createProgressDisplay(totalArticles, totalBytes) {
     Math.max(headers[3].length, 7), // "999d23h"-ish worst case
     Math.max(headers[4].length, formatGB(totalBytes).length + 2), // formatted GB + "GB" suffix
     Math.max(headers[5].length, 7), // rate, e.g. "9999.9"
-    Math.max(headers[6].length, 7), // ms, e.g. "9999.9"
-    Math.max(headers[7].length, 7), // ms, e.g. "9999.9"
+    ...stageNames.map((_, i) => Math.max(headers[6 + i].length, 5)), // whole ms, e.g. "99999"
   ];
-  const aligns = ['left', 'right', 'right', 'right', 'right', 'right', 'right', 'right'];
+  const aligns = headers.map((_, i) => (i === 0 ? 'left' : 'right'));
 
   function render() {
     // rate (lifetime average) drives the ETA; recentRate (short rolling
@@ -334,8 +337,7 @@ function createProgressDisplay(totalArticles, totalBytes) {
     const { done: articlesDone, rate: lifetimeRate, recentRate: articleRate } = articles.stats();
     const { done: bytesDone, recentRate: bytesRate } = bytes.stats();
     const downloadMBps = (bytesRate / 1e6).toFixed(1);
-    const embedMs = embedTimer.recentAvgMs().toFixed(1);
-    const dbMs = dbTimer.recentAvgMs().toFixed(1);
+    const stageCells = stageNames.map((name) => stageTimers[name].recentAvgMs().toFixed(0));
 
     let cells;
     if (totalArticles > 0) {
@@ -351,12 +353,11 @@ function createProgressDisplay(totalArticles, totalBytes) {
         formatDuration(etaSeconds),
         `${formatGB(bytesDone)}GB`,
         downloadMBps,
-        embedMs,
-        dbMs,
+        ...stageCells,
       ];
     } else {
       // No article-count denominator to compute a % or ETA against — fall back to raw counts in the columns that still make sense.
-      cells = ['-', formatCount(articlesDone), articleRate.toFixed(1), '-', `${formatGB(bytesDone)}GB`, downloadMBps, embedMs, dbMs];
+      cells = ['-', formatCount(articlesDone), articleRate.toFixed(1), '-', `${formatGB(bytesDone)}GB`, downloadMBps, ...stageCells];
     }
     process.stdout.write(fitToTerminal(tableRow(cells, widths, aligns)));
   }
@@ -399,9 +400,9 @@ function createProgressDisplay(totalArticles, totalBytes) {
     addBytes(n) {
       bytes.add(n);
     },
-    recordStageTiming(stage, ms) {
-      if (stage === 'embed') embedTimer.record(ms);
-      else if (stage === 'db') dbTimer.record(ms);
+    /** One batch's per-article ms for each stage: { embed, read, write, other }. */
+    recordBatchTimings(perArticleMs) {
+      for (const name of stageNames) stageTimers[name].record(perArticleMs[name]);
     },
     articlesDone() {
       return articles.done; // for callers (e.g. debug-log lines) that want the corpus-wide running total, not just their own local count
@@ -866,6 +867,10 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
   }
 
   let batch = [];
+  // End of the previous flush — null until the first one, whose "cycle" would
+  // otherwise include one-off startup (opening the file, skipping past a
+  // resume checkpoint) and skew the Other column.
+  let lastFlushEndedAt = null;
 
   async function flushBatch() {
     if (batch.length === 0) return;
@@ -874,6 +879,7 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
     // visibility-changed/empty) never reach the DB at all — same as before,
     // just filtered up front instead of bailing out of a per-article call.
     const embeddable = batch.filter(({ article }) => article?.article_body?.wikitext);
+    const timings = { readMs: 0, embedMs: 0, writeMs: 0 };
     if (embeddable.length > 0) {
       const results = await upsertArticlesBatch(
         embeddable.map(({ article }) => ({
@@ -881,7 +887,8 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
           wikitext: article.article_body.wikitext,
           versionIdentifier: article.version?.identifier,
           pageId: article.identifier,
-        }))
+        })),
+        timings
       );
       for (const result of results) {
         stats.articles++;
@@ -889,6 +896,22 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
         if (result.skipped) stats.alreadyCurrent++;
       }
     }
+
+    // Per-article stage times for the table, one sample per batch (zeros for
+    // stages this batch skipped, so the averages stay honest). Other is the
+    // rest of this chunk's cycle since its previous flush.
+    const flushEndedAt = performance.now();
+    if (lastFlushEndedAt !== null) {
+      const cycleMs = flushEndedAt - lastFlushEndedAt;
+      const otherMs = Math.max(0, cycleMs - timings.readMs - timings.embedMs - timings.writeMs);
+      tracker.recordBatchTimings({
+        embed: timings.embedMs / batch.length,
+        read: timings.readMs / batch.length,
+        write: timings.writeMs / batch.length,
+        other: otherMs / batch.length,
+      });
+    }
+    lastFlushEndedAt = flushEndedAt;
 
     // Counted per line in the batch (not just embeddable ones), so the live
     // tracker's numerator converges with recordCount (the corpus-wide
@@ -1096,11 +1119,15 @@ async function main() {
   console.log(
     `Total: ${formatGB(totalBytes)} GB across ${chunks.length} chunks. Downloading, extracting, and embedding ` +
       `(${embed.device}, ${embed.dtype}, batches of ≤${embed.batchSize}) ` +
-      `${EMBED_CONCURRENCY} chunks at a time (never holding more than a few chunks' worth of raw data on disk)...`
+      `${EMBED_CONCURRENCY} chunks at a time (CHUNK_CONCURRENCY; never holding more than that many chunks' worth of raw data on disk)...`
   );
   console.log(
     `Per-chunk stage progress is logged to wiki-snapshots/debug.log — if the progress bar below stalls, ` +
       `run "tail -f wiki-snapshots/debug.log" in another terminal to see exactly which chunk and stage it's stuck on.`
+  );
+  console.log(
+    `Embed/Read/Write/Other = ms per article within one chunk; they add up, so Art/s ≈ ` +
+      `${EMBED_CONCURRENCY} × 1000 / their sum, and the biggest one is the bottleneck.`
   );
   logDebug(`=== run started: ${chunks.length} chunks, ${formatGB(totalBytes)} GB total ===`);
 
@@ -1114,7 +1141,6 @@ async function main() {
     logDebug(message);
     tracker.logWarning(message);
   });
-  setStageTimingReporter((stage, ms) => tracker.recordStageTiming(stage, ms));
 
   tracker.start();
   await runWithConcurrency(

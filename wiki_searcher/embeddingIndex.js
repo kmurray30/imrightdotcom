@@ -157,22 +157,6 @@ export function setConnectionWarningLogger(fn) {
   logConnectionWarning = fn;
 }
 
-let reportStageTiming = () => {};
-
-/**
- * Redirects per-stage wall-clock timings (DB round trips vs. the embedding
- * call itself) to a caller-supplied reporter — e.g. the live progress table
- * in build-index-from-wikimedia.js, which uses this to show where a slowdown
- * actually is (network download, CPU-bound embedding, or the Postgres/tunnel
- * round trip) instead of requiring a side investigation every time Art/s
- * drops. Defaults to a no-op, so nothing changes for callers that never call
- * this (refresh-daily.js, build-index-from-ndjson.js).
- * @param {(stage: 'db' | 'embed', ms: number) => void} fn
- */
-export function setStageTimingReporter(fn) {
-  reportStageTiming = fn;
-}
-
 /**
  * One attempt at upserting a whole BATCH of articles in (at most) two
  * Postgres round trips TOTAL, instead of two round trips PER ARTICLE. Each
@@ -182,8 +166,11 @@ export function setStageTimingReporter(fn) {
  * once per article. Still returns one result per input article, in the
  * same order, so a batch of one (upsertArticleEmbeddings, below) behaves
  * identically to the old per-article version.
+ *
+ * Adds this attempt's wall-clock time per stage into `timings` (readMs,
+ * embedMs, writeMs) — see upsertArticlesBatch.
  */
-async function attemptUpsertBatch(pool, articles) {
+async function attemptUpsertBatch(pool, articles, timings) {
   const client = await pool.connect();
   // pg-pool removes its own idle-client error listener the instant a client
   // is handed off via pool.connect() (see _acquireClient in pg-pool's
@@ -222,7 +209,7 @@ async function attemptUpsertBatch(pool, articles) {
       'SELECT title, version_identifier FROM wiki_paragraph_embeddings WHERE title = ANY($1::text[])',
       [articles.map((a) => a.title)]
     );
-    reportStageTiming('db', (performance.now() - dbReadStart) / articles.length);
+    timings.readMs += performance.now() - dbReadStart;
     const currentVersionByTitle = new Map(rows.map((row) => [row.title, row.version_identifier]));
 
     const results = new Array(articles.length);
@@ -268,7 +255,7 @@ async function attemptUpsertBatch(pool, articles) {
       );
       const embedStart = performance.now();
       const embeddings = await embedTexts(allTexts);
-      reportStageTiming('embed', (performance.now() - embedStart) / pendingEmbeds.length);
+      timings.embedMs += performance.now() - embedStart;
 
       let offset = 0;
       for (const { article, paragraphs } of pendingEmbeds) {
@@ -341,7 +328,7 @@ async function attemptUpsertBatch(pool, articles) {
           [...targetParams, ...insertParams]
         );
       }
-      reportStageTiming('db', (performance.now() - dbWriteStart) / articles.length);
+      timings.writeMs += performance.now() - dbWriteStart;
     }
 
     release();
@@ -381,10 +368,17 @@ async function attemptUpsertBatch(pool, articles) {
  * just re-does the same read-then-write cleanly rather than risking
  * double-written rows.
  *
+ * `timings` (optional) receives this batch's wall-clock time per stage:
+ * readMs (already-current check), embedMs, writeMs (DELETE+INSERT) —
+ * accumulated across retries, so it's the real time this batch cost. Passed
+ * in per call rather than reported through a global hook, so a caller running
+ * several batches concurrently can attribute each batch's numbers exactly.
+ *
  * @param {Array<{title: string, wikitext: string, versionIdentifier: *, pageId: *}>} articles
+ * @param {{readMs: number, embedMs: number, writeMs: number}} [timings]
  * @returns {Promise<Array<{title: string, paragraphCount: number, skipped: boolean}>>} one result per input article, same order
  */
-export async function upsertArticlesBatch(articles) {
+export async function upsertArticlesBatch(articles, timings = { readMs: 0, embedMs: 0, writeMs: 0 }) {
   if (articles.length === 0) return [];
   const pool = getPool();
   if (!pool) {
@@ -395,7 +389,7 @@ export async function upsertArticlesBatch(articles) {
   while (true) {
     attempt++;
     try {
-      return await attemptUpsertBatch(pool, articles);
+      return await attemptUpsertBatch(pool, articles, timings);
     } catch (error) {
       if (!isRetryableConnectionError(error)) throw error;
       const delayMs = Math.min(DB_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), DB_RETRY_MAX_DELAY_MS);
