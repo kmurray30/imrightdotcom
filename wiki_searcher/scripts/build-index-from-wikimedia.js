@@ -1125,8 +1125,27 @@ async function main() {
   console.log('The vector index is up to date — no separate build step needed.');
 }
 
+/**
+ * A Postgres "disk full" error ("could not extend file ...: No space left on
+ * device") is easy to misread as the LOCAL machine running out of space —
+ * it isn't. That message comes from the Postgres server itself, writing to
+ * its own data directory; for this project that's the remote Railway
+ * Postgres volume, a disk entirely separate from wherever this script is
+ * running. Confirmed in practice: a crash here happened with 500GB free
+ * locally, because the (far smaller) Railway volume was the one that filled.
+ */
+function isRemoteDiskFullError(error) {
+  return /no space left on device/i.test(error.message) || /could not extend file/i.test(error.message);
+}
+
 main().catch((error) => {
   console.error('\nFatal error:', error.message);
+  if (isRemoteDiskFullError(error)) {
+    console.error(
+      'This looks like the remote Railway Postgres volume is full, not local disk — check/resize it in the Railway ' +
+        'dashboard (the volume\'s settings → Live Resize) before re-running.'
+    );
+  }
   console.error('Re-run this script to resume — completed chunks (marked .done) are skipped, others pick up where they left off.');
   try {
     logDebug(`=== fatal error: ${error.message} ===`);
