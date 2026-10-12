@@ -117,10 +117,10 @@ function formatGB(bytes) {
   return (bytes / 1e9).toFixed(2);
 }
 
-/** Compact "902.1K" / "7.33M" style formatting — a raw comma-grouped 7,332,159 is needlessly wide for a one-line status display. */
+/** Compact, ~2-significant-figure formatting ("850K" / "7.3M") — a raw comma-grouped 7,332,159 is needlessly wide for a one-line status display. */
 function formatCount(n) {
-  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
-  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  if (n >= 1e6) return (n / 1e6 >= 10 ? Math.round(n / 1e6) : (n / 1e6).toFixed(1)) + 'M';
+  if (n >= 1e3) return (n / 1e3 >= 10 ? Math.round(n / 1e3) : (n / 1e3).toFixed(1)) + 'K';
   return String(Math.round(n));
 }
 
@@ -311,19 +311,21 @@ function createProgressDisplay(totalArticles, totalBytes) {
   // contention) isn't broken out as its own column — if Art/s is low but all
   // three of these look normal, that's the signal it's something else, and
   // debug.log's per-chunk stage-transition lines are the next place to look.
-  const headers = ['Progress', 'Done%', 'Articles', 'Art/s', 'ETA', 'Downloaded', 'DL MB/s', 'Embed ms', 'DB ms'];
+  // Progress combines the bar and the done% into one cell ("[████░░] 42.3%")
+  // instead of two separate columns — the bar alone doesn't carry enough
+  // precision to be useful without the number right next to it anyway.
+  const headers = ['Progress', 'Articles', 'Art/s', 'ETA', 'DL GB', 'DL MB/s', 'Embed ms', 'DB ms'];
   const widths = [
-    Math.max(headers[0].length, PROGRESS_BAR_WIDTH + 2), // "[" + bar + "]"
-    Math.max(headers[1].length, 6), // "100.0%"
-    Math.max(headers[2].length, formatCount(totalArticles).length * 2 + 1), // "done/total", sized to the known total on both sides
-    Math.max(headers[3].length, 7), // rate, e.g. "9999.9"
-    Math.max(headers[4].length, 8), // "999d23h"-ish worst case
-    Math.max(headers[5].length, formatGB(totalBytes).length + 2), // formatted GB + "GB" suffix
-    Math.max(headers[6].length, 7), // rate, e.g. "9999.9"
+    Math.max(headers[0].length, PROGRESS_BAR_WIDTH + 2 + 1 + 6), // "[" + bar + "]" + " " + "100.0%"
+    Math.max(headers[1].length, formatCount(totalArticles).length * 2 + 1), // "done/total", sized to the known total on both sides
+    Math.max(headers[2].length, 6), // rate, e.g. "9999.9"
+    Math.max(headers[3].length, 7), // "999d23h"-ish worst case
+    Math.max(headers[4].length, formatGB(totalBytes).length + 2), // formatted GB + "GB" suffix
+    Math.max(headers[5].length, 7), // rate, e.g. "9999.9"
+    Math.max(headers[6].length, 7), // ms, e.g. "9999.9"
     Math.max(headers[7].length, 7), // ms, e.g. "9999.9"
-    Math.max(headers[8].length, 7), // ms, e.g. "9999.9"
   ];
-  const aligns = ['left', 'right', 'right', 'right', 'right', 'right', 'right', 'right', 'right'];
+  const aligns = ['left', 'right', 'right', 'right', 'right', 'right', 'right', 'right'];
 
   function render() {
     // rate (lifetime average) drives the ETA; recentRate (short rolling
@@ -343,8 +345,7 @@ function createProgressDisplay(totalArticles, totalBytes) {
       const filled = Math.round(fraction * PROGRESS_BAR_WIDTH);
       const bar = '[' + '█'.repeat(filled) + '░'.repeat(PROGRESS_BAR_WIDTH - filled) + ']';
       cells = [
-        bar,
-        `${(fraction * 100).toFixed(1)}%`,
+        `${bar} ${(fraction * 100).toFixed(1)}%`,
         `${formatCount(articlesDone)}/${formatCount(totalArticles)}`,
         articleRate.toFixed(1),
         formatDuration(etaSeconds),
@@ -355,7 +356,7 @@ function createProgressDisplay(totalArticles, totalBytes) {
       ];
     } else {
       // No article-count denominator to compute a % or ETA against — fall back to raw counts in the columns that still make sense.
-      cells = ['-', '-', formatCount(articlesDone), articleRate.toFixed(1), '-', `${formatGB(bytesDone)}GB`, downloadMBps, embedMs, dbMs];
+      cells = ['-', formatCount(articlesDone), articleRate.toFixed(1), '-', `${formatGB(bytesDone)}GB`, downloadMBps, embedMs, dbMs];
     }
     process.stdout.write(fitToTerminal(tableRow(cells, widths, aligns)));
   }
