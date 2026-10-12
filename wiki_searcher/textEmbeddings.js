@@ -17,6 +17,18 @@ import { pipeline } from '@huggingface/transformers';
 const MODEL_NAME = 'Xenova/bge-small-en-v1.5';
 export const EMBEDDING_DIMENSIONS = 384;
 
+/**
+ * Which ONNX Runtime device runs the model: EMBED_DEVICE if set, else 'cpu'.
+ * Any device transformers.js supports works here — on a Mac that's 'coreml'
+ * or 'webgpu', on Linux x64 'cuda' (see benchmark-embed-device.js to pick
+ * one). Only changes speed, not the vectors (dtype stays fp32 everywhere).
+ * A function, not a constant: callers import this module before loadEnv()
+ * has read env.local, so it must be read at model-load time.
+ */
+export function embedDevice() {
+  return process.env.EMBED_DEVICE || 'cpu';
+}
+
 let extractorPromise = null;
 let log = console.log;
 
@@ -47,27 +59,36 @@ export function setLogger(fn) {
  * @huggingface/transformers 4.3.0's actual source (src/utils/hub.js,
  * src/utils/hub/utils.js) rather than assumed from docs.
  */
+export function loadExtractor(device) {
+  const lastLoggedPct = {}; // per-file, so multi-file downloads (model + tokenizer) don't spam past each other
+  return pipeline('feature-extraction', MODEL_NAME, {
+    device,
+    // Pinned rather than left to transformers.js's per-device default: the
+    // stored index vectors were all produced by the fp32 model, and a
+    // different dtype would load a different (e.g. quantized) model file.
+    dtype: 'fp32',
+    progress_callback: (progress) => {
+      if (progress.status === 'initiate') {
+        log(`[embed] Downloading ${progress.file} (first use only, cached after this)...`);
+      } else if (progress.status === 'progress' && progress.file && typeof progress.progress === 'number') {
+        const pct = Math.floor(progress.progress / 10) * 10; // log every ~10%, not every stream chunk
+        if (pct > (lastLoggedPct[progress.file] ?? -10)) {
+          lastLoggedPct[progress.file] = pct;
+          log(`[embed]   ${progress.file}: ${pct}%`);
+        }
+      } else if (progress.status === 'done' && progress.file) {
+        log(`[embed]   ${progress.file}: done`);
+      }
+    },
+  }).then((extractor) => {
+    log(`[embed] Model ready (device: ${device}).`);
+    return extractor;
+  });
+}
+
 function getExtractor() {
   if (!extractorPromise) {
-    const lastLoggedPct = {}; // per-file, so multi-file downloads (model + tokenizer) don't spam past each other
-    extractorPromise = pipeline('feature-extraction', MODEL_NAME, {
-      progress_callback: (progress) => {
-        if (progress.status === 'initiate') {
-          log(`[embed] Downloading ${progress.file} (first use only, cached after this)...`);
-        } else if (progress.status === 'progress' && progress.file && typeof progress.progress === 'number') {
-          const pct = Math.floor(progress.progress / 10) * 10; // log every ~10%, not every stream chunk
-          if (pct > (lastLoggedPct[progress.file] ?? -10)) {
-            lastLoggedPct[progress.file] = pct;
-            log(`[embed]   ${progress.file}: ${pct}%`);
-          }
-        } else if (progress.status === 'done' && progress.file) {
-          log(`[embed]   ${progress.file}: done`);
-        }
-      },
-    }).then((extractor) => {
-      log('[embed] Model ready.');
-      return extractor;
-    });
+    extractorPromise = loadExtractor(embedDevice());
   }
   return extractorPromise;
 }
@@ -94,7 +115,11 @@ function getExtractor() {
  */
 export async function embedTexts(texts) {
   if (texts.length === 0) return [];
-  const extractor = await getExtractor();
+  return embedWith(await getExtractor(), texts);
+}
+
+/** The actual embed call, shared with benchmark-embed-device.js so it measures exactly what production runs. */
+export async function embedWith(extractor, texts) {
   const output = await extractor(texts, { pooling: 'mean', normalize: true });
   return output.tolist();
 }

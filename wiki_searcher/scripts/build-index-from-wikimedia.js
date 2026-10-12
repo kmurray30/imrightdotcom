@@ -79,7 +79,7 @@ import { loadEnv } from '../../imright/load-env.js';
 import { getAccessToken } from '../../utils/wikimediaAuth.js';
 import { callExternalApi, HttpStatusError, timeoutSignal } from '../../utils/external-api.js';
 import { upsertArticlesBatch, setConnectionWarningLogger, setStageTimingReporter } from '../embeddingIndex.js';
-import { setLogger as setEmbedLogger } from '../textEmbeddings.js';
+import { setLogger as setEmbedLogger, embedDevice } from '../textEmbeddings.js';
 
 loadEnv();
 const execFileAsync = promisify(execFile);
@@ -1093,7 +1093,7 @@ async function main() {
 
   const totalBytes = chunks.reduce((sum, chunk) => sum + chunk.contentLength, 0);
   console.log(
-    `Total: ${formatGB(totalBytes)} GB across ${chunks.length} chunks. Downloading, extracting, and embedding ` +
+    `Total: ${formatGB(totalBytes)} GB across ${chunks.length} chunks. Downloading, extracting, and embedding (on ${embedDevice()}) ` +
       `${EMBED_CONCURRENCY} chunks at a time (never holding more than a few chunks' worth of raw data on disk)...`
   );
   console.log(
