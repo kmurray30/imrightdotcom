@@ -29,7 +29,6 @@ import { getPool } from '../imright/scripts/db.js';
 import { embedTexts } from './textEmbeddings.js';
 import { findAllRefs, stripWikiMarkup } from '../ref_extractor/parser/index.js';
 import { parseAllCiteTemplates } from '../ref_extractor/parser/citeTemplate.js';
-import pgvector from 'pgvector/pg';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIN_PARAGRAPH_LENGTH = 30;
@@ -117,6 +116,19 @@ function extractCitableParagraphs(wikitext) {
     }
   }
   return results;
+}
+
+/**
+ * A vector as pgvector's text literal, with each value written to 9
+ * significant digits. pgvector stores float4, and 9 digits round-trip every
+ * float4 exactly (FLT_DECIMAL_DIG), so the stored vector is bit-identical to
+ * what pgvector.toSql would produce — but pgvector.toSql uses JS's default
+ * formatting (up to 17 digits), ~35% more bytes per row. During the bulk
+ * build those bytes go over a bandwidth-limited tunnel and were the measured
+ * bottleneck (the server spent its time waiting to receive write payloads).
+ */
+function toVectorLiteral(vector) {
+  return '[' + vector.map((x) => String(Number(x.toPrecision(9)))).join(',') + ']';
 }
 
 const DB_RETRY_BASE_DELAY_MS = 2000;
@@ -266,7 +278,7 @@ async function attemptUpsertBatch(pool, articles, timings) {
             index,
             section: paragraph.section,
             text: paragraph.text,
-            embedding: pgvector.toSql(embeddings[offset + index]),
+            embedding: toVectorLiteral(embeddings[offset + index]),
             versionIdentifier: article.versionIdentifier ?? null,
           });
         });
