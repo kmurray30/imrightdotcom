@@ -2,8 +2,8 @@
 /**
  * Compares embedding speed across ONNX Runtime devices on THIS machine, to
  * pick a value for EMBED_DEVICE (see textEmbeddings.js). Uses the exact same
- * model/options as production (loadExtractor + embedWith), and calls it the
- * way the index build does: small per-article groups, several in flight.
+ * model/options as production (loadExtractor + embedWith), with a
+ * configurable call shape (texts per call, calls in flight — see below).
  *
  * Also checks each device's vectors against CPU's (cosine similarity) — the
  * index already holds CPU-built vectors, so a device is only usable if its
@@ -13,14 +13,18 @@
  * A device that fails to load is reported and skipped, not fatal — that's a
  * valid answer ("not available here").
  *
- * Usage: node wiki_searcher/scripts/benchmark-embed-device.js [device ...]
+ * Usage: [GROUP_SIZE=n] [IN_FLIGHT=n] node wiki_searcher/scripts/benchmark-embed-device.js [device ...]
  *   devices default to: cpu coreml webgpu  (cpu is always run first, as the reference)
+ *   GROUP_SIZE (texts per call, default 5) / IN_FLIGHT (concurrent calls, default 8)
  */
 import { loadExtractor, embedWith } from '../textEmbeddings.js';
 
-const GROUP_SIZE = 5; // ~paragraphs per article
-const IN_FLIGHT = 8; // matches ARTICLE_CONCURRENCY in build-index-from-wikimedia.js
-const GROUP_COUNT = 60;
+// Call shape, overridable to measure how throughput scales with batch size.
+// The build now makes one call per article batch (~40 texts) per chunk, with
+// EMBED_CONCURRENCY (4) chunks in parallel: GROUP_SIZE=40 IN_FLIGHT=4.
+const GROUP_SIZE = Number(process.env.GROUP_SIZE) || 5;
+const IN_FLIGHT = Number(process.env.IN_FLIGHT) || 8;
+const GROUP_COUNT = Math.max(IN_FLIGHT, Math.round(300 / GROUP_SIZE)); // ~300 texts total regardless of shape, so texts/s compares across runs
 
 const requested = process.argv.slice(2);
 const devices = ['cpu', ...(requested.length > 0 ? requested : ['coreml', 'webgpu']).filter((d) => d !== 'cpu')];

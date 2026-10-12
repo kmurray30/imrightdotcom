@@ -16,6 +16,7 @@ import { pipeline } from '@huggingface/transformers';
 
 const MODEL_NAME = 'Xenova/bge-small-en-v1.5';
 export const EMBEDDING_DIMENSIONS = 384;
+const MAX_EMBED_BATCH = 64; // texts per model call — see embedTexts
 
 /**
  * Which ONNX Runtime device runs the model: EMBED_DEVICE if set, else 'cpu'.
@@ -94,7 +95,8 @@ function getExtractor() {
 }
 
 /**
- * Embeds many texts in ONE forward pass instead of one at a time. The
+ * Embeds many texts in as few forward passes as possible (up to
+ * MAX_EMBED_BATCH texts each) instead of one at a time. The
  * feature-extraction pipeline tokenizes the whole array together (padded to
  * a common length) and runs a single batched pass through the model —
  * verified against transformers.js's own source (FeatureExtractionPipeline
@@ -103,7 +105,9 @@ function getExtractor() {
  * this, most of the per-call cost is fixed overhead (tokenizer dispatch,
  * tensor allocation, thread-pool handoff into the native ONNX runtime), not
  * the matmul itself — so batching is a much bigger lever than firing off N
- * separate calls, even N concurrent ones.
+ * separate calls, even N concurrent ones. Even more so on a GPU: measured
+ * on WebGPU, 5-text calls only got ~3x over CPU, because per-call overhead
+ * swamped the actual compute.
  *
  * Returns embeddings in the same order as `texts`. Uses the Tensor's own
  * `.tolist()` (reshapes its flat data by `.dims`) rather than reading `.data`
@@ -115,7 +119,23 @@ function getExtractor() {
  */
 export async function embedTexts(texts) {
   if (texts.length === 0) return [];
-  return embedWith(await getExtractor(), texts);
+  const extractor = await getExtractor();
+
+  // Sorted by length, then cut into sub-batches of at most MAX_EMBED_BATCH:
+  // every text in a call is padded to that call's longest one, so grouping
+  // similar lengths keeps padding (wasted compute) small, and the cap bounds
+  // GPU memory (attention grows with batch × sequence²) when one huge
+  // article lands in a batch. Results are scattered back to input order.
+  const order = texts.map((_, i) => i).sort((a, b) => texts[a].length - texts[b].length);
+  const results = new Array(texts.length);
+  for (let start = 0; start < order.length; start += MAX_EMBED_BATCH) {
+    const indices = order.slice(start, start + MAX_EMBED_BATCH);
+    const vectors = await embedWith(extractor, indices.map((i) => texts[i]));
+    indices.forEach((originalIndex, j) => {
+      results[originalIndex] = vectors[j];
+    });
+  }
+  return results;
 }
 
 /** The actual embed call, shared with benchmark-embed-device.js so it measures exactly what production runs. */

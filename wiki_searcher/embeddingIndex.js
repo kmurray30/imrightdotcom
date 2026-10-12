@@ -227,7 +227,7 @@ async function attemptUpsertBatch(pool, articles) {
 
     const results = new Array(articles.length);
     const targets = []; // { title, pageId } for every article needing a DELETE (and maybe an INSERT)
-    const pendingEmbeds = []; // { resultIndex, article, paragraphs } for every article that also needs an INSERT
+    const pendingEmbeds = []; // { article, paragraphs } for every article that also needs an INSERT
 
     articles.forEach((article, i) => {
       const { title, wikitext, versionIdentifier, pageId } = article;
@@ -252,26 +252,26 @@ async function attemptUpsertBatch(pool, articles) {
         return;
       }
       results[i] = { title, paragraphCount: paragraphs.length, skipped: false };
-      pendingEmbeds.push({ resultIndex: i, article, paragraphs });
+      pendingEmbeds.push({ article, paragraphs });
     });
 
-    // Each article is still embedded individually — one batched forward
-    // pass per article's own paragraphs, same as before (see
-    // textEmbeddings.js's embedTexts) — and still concurrently across the
-    // whole pendingEmbeds group via Promise.all, same as the old per-article
-    // Promise.all this replaced, so this change doesn't cost any embedding
-    // concurrency to get the DB round-trip savings. Only the DB side is
-    // batched (below); embedding is local CPU work with no round-trip
-    // latency to amortize. insertRows.push is safe to call from several
-    // concurrent callbacks here — array push is a synchronous operation, so
-    // concurrent async tasks in JS's single-threaded event loop can't
-    // interleave mid-push.
+    // Every pending article's paragraphs go into ONE embedTexts call, not one
+    // call per article — the model's fixed per-call overhead dwarfs the
+    // actual compute for a handful of paragraphs, especially on a GPU (see
+    // textEmbeddings.js's embedTexts, which also sub-batches by length).
+    // Vectors come back in input order, so each article's slice starts where
+    // its paragraphs were appended.
     const insertRows = [];
-    await Promise.all(
-      pendingEmbeds.map(async ({ article, paragraphs }) => {
-        const embedStart = performance.now();
-        const embeddings = await embedTexts(paragraphs.map(({ section, text }) => `${article.title} — ${section}: ${text}`));
-        reportStageTiming('embed', performance.now() - embedStart);
+    if (pendingEmbeds.length > 0) {
+      const allTexts = pendingEmbeds.flatMap(({ article, paragraphs }) =>
+        paragraphs.map(({ section, text }) => `${article.title} — ${section}: ${text}`)
+      );
+      const embedStart = performance.now();
+      const embeddings = await embedTexts(allTexts);
+      reportStageTiming('embed', (performance.now() - embedStart) / pendingEmbeds.length);
+
+      let offset = 0;
+      for (const { article, paragraphs } of pendingEmbeds) {
         paragraphs.forEach((paragraph, index) => {
           insertRows.push({
             title: article.title,
@@ -279,12 +279,13 @@ async function attemptUpsertBatch(pool, articles) {
             index,
             section: paragraph.section,
             text: paragraph.text,
-            embedding: pgvector.toSql(embeddings[index]),
+            embedding: pgvector.toSql(embeddings[offset + index]),
             versionIdentifier: article.versionIdentifier ?? null,
           });
         });
-      })
-    );
+        offset += paragraphs.length;
+      }
+    }
 
     if (targets.length > 0) {
       const dbWriteStart = performance.now();
