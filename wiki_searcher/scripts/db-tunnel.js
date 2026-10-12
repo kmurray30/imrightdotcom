@@ -234,6 +234,15 @@ async function restartTunnel() {
   startTunnel();
 }
 
+/**
+ * Returns both pass/fail AND the round-trip time, not just a boolean — the
+ * build script's own per-article DB round trips go through this same
+ * tunnel, so a tunnel that's merely SLOW (not dead) looks identical to "the
+ * embedding is just slow" from the build script's side alone. Logging this
+ * number on every check (see healthLoop) gives a direct, continuous answer
+ * to "is the tunnel the bottleneck" instead of guessing between that and
+ * local CPU.
+ */
 async function checkHealth() {
   const client = new pg.Client({
     connectionString: healthCheckConnectionString(),
@@ -241,12 +250,13 @@ async function checkHealth() {
     connectionTimeoutMillis: HEALTH_CHECK_TIMEOUT_MS,
     statement_timeout: HEALTH_CHECK_TIMEOUT_MS,
   });
+  const start = Date.now();
   try {
     await client.connect();
     await client.query('SELECT 1');
-    return true;
+    return { healthy: true, latencyMs: Date.now() - start };
   } catch {
-    return false;
+    return { healthy: false, latencyMs: Date.now() - start };
   } finally {
     client.end().catch(() => {}); // best-effort — a client from a broken connection may already be dead
   }
@@ -254,10 +264,11 @@ async function checkHealth() {
 
 async function healthLoop() {
   if (stopping || !child) return; // no tunnel process to check right now (mid-restart) — skip this tick rather than false-alarming
-  const healthy = await checkHealth();
+  const { healthy, latencyMs } = await checkHealth();
   if (healthy) {
     if (consecutiveFailures > 0) log('✓ tunnel healthy again');
     consecutiveFailures = 0;
+    log(`  tunnel round trip: ${latencyMs}ms`);
     return;
   }
 
