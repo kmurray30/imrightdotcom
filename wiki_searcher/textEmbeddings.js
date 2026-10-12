@@ -16,18 +16,25 @@ import { pipeline } from '@huggingface/transformers';
 
 const MODEL_NAME = 'Xenova/bge-small-en-v1.5';
 export const EMBEDDING_DIMENSIONS = 384;
-const MAX_EMBED_BATCH = 64; // texts per model call — see embedTexts
 
 /**
- * Which ONNX Runtime device runs the model: EMBED_DEVICE if set, else 'cpu'.
- * Any device transformers.js supports works here — on a Mac that's 'coreml'
- * or 'webgpu', on Linux x64 'cuda' (see benchmark-embed-device.js to pick
- * one). Only changes speed, not the vectors (dtype stays fp32 everywhere).
- * A function, not a constant: callers import this module before loadEnv()
- * has read env.local, so it must be read at model-load time.
+ * Runtime knobs (pick values with scripts/benchmark-embed-device.js):
+ *  - EMBED_DEVICE: ONNX Runtime device — 'cpu' (default); on a Mac 'webgpu'
+ *    or 'coreml', on Linux x64 'cuda'. Speed only; vectors are unchanged.
+ *  - EMBED_DTYPE: model precision — 'fp32' (default, what the index was built
+ *    with). 'fp16' can be faster on a GPU but produces slightly different
+ *    vectors: only use it if the benchmark's parity check (cosine against the
+ *    vectors already stored in the index) stays above ~0.999.
+ *  - EMBED_BATCH_SIZE: max texts per model call (default 64) — see embedSorted.
+ * A function, not constants: callers import this module before loadEnv() has
+ * read env.local, so these must be read when the model is actually used.
  */
-export function embedDevice() {
-  return process.env.EMBED_DEVICE || 'cpu';
+export function embedConfig() {
+  return {
+    device: process.env.EMBED_DEVICE || 'cpu',
+    dtype: process.env.EMBED_DTYPE || 'fp32',
+    batchSize: Number(process.env.EMBED_BATCH_SIZE) || 64,
+  };
 }
 
 let extractorPromise = null;
@@ -60,14 +67,14 @@ export function setLogger(fn) {
  * @huggingface/transformers 4.3.0's actual source (src/utils/hub.js,
  * src/utils/hub/utils.js) rather than assumed from docs.
  */
-export function loadExtractor(device) {
+export function loadExtractor(device, dtype) {
   const lastLoggedPct = {}; // per-file, so multi-file downloads (model + tokenizer) don't spam past each other
   return pipeline('feature-extraction', MODEL_NAME, {
     device,
-    // Pinned rather than left to transformers.js's per-device default: the
-    // stored index vectors were all produced by the fp32 model, and a
-    // different dtype would load a different (e.g. quantized) model file.
-    dtype: 'fp32',
+    // Always passed explicitly rather than left to transformers.js's
+    // per-device default, so a device switch can never silently load a
+    // different (e.g. quantized) model file than the index was built with.
+    dtype,
     progress_callback: (progress) => {
       if (progress.status === 'initiate') {
         log(`[embed] Downloading ${progress.file} (first use only, cached after this)...`);
@@ -82,21 +89,22 @@ export function loadExtractor(device) {
       }
     },
   }).then((extractor) => {
-    log(`[embed] Model ready (device: ${device}).`);
+    log(`[embed] Model ready (device: ${device}, dtype: ${dtype}).`);
     return extractor;
   });
 }
 
 function getExtractor() {
   if (!extractorPromise) {
-    extractorPromise = loadExtractor(embedDevice());
+    const { device, dtype } = embedConfig();
+    extractorPromise = loadExtractor(device, dtype);
   }
   return extractorPromise;
 }
 
 /**
- * Embeds many texts in as few forward passes as possible (up to
- * MAX_EMBED_BATCH texts each) instead of one at a time. The
+ * Embeds many texts in a few batched forward passes (see embedSorted for how
+ * they're grouped) instead of one at a time. The
  * feature-extraction pipeline tokenizes the whole array together (padded to
  * a common length) and runs a single batched pass through the model —
  * verified against transformers.js's own source (FeatureExtractionPipeline
@@ -119,29 +127,31 @@ function getExtractor() {
  */
 export async function embedTexts(texts) {
   if (texts.length === 0) return [];
-  const extractor = await getExtractor();
+  return embedSorted(await getExtractor(), texts, embedConfig().batchSize);
+}
 
-  // Sorted by length, then cut into sub-batches of at most MAX_EMBED_BATCH:
-  // every text in a call is padded to that call's longest one, so grouping
-  // similar lengths keeps padding (wasted compute) small, and the cap bounds
-  // GPU memory (attention grows with batch × sequence²) when one huge
-  // article lands in a batch. Results are scattered back to input order.
+/**
+ * Sorts texts by length, cuts them into model calls of at most `batchSize`,
+ * and scatters the vectors back to input order. Every text in a call is
+ * padded to that call's longest one, and real Wikipedia paragraphs range from
+ * one line to the model's 512-token limit — so one long paragraph in a call
+ * of short ones makes most of that call's compute padding. Smaller
+ * length-sorted calls keep each call's lengths similar (less padding) at the
+ * cost of more per-call overhead; the cap also bounds GPU memory (attention
+ * grows with batch × sequence²). The right `batchSize` depends on the device —
+ * benchmark-embed-device.js sweeps it, calling this same function.
+ */
+export async function embedSorted(extractor, texts, batchSize) {
   const order = texts.map((_, i) => i).sort((a, b) => texts[a].length - texts[b].length);
   const results = new Array(texts.length);
-  for (let start = 0; start < order.length; start += MAX_EMBED_BATCH) {
-    const indices = order.slice(start, start + MAX_EMBED_BATCH);
-    const vectors = await embedWith(extractor, indices.map((i) => texts[i]));
-    indices.forEach((originalIndex, j) => {
-      results[originalIndex] = vectors[j];
+  for (let start = 0; start < order.length; start += batchSize) {
+    const indices = order.slice(start, start + batchSize);
+    const output = await extractor(indices.map((i) => texts[i]), { pooling: 'mean', normalize: true });
+    output.tolist().forEach((vector, j) => {
+      results[indices[j]] = vector;
     });
   }
   return results;
-}
-
-/** The actual embed call, shared with benchmark-embed-device.js so it measures exactly what production runs. */
-export async function embedWith(extractor, texts) {
-  const output = await extractor(texts, { pooling: 'mean', normalize: true });
-  return output.tolist();
 }
 
 /**
