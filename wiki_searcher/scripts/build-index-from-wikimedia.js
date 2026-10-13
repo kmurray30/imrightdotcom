@@ -16,8 +16,9 @@
  * embeddingIndex.js). So each chunk now goes through its whole lifecycle
  * before the next one starts: download -> extract -> embed every article's
  * citation-adjacent paragraphs -> delete the chunk's archive and extracted
- * copy. Peak extra disk usage is a few chunks' worth of raw data (a few GB
- * at EMBED_CONCURRENCY chunks in flight), not the whole corpus.
+ * copy. The next chunks are downloaded and extracted ahead of time while
+ * others embed (see main's prefetch), so peak extra disk usage is up to
+ * 2 × EMBED_CONCURRENCY chunks' worth of raw data, not the whole corpus.
  *
  * Downloads by CHUNK, not as one giant file — this is what the Snapshot API
  * docs recommend for a project this large, and it's what makes concurrency
@@ -50,11 +51,9 @@
  * lookup (e.g. if you suspect the snapshot rotated).
  *
  * Concurrency: CONCURRENCY (6) governs the network-only sizing pass, well
- * under Wikimedia Enterprise's free-tier 10 QPS limit. EMBED_CONCURRENCY (4)
- * governs the full per-chunk pipeline once embedding (CPU-bound, and each
- * chunk holds a Postgres connection while it runs) is in the mix — kept
- * below the connection pool's max (imright/scripts/db.js, max: 5) so chunks
- * don't end up waiting on each other for a connection.
+ * under Wikimedia Enterprise's free-tier 10 QPS limit. EMBED_CONCURRENCY
+ * (CHUNK_CONCURRENCY env, default 4) is how many chunks embed at once; each
+ * holds one Postgres connection, and DB_POOL_MAX is sized to match.
  *
  * Honest caveat, unverified live from this environment (Wikimedia's domains
  * are blocked here): that Node's fetch strips Authorization but forwards
@@ -302,31 +301,30 @@ function createStageTimer() {
  * addBytes calls, so the printed row updates at a steady cadence regardless
  * of how bursty either counter's actual updates are.
  */
-function createProgressDisplay(totalArticles, totalBytes) {
+function createProgressDisplay(totalArticles, chunkSlots) {
   const articles = createCounter();
   const bytes = createCounter();
-  const stageNames = ['embed', 'read', 'write', 'other'];
+  const stageNames = ['embed', 'read', 'write'];
   const stageTimers = Object.fromEntries(stageNames.map((name) => [name, createStageTimer()]));
+  const embeddingChunks = new Set();
   let intervalId = null;
 
-  // Embed / Read / Write / Other: milliseconds per article within one chunk,
-  // reported once per batch (see embedChunkArticles' flushBatch). They're
-  // ADDITIVE — they sum to a chunk's wall time per article, so
-  // Art/s ≈ EMBED_CONCURRENCY × 1000 / (their sum), and the biggest one is
-  // the bottleneck. Read is the tiny already-current query and Write the big
-  // DELETE+INSERT upload, so comparing them separates tunnel latency from
-  // tunnel bandwidth; Other is everything else in the chunk's cycle (reading
-  // and JSON-parsing NDJSON lines, paragraph extraction, waiting on the event
-  // loop). Progress combines the bar and the done% into one cell.
-  const headers = ['Progress', 'Articles', 'Art/s', 'ETA', 'DL GB', 'DL MB/s', 'Embed', 'Read', 'Write', 'Other'];
+  // Embed / Read / Write: milliseconds per article within one chunk, reported
+  // once per batch (see embedChunkArticles' flushBatch). They add up to an
+  // embedding chunk's time per article, so Art/s ≈ Busy × 1000 / their sum.
+  // Read is the tiny already-current query, Write the big DELETE+INSERT
+  // upload — comparing them separates tunnel latency from tunnel bandwidth.
+  // Busy: chunks embedding right now / chunk slots. Below full means slots
+  // are waiting on a download or extraction (see main's prefetch).
+  const headers = ['Progress', 'Articles', 'ETA', 'Art/s', 'DL MB/s', 'Embed', 'Read', 'Write', 'Busy'];
   const widths = [
     Math.max(headers[0].length, PROGRESS_BAR_WIDTH + 2 + 1 + 6), // "[" + bar + "]" + " " + "100.0%"
     Math.max(headers[1].length, formatCount(totalArticles).length * 2 + 1), // "done/total", sized to the known total on both sides
-    Math.max(headers[2].length, 6), // rate, e.g. "9999.9"
-    Math.max(headers[3].length, 7), // "999d23h"-ish worst case
-    Math.max(headers[4].length, formatGB(totalBytes).length + 2), // formatted GB + "GB" suffix
-    Math.max(headers[5].length, 7), // rate, e.g. "9999.9"
-    ...stageNames.map((_, i) => Math.max(headers[6 + i].length, 5)), // whole ms, e.g. "99999"
+    Math.max(headers[2].length, 7), // "999d23h"-ish worst case
+    Math.max(headers[3].length, 6), // rate, e.g. "9999.9"
+    Math.max(headers[4].length, 7), // rate, e.g. "9999.9"
+    ...stageNames.map((_, i) => Math.max(headers[5 + i].length, 5)), // whole ms, e.g. "99999"
+    Math.max(headers[8].length, String(chunkSlots).length * 2 + 1), // "4/4"
   ];
   const aligns = headers.map((_, i) => (i === 0 ? 'left' : 'right'));
 
@@ -335,9 +333,13 @@ function createProgressDisplay(totalArticles, totalBytes) {
     // window) drives the displayed Art/s — see createCounter's comment for
     // why these are deliberately different numbers.
     const { done: articlesDone, rate: lifetimeRate, recentRate: articleRate } = articles.stats();
-    const { done: bytesDone, recentRate: bytesRate } = bytes.stats();
-    const downloadMBps = (bytesRate / 1e6).toFixed(1);
-    const stageCells = stageNames.map((name) => stageTimers[name].recentAvgMs().toFixed(0));
+    const { recentRate: bytesRate } = bytes.stats();
+    const speedCells = [
+      articleRate.toFixed(1),
+      (bytesRate / 1e6).toFixed(1),
+      ...stageNames.map((name) => stageTimers[name].recentAvgMs().toFixed(0)),
+      `${embeddingChunks.size}/${chunkSlots}`,
+    ];
 
     let cells;
     if (totalArticles > 0) {
@@ -349,15 +351,12 @@ function createProgressDisplay(totalArticles, totalBytes) {
       cells = [
         `${bar} ${(fraction * 100).toFixed(1)}%`,
         `${formatCount(articlesDone)}/${formatCount(totalArticles)}`,
-        articleRate.toFixed(1),
         formatDuration(etaSeconds),
-        `${formatGB(bytesDone)}GB`,
-        downloadMBps,
-        ...stageCells,
+        ...speedCells,
       ];
     } else {
       // No article-count denominator to compute a % or ETA against — fall back to raw counts in the columns that still make sense.
-      cells = ['-', formatCount(articlesDone), articleRate.toFixed(1), '-', `${formatGB(bytesDone)}GB`, downloadMBps, ...stageCells];
+      cells = ['-', formatCount(articlesDone), '-', ...speedCells];
     }
     process.stdout.write(fitToTerminal(tableRow(cells, widths, aligns)));
   }
@@ -400,9 +399,13 @@ function createProgressDisplay(totalArticles, totalBytes) {
     addBytes(n) {
       bytes.add(n);
     },
-    /** One batch's per-article ms for each stage: { embed, read, write, other }. */
+    /** One batch's per-article ms for each stage: { embed, read, write }. */
     recordBatchTimings(perArticleMs) {
       for (const name of stageNames) stageTimers[name].record(perArticleMs[name]);
+    },
+    setChunkEmbedding(chunkId, isEmbedding) {
+      if (isEmbedding) embeddingChunks.add(chunkId);
+      else embeddingChunks.delete(chunkId);
     },
     articlesDone() {
       return articles.done; // for callers (e.g. debug-log lines) that want the corpus-wide running total, not just their own local count
@@ -747,7 +750,8 @@ async function runWithConcurrency(items, worker, concurrency) {
   let cursor = 0;
   async function runNext() {
     while (cursor < items.length) {
-      await worker(items[cursor++]);
+      const index = cursor++;
+      await worker(items[index], index);
     }
   }
   await Promise.all(Array.from({ length: concurrency }, runNext));
@@ -867,10 +871,6 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
   }
 
   let batch = [];
-  // End of the previous flush — null until the first one, whose "cycle" would
-  // otherwise include one-off startup (opening the file, skipping past a
-  // resume checkpoint) and skew the Other column.
-  let lastFlushEndedAt = null;
 
   async function flushBatch() {
     if (batch.length === 0) return;
@@ -898,20 +898,12 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
     }
 
     // Per-article stage times for the table, one sample per batch (zeros for
-    // stages this batch skipped, so the averages stay honest). Other is the
-    // rest of this chunk's cycle since its previous flush.
-    const flushEndedAt = performance.now();
-    if (lastFlushEndedAt !== null) {
-      const cycleMs = flushEndedAt - lastFlushEndedAt;
-      const otherMs = Math.max(0, cycleMs - timings.readMs - timings.embedMs - timings.writeMs);
-      tracker.recordBatchTimings({
-        embed: timings.embedMs / batch.length,
-        read: timings.readMs / batch.length,
-        write: timings.writeMs / batch.length,
-        other: otherMs / batch.length,
-      });
-    }
-    lastFlushEndedAt = flushEndedAt;
+    // stages this batch skipped, so the averages stay honest).
+    tracker.recordBatchTimings({
+      embed: timings.embedMs / batch.length,
+      read: timings.readMs / batch.length,
+      write: timings.writeMs / batch.length,
+    });
 
     // Counted per line in the batch (not just embeddable ones), so the live
     // tracker's numerator converges with recordCount (the corpus-wide
@@ -983,45 +975,66 @@ function loadChunkTotalLines(donePath) {
   }
 }
 
+function donePathFor(chunk) {
+  return path.join(destDir, `${chunk.chunkId}.done`);
+}
+
 /**
- * Runs one chunk through its whole lifecycle: download -> extract -> embed
- * -> cleanup -> mark done. For a chunk that's already fully .done from a
- * prior run, credits its TRUE record count (loadChunkTotalLines) when known
- * — Wikimedia's chunks aren't uniformly sized, so this is what keeps a
- * resumed run's progress display from drifting away from reality as chunks
- * of very different real sizes get credited a wrong flat average instead of
- * what they actually contain. avgArticlesPerChunk is only the fallback for
- * a chunk finished before this existed.
+ * Gets one chunk ready to embed and returns its extracted NDJSON path:
+ * downloads and extracts it, unless a prior run already left the extracted
+ * .ndjson on disk. Separate from processChunk so upcoming chunks can be
+ * prepared while others embed (see main's prefetch); otherwise every chunk
+ * slot sat idle through its whole download + extraction before embedding.
  */
-async function processChunk(chunk, accessToken, tracker, totals, avgArticlesPerChunk) {
-  const donePath = path.join(destDir, `${chunk.chunkId}.done`);
+async function prepareChunk(chunk, accessToken, tracker) {
+  const alreadyExtractedPath = path.join(destDir, `${chunk.chunkId}.ndjson`);
+  if (fs.existsSync(alreadyExtractedPath)) {
+    // Downloaded and extracted in a prior run, but not yet embedded when
+    // that run stopped — pick up from here instead of re-downloading.
+    logDebug(`${chunk.chunkId}: resuming from already-extracted .ndjson, skipping straight to embedding`);
+    tracker.addBytes(chunk.contentLength);
+    return alreadyExtractedPath;
+  }
+  logDebug(`${chunk.chunkId}: starting download`);
+  await downloadOne(chunk.url, chunk.filePath, accessToken, tracker, {
+    contentLength: chunk.contentLength,
+    etag: chunk.etag,
+    acceptsRanges: chunk.acceptsRanges,
+  });
+  logDebug(`${chunk.chunkId}: download complete, extracting`);
+  const ndjsonPath = await extractChunk(chunk);
+  logDebug(`${chunk.chunkId}: extraction complete, ready to embed`);
+  return ndjsonPath;
+}
+
+/**
+ * Runs one chunk through embed -> cleanup -> mark done, after awaiting its
+ * preparation (`prepare(chunk)` — usually already started ahead of time, see
+ * main). For a chunk that's already fully .done from a prior run, credits its
+ * TRUE record count (loadChunkTotalLines) when known — Wikimedia's chunks
+ * aren't uniformly sized, so this is what keeps a resumed run's progress
+ * display from drifting away from reality as chunks of very different real
+ * sizes get credited a wrong flat average instead of what they actually
+ * contain. avgArticlesPerChunk is only the fallback for a chunk finished
+ * before this existed.
+ */
+async function processChunk(chunk, prepare, tracker, totals, avgArticlesPerChunk) {
+  const donePath = donePathFor(chunk);
   if (fs.existsSync(donePath)) {
     tracker.addBytes(chunk.contentLength); // already fully processed in a prior run
     tracker.addArticlesBurst(loadChunkTotalLines(donePath) ?? avgArticlesPerChunk);
     return;
   }
 
-  const alreadyExtractedPath = path.join(destDir, `${chunk.chunkId}.ndjson`);
-  let ndjsonPath;
-  if (fs.existsSync(alreadyExtractedPath)) {
-    // Downloaded and extracted in a prior run, but not yet embedded when
-    // that run stopped — pick up from here instead of re-downloading.
-    logDebug(`${chunk.chunkId}: resuming from already-extracted .ndjson, skipping straight to embedding`);
-    tracker.addBytes(chunk.contentLength);
-    ndjsonPath = alreadyExtractedPath;
-  } else {
-    logDebug(`${chunk.chunkId}: starting download`);
-    await downloadOne(chunk.url, chunk.filePath, accessToken, tracker, {
-      contentLength: chunk.contentLength,
-      etag: chunk.etag,
-      acceptsRanges: chunk.acceptsRanges,
-    });
-    logDebug(`${chunk.chunkId}: download complete, extracting`);
-    ndjsonPath = await extractChunk(chunk);
-    logDebug(`${chunk.chunkId}: extraction complete, starting embed`);
+  const ndjsonPath = await prepare(chunk);
+  logDebug(`${chunk.chunkId}: starting embed`);
+  tracker.setChunkEmbedding(chunk.chunkId, true);
+  let stats;
+  try {
+    stats = await embedChunkArticles(chunk.chunkId, ndjsonPath, tracker);
+  } finally {
+    tracker.setChunkEmbedding(chunk.chunkId, false);
   }
-
-  const stats = await embedChunkArticles(chunk.chunkId, ndjsonPath, tracker);
   totals.chunksDone++;
   totals.articles += stats.articles;
   totals.paragraphs += stats.paragraphs;
@@ -1119,19 +1132,20 @@ async function main() {
   console.log(
     `Total: ${formatGB(totalBytes)} GB across ${chunks.length} chunks. Downloading, extracting, and embedding ` +
       `(${embed.device}, ${embed.dtype}, batches of ≤${embed.batchSize}) ` +
-      `${EMBED_CONCURRENCY} chunks at a time (CHUNK_CONCURRENCY; never holding more than that many chunks' worth of raw data on disk)...`
+      `${EMBED_CONCURRENCY} chunks at a time (CHUNK_CONCURRENCY), preparing the next ${EMBED_CONCURRENCY} ahead ` +
+      `(at most ${EMBED_CONCURRENCY * 2} chunks' worth of raw data on disk)...`
   );
   console.log(
     `Per-chunk stage progress is logged to wiki-snapshots/debug.log — if the progress bar below stalls, ` +
       `run "tail -f wiki-snapshots/debug.log" in another terminal to see exactly which chunk and stage it's stuck on.`
   );
   console.log(
-    `Embed/Read/Write/Other = ms per article within one chunk; they add up, so Art/s ≈ ` +
-      `${EMBED_CONCURRENCY} × 1000 / their sum, and the biggest one is the bottleneck.`
+    `Embed/Read/Write = ms per article within one embedding chunk (they add up: Art/s ≈ Busy × 1000 / their sum). ` +
+      `Busy = chunks embedding / chunk slots — below full means slots are waiting on a download or extraction.`
   );
   logDebug(`=== run started: ${chunks.length} chunks, ${formatGB(totalBytes)} GB total ===`);
 
-  const tracker = createProgressDisplay(recordCount, totalBytes);
+  const tracker = createProgressDisplay(recordCount, EMBED_CONCURRENCY);
   const avgArticlesPerChunk = recordCount > 0 ? recordCount / chunks.length : 0;
   const totals = { chunksDone: 0, articles: 0, paragraphs: 0, alreadyCurrent: 0 };
 
@@ -1142,10 +1156,32 @@ async function main() {
     tracker.logWarning(message);
   });
 
+  // Prefetch: each chunk's download + extraction is started one "round" ahead
+  // — when a slot picks up chunk i, chunk i + EMBED_CONCURRENCY (roughly the
+  // next one a slot will pick up) starts preparing too. Without this, every
+  // slot sat idle for a whole download + extraction between chunks; with it,
+  // the next chunk is usually already on disk when a slot frees up. Costs at
+  // most one extra chunk on disk per slot. A chunk is only ever prepared once
+  // (the promise is shared), and a prefetch that fails is ignored until its
+  // chunk is actually reached, where awaiting it surfaces the error as before.
+  const preparations = new Map();
+  function prepare(chunk) {
+    if (!preparations.has(chunk.chunkId)) {
+      const preparation = prepareChunk(chunk, accessToken, tracker);
+      preparation.catch(() => {}); // not unhandled while it's only a prefetch; processChunk's await still throws
+      preparations.set(chunk.chunkId, preparation);
+    }
+    return preparations.get(chunk.chunkId);
+  }
+
   tracker.start();
   await runWithConcurrency(
     chunks,
-    (chunk) => processChunk(chunk, accessToken, tracker, totals, avgArticlesPerChunk),
+    (chunk, index) => {
+      const upcoming = chunks[index + EMBED_CONCURRENCY];
+      if (upcoming && !fs.existsSync(donePathFor(upcoming))) prepare(upcoming);
+      return processChunk(chunk, prepare, tracker, totals, avgArticlesPerChunk);
+    },
     EMBED_CONCURRENCY
   );
   tracker.finish();
