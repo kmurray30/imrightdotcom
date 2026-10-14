@@ -467,11 +467,22 @@ function withRetry(operation, fn, maxRetries = 4) {
   return callExternalApi({ service: 'wikimedia_enterprise', operation, pipelineStep: 'wiki_snapshot_download', fn, maxRetries });
 }
 
-async function fetchJson(url, accessToken, method = 'GET') {
+/**
+ * Authorization header with a currently-valid token. Fetched per request, not
+ * once per run: access tokens expire after 24h, and a run that held one token
+ * for longer than that died on its next download with a non-retryable 401.
+ * getAccessToken caches the token and refreshes it shortly before expiry, so
+ * this is cheap.
+ */
+async function authHeader() {
+  return { Authorization: `Bearer ${await getAccessToken()}` };
+}
+
+async function fetchJson(url, method = 'GET') {
   return withRetry('snapshot_info', async () => {
     const response = await fetch(url, {
       method,
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: await authHeader(),
       signal: timeoutSignal(METADATA_TIMEOUT_MS),
     });
     if (!response.ok) throwForBadResponse(response, `${method} ${url} failed: ${response.status} ${response.statusText}`);
@@ -479,11 +490,11 @@ async function fetchJson(url, accessToken, method = 'GET') {
   });
 }
 
-async function headDownload(url, accessToken) {
+async function headDownload(url) {
   return withRetry('snapshot_head', async () => {
     const response = await fetch(url, {
       method: 'HEAD',
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: await authHeader(),
       signal: timeoutSignal(METADATA_TIMEOUT_MS),
     });
     if (!response.ok) throwForBadResponse(response, `HEAD ${url} failed: ${response.status} ${response.statusText}`);
@@ -502,7 +513,7 @@ async function headDownload(url, accessToken) {
  * the sizing pass — deliberately not re-HEAD-ing here, since every chunk
  * was already HEAD'd once for its total size.
  */
-async function downloadOne(url, filePath, accessToken, tracker, metadata) {
+async function downloadOne(url, filePath, tracker, metadata) {
   // `let`, not `const`: a "received more bytes than reported size" failure
   // (see the catch block below) means this cached HEAD data is stale, and
   // gets refreshed in place so later attempts stop re-hitting the same
@@ -541,9 +552,6 @@ async function downloadOne(url, filePath, accessToken, tracker, metadata) {
   tracker.addBytes(startByte); // whatever we're keeping/resuming from, credited exactly once, right here
   fs.writeFileSync(etagSidecarPath, etag ?? '');
 
-  const headers = { Authorization: `Bearer ${accessToken}` };
-  const isResuming = startByte > 0 && acceptsRanges;
-  if (isResuming) headers.Range = `bytes=${startByte}-`;
 
   let alreadyComplete = false;
   // Retries effectively forever (a huge but finite ceiling, so a genuinely
@@ -581,7 +589,7 @@ async function downloadOne(url, filePath, accessToken, tracker, metadata) {
       // some bytes before failing, so this needs to reflect what's on disk
       // right now, not what it was when downloadOne started.
       const currentSize = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
-      const attemptHeaders = { ...headers };
+      const attemptHeaders = await authHeader(); // per attempt: a download retrying for hours can outlive a token
       if (currentSize > 0 && acceptsRanges) attemptHeaders.Range = `bytes=${currentSize}-`;
 
       // Guards against a silent hang mid-transfer too, not just on connect:
@@ -704,7 +712,7 @@ async function downloadOne(url, filePath, accessToken, tracker, metadata) {
         // forever.
         if (/received more bytes than its reported size/.test(error.message)) {
           try {
-            const fresh = await headDownload(url, accessToken);
+            const fresh = await headDownload(url);
             contentLength = fresh.contentLength;
             etag = fresh.etag;
             acceptsRanges = fresh.acceptsRanges;
@@ -986,7 +994,7 @@ function donePathFor(chunk) {
  * prepared while others embed (see main's prefetch); otherwise every chunk
  * slot sat idle through its whole download + extraction before embedding.
  */
-async function prepareChunk(chunk, accessToken, tracker) {
+async function prepareChunk(chunk, tracker) {
   const alreadyExtractedPath = path.join(destDir, `${chunk.chunkId}.ndjson`);
   if (fs.existsSync(alreadyExtractedPath)) {
     // Downloaded and extracted in a prior run, but not yet embedded when
@@ -996,7 +1004,7 @@ async function prepareChunk(chunk, accessToken, tracker) {
     return alreadyExtractedPath;
   }
   logDebug(`${chunk.chunkId}: starting download`);
-  await downloadOne(chunk.url, chunk.filePath, accessToken, tracker, {
+  await downloadOne(chunk.url, chunk.filePath, tracker, {
     contentLength: chunk.contentLength,
     etag: chunk.etag,
     acceptsRanges: chunk.acceptsRanges,
@@ -1080,7 +1088,7 @@ function saveSnapshotMetadata(recordCount, chunks) {
 
 async function main() {
   fs.mkdirSync(destDir, { recursive: true });
-  const accessToken = await getAccessToken();
+  await getAccessToken(); // log in up front, so bad credentials fail immediately rather than at the first download
 
   let chunks;
   let recordCount;
@@ -1094,7 +1102,7 @@ async function main() {
     );
   } else {
     console.log(`Looking up chunks for ${identifier}...`);
-    const info = await fetchJson(`${API_BASE}/v2/snapshots/${identifier}`, accessToken, 'POST');
+    const info = await fetchJson(`${API_BASE}/v2/snapshots/${identifier}`, 'POST');
     const chunkIds = info.chunks ?? [];
     if (chunkIds.length === 0) {
       throw new Error(`No chunks found for ${identifier} — double-check the identifier.`);
@@ -1112,7 +1120,7 @@ async function main() {
     await runWithConcurrency(
       chunks,
       async (chunk) => {
-        const { contentLength, etag, acceptsRanges } = await headDownload(chunk.url, accessToken);
+        const { contentLength, etag, acceptsRanges } = await headDownload(chunk.url);
         chunk.contentLength = contentLength;
         chunk.etag = etag;
         chunk.acceptsRanges = acceptsRanges;
@@ -1167,7 +1175,7 @@ async function main() {
   const preparations = new Map();
   function prepare(chunk) {
     if (!preparations.has(chunk.chunkId)) {
-      const preparation = prepareChunk(chunk, accessToken, tracker);
+      const preparation = prepareChunk(chunk, tracker);
       preparation.catch(() => {}); // not unhandled while it's only a prefetch; processChunk's await still throws
       preparations.set(chunk.chunkId, preparation);
     }
