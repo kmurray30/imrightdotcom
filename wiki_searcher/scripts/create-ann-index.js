@@ -17,6 +17,9 @@
  *   statement running inside Postgres, which doesn't notice its client going
  *   away mid-statement (this script sets client_connection_check_interval = 0
  *   to guarantee that), so it carries on to the end and commits.
+ * - A dropped connection (db-tunnel.js replacing a dead tunnel, a laptop
+ *   waking from sleep) makes the script reconnect on its own, every 10s for
+ *   up to 30 minutes, then carry on watching the same build.
  * - Re-running while a build is going reattaches to it: same progress table,
  *   then the final ANALYZE once it completes.
  * - --cancel actually stops a running build. CREATE INDEX is all-or-nothing:
@@ -47,6 +50,8 @@ const ADVISORY_LOCK_KEY = 7_342_001; // arbitrary; held by the session that sets
 const SAMPLES_PER_LIST = 50; // pgvector's ivfflat k-means trains on lists × 50 sampled rows
 const MIN_MEMORY_MB = 2048;
 const MAX_AUTO_MEMORY_MB = 12 * 1024; // half the Postgres service's 24GB RAM; past this, lower LISTS instead
+const RECONNECT_INTERVAL_MS = 10_000;
+const RECONNECT_GIVE_UP_MS = 30 * 60_000;
 const POLL_MS = 5_000;
 const RENDER_MS = 250;
 const NON_TTY_PRINT_MS = 30_000;
@@ -128,7 +133,8 @@ function printStepLegend(lists) {
   const centers = lists ? `${lists.toLocaleString()} cluster centers` : 'the cluster centers';
   console.log(
     `Steps: 1 init → 2 k-means (samples rows, then finds ${centers}; Postgres reports no % for this step, ` +
-      'the bar just shows it\'s alive) → 3 assigning (reads every row) → 4 loading (writes the index).'
+      'the bar just shows it\'s alive) → 3 assigning (reads every row, then sorts them; the sort has no % either) ' +
+      '→ 4 loading (writes the index).'
   );
 }
 
@@ -221,6 +227,15 @@ function createBuildDisplay(monitor, pid, { attached }) {
       label = STEPS.find((s) => row.phase.includes(s.match))?.label ?? row.phase.replace(/^building index: /, '');
     } else {
       label = sawProgress ? 'finishing' : 'starting';
+    }
+    // pgvector's % for the assigning step only covers reading the table.
+    // After the read, still under the same phase name, Postgres sorts
+    // everything it spilled to temp files (tens of GB on the full table)
+    // with no progress reported, so show that as its own step rather than a
+    // 100% bar that looks hung.
+    if (row?.phase?.includes('assigning') && Number(row.blocks_total) > 0 && Number(row.blocks_done) >= Number(row.blocks_total)) {
+      label = '3/4 sorting';
+      fraction = null;
     }
     const now = Date.now();
     if (!step || step.label !== label) {
@@ -327,11 +342,27 @@ function createBuildDisplay(monitor, pid, { attached }) {
 }
 
 const ssl = shouldUseSsl(connectionString) ? { rejectUnauthorized: false } : false;
-const client = new pg.Client({ connectionString, ssl }); // runs setup, the build, and ANALYZE
-const monitor = new pg.Client({ connectionString, ssl }); // progress polling while `client` is busy
-// A dropped connection also rejects whatever query is in flight, which is
-// where it's reported; without a listener, the 'error' event would crash.
-for (const c of [client, monitor]) c.on('error', () => {});
+let client; // runs setup, the build, and ANALYZE
+let monitor; // progress polling while `client` is busy
+
+async function connectClients() {
+  // keepAlive so a silently dead tunnel eventually surfaces as an error;
+  // query_timeout on the monitor (whose queries are all quick) so a hung
+  // connection fails its polls instead of freezing the table forever.
+  client = new pg.Client({ connectionString, ssl, keepAlive: true, connectionTimeoutMillis: 10_000 });
+  monitor = new pg.Client({ connectionString, ssl, keepAlive: true, connectionTimeoutMillis: 10_000, query_timeout: 30_000 });
+  // A dropped connection also rejects whatever query is in flight, which is
+  // where it's handled; without a listener, the 'error' event would crash.
+  for (const c of [client, monitor]) c.on('error', () => {});
+  await client.connect();
+  await monitor.connect();
+}
+
+async function closeClients() {
+  // Bounded: on a connection that's already dead, end() is just cleanup.
+  const endQuietly = (c) => Promise.race([c?.end().catch(() => {}), new Promise((resolve) => setTimeout(resolve, 2000))]);
+  await Promise.all([endQuietly(client), endQuietly(monitor)]);
+}
 
 // 'setup' → 'building' → 'analyzing' → 'done', or 'attached' when reattaching.
 let stage = 'setup';
@@ -407,10 +438,16 @@ async function reattach(running) {
   console.log('Ctrl-C detaches again without stopping it.');
   display = createBuildDisplay(monitor, running.pid, { attached: true });
   display.start();
-  await display.waitUntilDone();
+  await display.waitUntilDone().catch((error) => {
+    throw new Error(`lost the progress connection (${error.message})`);
+  });
   display.stop();
   display = null;
+  await finishIfBuilt();
+}
 
+/** After a build's backend is gone: ANALYZE + summary if it committed the index, otherwise say it ended without one. */
+async function finishIfBuilt() {
   const current = await getExistingIndex();
   if (current?.valid) {
     await finishUp();
@@ -420,6 +457,35 @@ async function reattach(running) {
         'A failed CREATE INDEX is rolled back completely, so nothing was left behind; re-run to start it over.'
     );
     process.exitCode = 1;
+  }
+}
+
+/**
+ * After reconnecting from a dropped connection mid-build: pick up wherever
+ * the server is now. Never starts a new build — if the old one is gone
+ * without an index, that's reported, not retried.
+ */
+async function resumeAfterReconnect() {
+  const running = await findRunningBuild();
+  if (running) await reattach(running);
+  else await finishIfBuilt();
+}
+
+async function reconnect() {
+  const giveUpAt = Date.now() + RECONNECT_GIVE_UP_MS;
+  for (let attempt = 1; ; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, RECONNECT_INTERVAL_MS));
+    try {
+      await connectClients();
+      console.log(`Reconnected at ${new Date().toLocaleTimeString()}.`);
+      return;
+    } catch (error) {
+      await closeClients();
+      if (Date.now() >= giveUpAt) {
+        throw new Error(`couldn't reconnect for ${RECONNECT_GIVE_UP_MS / 60_000} minutes (last error: ${error.message})`);
+      }
+      if (attempt % 6 === 0) console.log(`  still trying to reconnect (${error.message})...`);
+    }
   }
 }
 
@@ -490,7 +556,14 @@ async function startBuild() {
   display = createBuildDisplay(monitor, pid, { attached: false });
   display.start();
   try {
-    await client.query(`CREATE INDEX ${INDEX_NAME} ON ${TABLE} USING ivfflat (embedding vector_cosine_ops) WITH (lists = ${lists})`);
+    // Raced against the monitor failing, so a dead connection that never
+    // errors out the (silent, hour-long) CREATE INDEX query still gets noticed.
+    await Promise.race([
+      client.query(`CREATE INDEX ${INDEX_NAME} ON ${TABLE} USING ivfflat (embedding vector_cosine_ops) WITH (lists = ${lists})`),
+      display.waitUntilDone().catch((error) => {
+        throw new Error(`lost the progress connection (${error.message})`);
+      }),
+    ]);
   } finally {
     display.stop();
     display = null;
@@ -502,8 +575,7 @@ function reportFailure(error) {
   display?.stop();
   display = null;
   console.error(`\nFailed at ${new Date().toLocaleString()}: ${error.message}`);
-  const fromServer = typeof error.code === 'string' && /^[0-9A-Z]{5}$/.test(error.code);
-  if (stage === 'building' && fromServer) {
+  if (stage === 'building' && buildFailedOnServer(error)) {
     console.error('Postgres rolled the build back completely — nothing half-built was left behind. Re-running starts it over.');
     if (/memory required/i.test(error.message)) {
       console.error('Out of build memory: re-run with a larger MAINTENANCE_WORK_MEM (e.g. MAINTENANCE_WORK_MEM=8GB) or a smaller LISTS.');
@@ -513,17 +585,46 @@ function reportFailure(error) {
   }
 }
 
-try {
-  await client.connect();
-  await monitor.connect();
+/**
+ * A real error from Postgres means the build itself failed and was rolled
+ * back — except the 57P0x "connection terminated" family (admin shutdown,
+ * pg_terminate_backend, crash), which is about the connection, not the build.
+ */
+function buildFailedOnServer(error) {
+  return error instanceof pg.DatabaseError && !String(error.code).startsWith('57P');
+}
+
+async function firstRun() {
+  await connectClients();
   const running = await findRunningBuild();
   if (cancel) await cancelBuild(running);
   else if (running) await reattach(running);
   else await startBuild();
+}
+
+try {
+  let next = firstRun;
+  for (;;) {
+    try {
+      await next();
+      break;
+    } catch (error) {
+      // While a build is running or being watched, a lost connection (the
+      // tunnel restarting, a laptop sleeping) doesn't touch the build in
+      // Postgres — reconnect and pick it back up instead of exiting.
+      const watchingBuild = stage === 'building' || stage === 'attached';
+      if (!watchingBuild || buildFailedOnServer(error)) throw error;
+      display?.stop();
+      display = null;
+      console.log(`\nConnection lost at ${new Date().toLocaleTimeString()} (${error.message}). The build keeps running in Postgres. Reconnecting...`);
+      await closeClients();
+      await reconnect();
+      next = resumeAfterReconnect;
+    }
+  }
 } catch (error) {
   reportFailure(error);
   process.exitCode = 1;
 } finally {
-  await client.end().catch(() => {});
-  await monitor.end().catch(() => {});
+  await closeClients();
 }
