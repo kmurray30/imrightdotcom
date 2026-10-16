@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import yaml from 'yaml';
-import { embedText } from '../textEmbeddings.js';
+import { embedTexts } from '../textEmbeddings.js';
 import { searchSimilarArticles } from '../../utils/vectorIndex.js';
 import { fetchArticleByTitle, toWikiPage } from '../../utils/wikimediaOnDemand.js';
 
@@ -37,11 +37,12 @@ export async function fetchWiki(conspiracyData, options = {}) {
     : {};
   const articlesPerQuery = options.articlesPerQuery ?? config.articles_per_query ?? 10;
 
-  // Step 1: embed + vector-search each query concurrently. No external rate
-  // limit here — this is a local model call plus a Postgres query.
+  // Step 1: embed every query in one batched model call (far cheaper than one
+  // call per query — see embedTexts), then vector-search them concurrently.
+  // No external rate limit here — a local model call plus Postgres queries.
+  const embeddings = await embedTexts(searchQueries);
   const titleLists = await Promise.all(
-    searchQueries.map(async (searchQuery) => {
-      const embedding = await embedText(searchQuery);
+    embeddings.map(async (embedding) => {
       const matches = await searchSimilarArticles(embedding, articlesPerQuery);
       return matches.map((match) => match.title);
     })

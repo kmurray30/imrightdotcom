@@ -42,18 +42,23 @@ export function getPool() {
     pool = new Pool({
       connectionString,
       ssl: shouldUseSsl(connectionString) ? { rejectUnauthorized: false } : false,
-      // Overridable per-process via DB_POOL_MAX (e.g. by the bulk embedding
-      // build, which processes many articles concurrently and needs more
-      // than the live app's usual 5) without changing the default every
-      // other process — including the deployed server — gets when unset.
-      max: Number(process.env.DB_POOL_MAX) || 5,
+      // 20: one pipeline run fires ~8–10 vector searches at once (see
+      // wiki_searcher/providers/wikimedia.js), and concurrent runs share
+      // this pool; Postgres allows 100 connections. Overridable per-process
+      // via DB_POOL_MAX (e.g. by the bulk embedding build) without changing
+      // the default every other process — including the deployed server —
+      // gets when unset.
+      max: Number(process.env.DB_POOL_MAX) || 20,
       // Without these, a connection that goes half-open (e.g. an SSH tunnel
       // whose process died but whose local socket hasn't noticed yet) hangs
       // a query forever with no error and no output — indistinguishable from
       // the process just being slow. Bounding both means a dead tunnel fails
       // loudly within seconds instead of silently stalling a multi-hour job.
       connectionTimeoutMillis: 10_000,
-      statement_timeout: 30_000,
+      // DB_STATEMENT_TIMEOUT_MS overrides it per-process (0 = none), e.g. for
+      // wiki_searcher/scripts/search.js timing a slow cold search instead of
+      // having it cancelled at 30s.
+      statement_timeout: process.env.DB_STATEMENT_TIMEOUT_MS !== undefined ? Number(process.env.DB_STATEMENT_TIMEOUT_MS) : 30_000,
     });
     pool.on('error', (poolError) => {
       // Idle client errors (e.g. a dropped connection) shouldn't crash the process.
