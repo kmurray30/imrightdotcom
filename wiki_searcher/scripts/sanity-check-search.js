@@ -56,12 +56,18 @@ async function main() {
     process.exit(1);
   }
 
+  // Planner estimate + EXISTS rather than exact counts: a count(DISTINCT
+  // title) over the full ~23M-row table takes longer than the pool's 30s
+  // statement_timeout.
   const {
-    rows: [{ article_count, paragraph_count }],
-  } = await pool.query('SELECT count(DISTINCT title) AS article_count, count(*) AS paragraph_count FROM wiki_paragraph_embeddings');
-  console.log(`Index so far: ${article_count} distinct articles, ${paragraph_count} paragraphs embedded.\n`);
+    rows: [{ paragraph_estimate, has_rows }],
+  } = await pool.query(
+    `SELECT (SELECT reltuples::bigint FROM pg_class WHERE relname = 'wiki_paragraph_embeddings') AS paragraph_estimate,
+            EXISTS (SELECT 1 FROM wiki_paragraph_embeddings) AS has_rows`
+  );
+  console.log(`Index so far: ~${Number(paragraph_estimate).toLocaleString()} paragraphs embedded (planner estimate).\n`);
 
-  if (Number(paragraph_count) === 0) {
+  if (!has_rows) {
     console.log('Nothing embedded yet — nothing to search. Try again once a few chunks have landed.');
     await pool.end();
     return;
@@ -70,7 +76,11 @@ async function main() {
   for (const claim of TEST_CLAIMS) {
     console.log(`=== "${claim}" ===`);
     const embedding = await embedText(claim);
+    const searchStartedAt = performance.now();
     const matches = await searchSimilarArticles(embedding, MATCHES_PER_CLAIM);
+    // Well under a second means the ANN index is doing the work; tens of
+    // seconds (or a timeout) means a full scan — see create-ann-index.js.
+    console.log(`  search: ${Math.round(performance.now() - searchStartedAt)} ms`);
 
     if (matches.length === 0) {
       console.log('  (no matches — either the index is too sparse right now, or something is wrong)\n');
