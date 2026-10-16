@@ -29,14 +29,10 @@ ALTER TABLE wiki_paragraph_embeddings ADD COLUMN IF NOT EXISTS page_id BIGINT;
 CREATE INDEX IF NOT EXISTS wiki_paragraph_embeddings_page_id
   ON wiki_paragraph_embeddings (page_id);
 
--- Disk-backed ANN index (not held fully in RAM) — see the cost/latency
--- discussion this schema came out of. ivfflat is a reasonable default;
--- switch to hnsw if pgvector's version on Railway's Postgres supports it
--- and query latency needs to improve further.
-CREATE INDEX IF NOT EXISTS wiki_paragraph_embeddings_ann
-  ON wiki_paragraph_embeddings
-  USING ivfflat (embedding vector_cosine_ops)
-  WITH (lists = 200);
-
-CREATE INDEX IF NOT EXISTS wiki_paragraph_embeddings_title
-  ON wiki_paragraph_embeddings (title);
+-- No ANN (vector search) index here on purpose: ivfflat picks its cluster
+-- centers from the rows present when it's built, so creating it on this
+-- empty table gives poor search results forever. Build it once the table is
+-- loaded with wiki_searcher/scripts/create-ann-index.js.
+--
+-- No separate title index either: UNIQUE (title, paragraph_index) above
+-- already provides an index with title as its leading column.

@@ -7,6 +7,7 @@ import { searchSimilarArticles } from '../../utils/vectorIndex.js';
 import { fetchArticleByTitle, toWikiPage } from '../../utils/wikimediaOnDemand.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ON_DEMAND_CONCURRENCY = 8; // under Wikimedia Enterprise On-demand's 10 requests/second
 
 /**
  * Wikimedia provider: local vector search (pgvector, no rate limit) finds
@@ -54,14 +55,26 @@ export async function fetchWiki(conspiracyData, options = {}) {
   }
 
   // Step 2: fetch full content for the deduplicated candidate titles via
-  // Wikimedia Enterprise On-demand, one call per title, all concurrent.
+  // Wikimedia Enterprise On-demand, one call per title, at most
+  // ON_DEMAND_CONCURRENCY in flight — a run has up to ~40 candidates, and
+  // firing them all at once would blow through On-demand's 10 req/s limit.
+  // A title that still fails after callExternalApi's retries is skipped (like
+  // a title with no exact match), so one bad fetch doesn't sink the whole run.
   const pagesByTitle = new Map();
-  await Promise.all(
-    Array.from(allTitles).map(async (title) => {
-      const article = await fetchArticleByTitle(title);
-      if (article) pagesByTitle.set(title, toWikiPage(article));
-    })
-  );
+  const titlesToFetch = Array.from(allTitles);
+  let nextIndex = 0;
+  async function fetchWorker() {
+    while (nextIndex < titlesToFetch.length) {
+      const title = titlesToFetch[nextIndex++];
+      try {
+        const article = await fetchArticleByTitle(title);
+        if (article) pagesByTitle.set(title, toWikiPage(article));
+      } catch (error) {
+        console.warn(`[wiki_searcher/wikimedia] skipping "${title}": on-demand fetch failed — ${error.message}`);
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(ON_DEMAND_CONCURRENCY, titlesToFetch.length) }, fetchWorker));
 
   const query = conspiracyData.topic ?? '';
 

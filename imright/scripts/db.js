@@ -17,7 +17,7 @@ const { Pool } = pg;
 let pool = null;
 let warnedMissingUrl = false;
 
-function shouldUseSsl(connectionString) {
+export function shouldUseSsl(connectionString) {
   try {
     const { hostname } = new URL(connectionString);
     if (hostname === 'localhost' || hostname === '127.0.0.1') return false;
