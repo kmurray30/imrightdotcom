@@ -16,9 +16,11 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { eq } from 'drizzle-orm';
+import { eq, desc } from 'drizzle-orm';
 import { getDb, schema } from '../../../imright/scripts/db/index.js';
-import { createArticle } from '../../../imright/scripts/articles.js';
+import { createArticle, saveDebugData } from '../../../imright/scripts/articles.js';
+import * as Workshop from '../../../imright/scripts/workshop.js';
+import { submitFeedback } from '../../../imright/scripts/feedback.js';
 import { getArticleImagesRoot } from '../../../utils/image-cache.js';
 
 // A 1x1 transparent PNG — enough for the <img> to actually resolve (200, a
@@ -41,6 +43,26 @@ export async function seedGuestUser({ displayName = 'Fixture Owner' } = {}) {
   const [row] = await db
     .insert(schema.users)
     .values({ isGuest: true, guestCookieId: crypto.randomUUID(), displayName })
+    .returning();
+  return row;
+}
+
+/** Inserts a real (non-guest, has-a-username) `users` row directly — used
+ * when a test needs a second, independently-followable/linkable identity
+ * without going through the browser's own session (e.g. a profile page to
+ * visit and follow while logged in as someone else). */
+export async function seedRealUser({ displayName = 'Fixture Person', username } = {}) {
+  const db = getDb();
+  const finalUsername = username ?? uniqueSlug('fixture-user').replace(/-/g, '_');
+  const [row] = await db
+    .insert(schema.users)
+    .values({
+      isGuest: false,
+      username: finalUsername,
+      email: `${finalUsername}@example.test`,
+      passwordHash: 'not-a-real-hash',
+      displayName,
+    })
     .returning();
   return row;
 }
@@ -117,12 +139,72 @@ export async function seedArticle({
   if (withImages) writeFixtureImages(slug, articleData.images);
 
   const row = await createArticle({ ownerUserId, claimText: claim, articleData });
-  if (isPublic) {
-    const db = getDb();
-    await db.update(schema.articles).set({ isPublic: true }).where(eq(schema.articles.id, row.id));
-    row.isPublic = true;
-  }
+  // createArticle doesn't take isPublic (it relies on the schema's column
+  // default, which is `true`) — always force it explicitly here so fixtures
+  // are correct regardless of what that default happens to be.
+  const db = getDb();
+  await db.update(schema.articles).set({ isPublic }).where(eq(schema.articles.id, row.id));
+  row.isPublic = isPublic;
   return { ...row, url: `/a/${row.id}` };
+}
+
+/** Flips an already-created account's is_admin flag directly (same effect as
+ * imright/scripts/grant-admin.js), so a test can exercise the admin-gated
+ * debug route without a signup flow that grants it. */
+export async function makeAdmin(userId) {
+  const db = getDb();
+  await db.update(schema.users).set({ isAdmin: true }).where(eq(schema.users.id, userId));
+}
+
+/** Seeds a pipeline_debug row directly — the real pipeline only ever writes
+ * one at the end of a full (slow, Grok-calling) run, so tests exercising the
+ * admin debug route go straight to the DB the same way seedArticle bypasses
+ * the pipeline for article content. */
+export async function seedDebugData(articleId, debugData = { slug: 'fixture-debug-run' }) {
+  await saveDebugData(articleId, debugData);
+}
+
+/** Reads back a submitted feedback row by email — tests assert on this
+ * instead of just the UI's "thanks" state, since the UI alone can't tell us
+ * what email/userId actually landed in the DB. Scoped by email (unique per
+ * test, not just "the latest row") so parallel test workers inserting at
+ * the same time can't read back each other's row. */
+export async function getFeedbackByEmail(email) {
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(schema.feedback)
+    .where(eq(schema.feedback.email, email))
+    .orderBy(desc(schema.feedback.createdAt))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+/** Seeds a feedback row via the real submitFeedback() — no HTTP context
+ * needed, it's a plain DB-access function — so the listing-page tests have
+ * something to list without going through the submission UI/route (that
+ * flow is tested for real elsewhere, header-nav.spec.js's "Give feedback"
+ * describe block). */
+export async function seedFeedback({ userId = null, email = 'fixture-feedback@example.test', message = 'fixture feedback message' } = {}) {
+  return submitFeedback({ userId, email, message });
+}
+
+/** Seeds a completed workshop_runs row directly — the real orchestrator
+ * calls the actual Grok-calling stage functions, which this sandboxed test
+ * environment can't reach, so tests exercising the Workshop run-detail/
+ * debug view go straight to the DB the same way seedArticle/seedDebugData
+ * bypass the real pipeline for article content. */
+export async function seedWorkshopRun({
+  createdByUserId,
+  sourceArticleId = null,
+  claimText = 'a workshop fixture claim',
+  startStage = 5,
+  stageConfig = { 5: { provider: 'xai', model: 'grok-4-1-fast-non-reasoning', systemPrompt: 'fixture prompt' } },
+  resultData = { slug: 'workshop-fixture-run' },
+} = {}) {
+  const run = await Workshop.createRun({ createdByUserId, sourceArticleId, claimText, startStage, stageConfig });
+  await Workshop.completeRun(run.id, resultData);
+  return { ...run, status: 'done', resultData };
 }
 
 /** Directly sets denormalized engagement counters sky-high so a fixture

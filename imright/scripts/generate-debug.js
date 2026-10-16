@@ -214,7 +214,7 @@ function formatTime(timeMs) {
   return `${Math.round(timeMs)}ms`;
 }
 
-function buildHtml(data) {
+export function buildHtml(data) {
   const conspiracy = data.conspiracy;
   const wikisFetched = data.wikisFetched;
   const wikisFiltered = data.wikisFiltered;
@@ -354,6 +354,14 @@ function buildHtml(data) {
       border-bottom: 2px solid #e63946;
     }
     .header h1 { font-size: 1.5rem; margin: 0 0 0.5rem 0; }
+    .header .original-claim {
+      font-size: 1.05rem;
+      margin: 0 0 0.75rem 0;
+      padding: 0.6rem 0.9rem;
+      background: #252540;
+      border-left: 3px solid #e63946;
+      border-radius: 6px;
+    }
     .header .subtitle { color: #aaa; font-size: 0.9rem; }
     .header a { color: #6df4a1; text-decoration: none; }
     .header a:hover { text-decoration: underline; }
@@ -547,7 +555,8 @@ function buildHtml(data) {
 <body>
   <div class="container">
     <header class="header">
-      <h1>Pipeline debug: ${escapeHtml(topic)}</h1>
+      <h1>Pipeline debug</h1>
+      <p class="original-claim"><strong>Original claim:</strong> "${escapeHtml(topic)}"</p>
       <p class="subtitle">
         <a href="../../tabloid_generator/output/${escapeHtml(data.slug)}.html">← Back to article</a>
       </p>
@@ -1414,14 +1423,16 @@ ${renderRefsList(refs, 0, searchTerm)}
   return html;
 }
 
-async function main() {
-  const slug = process.argv[2]?.trim();
-  if (!slug) {
-    console.error('Usage: node imright/scripts/generate-debug.js <slug>');
-    console.error('Example: node imright/scripts/generate-debug.js wireless-headphones-can-give-you-brain-cancer');
-    process.exit(1);
-  }
-
+/**
+ * Reads every per-stage disk cache for a run and assembles the exact `data`
+ * shape buildHtml() renders. Pulled out of main() so the pipeline itself
+ * (imright/index.js) can call this in-process right after a run finishes —
+ * at that point the files were *just* written by this same process, so
+ * reading them back is reliable — and persist the result durably (Postgres),
+ * rather than leaving debug visibility dependent on Railway's ephemeral disk
+ * surviving until someone happens to look.
+ */
+export function collectDebugData(slug) {
   const conspiracy = loadConspiracy(slug);
   const wikisFetched = loadYaml(`wiki_searcher/wikis-fetched/${slug}.yaml`);
   const wikisFiltered = loadYaml(`wiki_filterer/wikis-filtered/${slug}.yaml`);
@@ -1435,7 +1446,7 @@ async function main() {
   const counterarguerRawInput = loadJson(`counterarguer/input/${slug}.json`);
   const counterarguerRawOutput = loadRawText(`counterarguer/output/${slug}.txt`);
 
-  const data = {
+  return {
     slug,
     conspiracy,
     wikisFetched,
@@ -1450,7 +1461,17 @@ async function main() {
     counterarguerRawInput,
     counterarguerRawOutput,
   };
+}
 
+async function main() {
+  const slug = process.argv[2]?.trim();
+  if (!slug) {
+    console.error('Usage: node imright/scripts/generate-debug.js <slug>');
+    console.error('Example: node imright/scripts/generate-debug.js wireless-headphones-can-give-you-brain-cancer');
+    process.exit(1);
+  }
+
+  const data = collectDebugData(slug);
   const html = buildHtml(data);
 
   const outputPath = path.join(PROJECT_ROOT, 'imright', 'debug', `${slug}.html`);
@@ -1463,8 +1484,13 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error('Error:', error.message);
-  if (error.stack) console.error(error.stack);
-  process.exit(1);
-});
+// Only run the CLI when this file is executed directly (`node generate-debug.js ...`
+// or the pipeline's execSync call) — not when imported as a module (buildHtml/
+// collectDebugData reused by the admin debug route).
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((error) => {
+    console.error('Error:', error.message);
+    if (error.stack) console.error(error.stack);
+    process.exit(1);
+  });
+}

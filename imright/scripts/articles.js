@@ -34,8 +34,16 @@ export async function createArticle({ ownerUserId, claimText, articleData }) {
  * transactions elsewhere in this file), this is what GET /api/articles/:id
  * actually returns — it joins the owner's username/displayName so the
  * article page can show a byline without a second request, the same
- * information Discover/search/profile listings already include per row. */
-export async function getArticleById(id) {
+ * information Discover/search/profile listings already include per row.
+ *
+ * `viewerId` (the current req.user.id, or undefined for a guest with no
+ * identity yet) is used to compute `likedByViewer` — without this, the
+ * frontend had no way to know the current viewer had already liked the
+ * article, so LikeButton always started from "not liked" on every page
+ * load/reload regardless of the real state (a real bug: a user could like,
+ * leave, come back, and the button would let them "like" again, even
+ * though the idempotent backend just no-ops the duplicate). */
+export async function getArticleById(id, viewerId) {
   if (!UUID_PATTERN.test(id)) return null;
   const db = getDb();
   const rows = await db
@@ -48,6 +56,7 @@ export async function getArticleById(id) {
       likeCount: schema.articles.likeCount,
       commentCount: schema.articles.commentCount,
       bookmarkCount: schema.articles.bookmarkCount,
+      viewCount: schema.articles.viewCount,
       createdAt: schema.articles.createdAt,
       updatedAt: schema.articles.updatedAt,
       ownerUsername: schema.users.username,
@@ -57,7 +66,30 @@ export async function getArticleById(id) {
     .innerJoin(schema.users, eq(schema.users.id, schema.articles.ownerUserId))
     .where(eq(schema.articles.id, id))
     .limit(1);
-  return rows[0] ?? null;
+  const article = rows[0] ?? null;
+  if (!article) return null;
+
+  let likedByViewer = false;
+  if (viewerId) {
+    const likeRows = await db
+      .select({ userId: schema.articleLikes.userId })
+      .from(schema.articleLikes)
+      .where(and(eq(schema.articleLikes.userId, viewerId), eq(schema.articleLikes.articleId, id)))
+      .limit(1);
+    likedByViewer = likeRows.length > 0;
+  }
+  return { ...article, likedByViewer };
+}
+
+/** Owner-only. Cascades to the article's likes/comments/bookmark-folder
+ * memberships via the FKs already declared in schema.js — nothing else to
+ * clean up here. */
+export async function deleteArticle({ articleId, userId }) {
+  const db = getDb();
+  const article = await getArticleRow(db, articleId);
+  if (!article) throw new HttpError(404, 'article_not_found');
+  if (article.ownerUserId !== userId) throw new HttpError(403, 'not_owner');
+  await db.delete(schema.articles).where(eq(schema.articles.id, articleId));
 }
 
 /** Shallow-merges `patch` into article_data (e.g. adding counterarguments
@@ -95,15 +127,45 @@ export async function setArticleVisibility({ articleId, userId, isPublic }) {
 }
 
 // ---------------------------------------------------------------------------
+// Pipeline debug data (admin-only viewing, see require-admin.js)
+// ---------------------------------------------------------------------------
+
+/** Called once, right after a run's pipeline promise resolves (see
+ * serve-site.js's startPipelineRun) — upsert rather than plain insert so a
+ * retried run (see pipelineRuns' retry-on-crash docstring in schema.js)
+ * can't collide with a leftover row from an earlier attempt at the same
+ * article id. */
+export async function saveDebugData(articleId, debugData) {
+  const db = getDb();
+  await db
+    .insert(schema.pipelineDebug)
+    .values({ articleId, debugData })
+    .onConflictDoUpdate({ target: schema.pipelineDebug.articleId, set: { debugData } });
+}
+
+export async function getDebugDataForArticle(articleId) {
+  const db = getDb();
+  if (!UUID_PATTERN.test(articleId)) return null;
+  const [row] = await db
+    .select({ debugData: schema.pipelineDebug.debugData })
+    .from(schema.pipelineDebug)
+    .where(eq(schema.pipelineDebug.articleId, articleId))
+    .limit(1);
+  return row?.debugData ?? null;
+}
+
+// ---------------------------------------------------------------------------
 // Article likes
 // ---------------------------------------------------------------------------
 
+/** Liking your own article is allowed — an earlier requirement blocked it;
+ * reversed, so the display and behavior are identical whether you're the
+ * owner or not. */
 export async function likeArticle({ userId, articleId }) {
   const db = getDb();
   return db.transaction(async (tx) => {
     const article = await getArticleRow(tx, articleId);
     if (!article) throw new HttpError(404, 'article_not_found');
-    if (article.ownerUserId === userId) throw new HttpError(403, 'cannot_like_own_article');
     const inserted = await tx.insert(schema.articleLikes).values({ userId, articleId }).onConflictDoNothing().returning();
     if (inserted.length > 0) {
       await tx
@@ -129,6 +191,37 @@ export async function unlikeArticle({ userId, articleId }) {
         .where(eq(schema.articles.id, articleId));
     }
     return { liked: false };
+  });
+}
+
+/** Dedupes by the anonymous visitor cookie (req.identity.visitorId), not by
+ * account/guest identity — see schema.js's articleViews docstring for why.
+ * Idempotent: a second view from the same visitor for the same article is a
+ * no-op (ON CONFLICT DO NOTHING), same pattern as likeArticle above, so a
+ * session re-opening the page never double-counts. */
+export async function recordArticleView({ articleId, visitorId }) {
+  const db = getDb();
+  return db.transaction(async (tx) => {
+    const article = await getArticleRow(tx, articleId);
+    if (!article) throw new HttpError(404, 'article_not_found');
+    const inserted = await tx
+      .insert(schema.articleViews)
+      .values({ articleId, visitorId })
+      .onConflictDoNothing()
+      .returning();
+    if (inserted.length > 0) {
+      const [row] = await tx
+        .update(schema.articles)
+        .set({ viewCount: sql`${schema.articles.viewCount} + 1` })
+        .where(eq(schema.articles.id, articleId))
+        .returning({ viewCount: schema.articles.viewCount });
+      return { counted: true, viewCount: row?.viewCount ?? null };
+    }
+    const [row] = await tx
+      .select({ viewCount: schema.articles.viewCount })
+      .from(schema.articles)
+      .where(eq(schema.articles.id, articleId));
+    return { counted: false, viewCount: row?.viewCount ?? null };
   });
 }
 
@@ -324,13 +417,21 @@ export async function createComment({ articleId, authorId, body }) {
 
 /** Most-liked at top, with a little seeded-hash randomness for recent
  * comments — see the plan's Comment Ranking section for the full formula. */
-export async function listComments({ articleId, seed, cursor = 0, limit = 50 }) {
+/** `viewerId` (undefined for a guest with no identity yet) drives
+ * `likedByViewer` per row — same fix, same reason as getArticleById's: the
+ * frontend previously had no way to know the current viewer had already
+ * liked a given comment, so every comment-like button always started
+ * "unliked" regardless of the real per-user state. */
+export async function listComments({ articleId, seed, cursor = 0, limit = 50, viewerId }) {
   const db = getDb();
   const safeSeed = typeof seed === 'string' && seed ? seed : 'no-seed';
   const result = await db.execute(sql`
     SELECT c.id, c.article_id AS "articleId", c.author_id AS "authorId", c.body,
            c.like_count AS "likeCount", c.created_at AS "createdAt",
-           u.username, u.display_name AS "displayName"
+           u.username, u.display_name AS "displayName",
+           EXISTS(
+             SELECT 1 FROM comment_likes cl WHERE cl.comment_id = c.id AND cl.user_id = ${viewerId ?? null}
+           ) AS "likedByViewer"
     FROM comments c
     JOIN users u ON u.id = c.author_id
     WHERE c.article_id = ${articleId}
@@ -385,23 +486,50 @@ export async function unlikeComment({ userId, commentId }) {
 // section for why these use a client-supplied `seed` instead of raw random().
 // ---------------------------------------------------------------------------
 
-export async function discoverFeed({ seed, cursor = 0, limit = 30 }) {
+const DISCOVER_SORTS = new Set(['new', 'popular', 'algo']);
+
+// Date defaults to newest-first per a real request: with so few articles
+// total and most starting at zero engagement, "Algo"'s ranking used to be
+// the only option and could place a brand-new article anywhere on the page
+// — confusing when the rendered headline isn't 1:1 with the claim text
+// someone typed. A visitor who wants the popularity/algo view can still
+// switch to it explicitly.
+function discoverOrderBy(sort, safeSeed) {
+  switch (sort) {
+    case 'popular':
+      // All-time leaderboard: raw engagement, no time decay or jitter — a
+      // stable ranking, not a "front page" that reshuffles between loads.
+      return sql`ORDER BY (a.like_count * 2 + a.comment_count + a.bookmark_count) DESC, a.created_at DESC, a.id`;
+    case 'algo':
+      // Popularity-weighted with deterministic per-seed jitter (see the
+      // plan's Discover Feed Ranking section) — a Reddit/HN-style "hot"
+      // ranking: recent + engaged wins, with enough shuffle between loads
+      // that a low-engagement article still gets a chance to surface.
+      return sql`ORDER BY
+        ( (a.like_count * 2 + a.comment_count + a.bookmark_count)
+          / POWER(EXTRACT(EPOCH FROM (now() - a.created_at)) / 3600.0 + 2, 1.5)
+        ) * (0.6 + 0.8 * ((hashtext(a.id::text || ${safeSeed}) & 65535)::float / 65535)) DESC,
+        a.id`;
+    case 'new':
+    default:
+      return sql`ORDER BY a.created_at DESC, a.id`;
+  }
+}
+
+export async function discoverFeed({ seed, cursor = 0, limit = 30, sort = 'new' }) {
   const db = getDb();
+  const safeSort = DISCOVER_SORTS.has(sort) ? sort : 'new';
   const safeSeed = typeof seed === 'string' && seed ? seed : 'no-seed';
   const result = await db.execute(sql`
     SELECT a.id, a.owner_user_id AS "ownerUserId", a.claim_text AS "claimText",
            a.is_public AS "isPublic", a.article_data AS "articleData",
            a.like_count AS "likeCount", a.comment_count AS "commentCount",
-           a.bookmark_count AS "bookmarkCount", a.created_at AS "createdAt",
+           a.bookmark_count AS "bookmarkCount", a.view_count AS "viewCount", a.created_at AS "createdAt",
            u.username, u.display_name AS "displayName"
     FROM articles a
     JOIN users u ON u.id = a.owner_user_id
     WHERE a.is_public = true
-    ORDER BY
-      ( (a.like_count * 2 + a.comment_count + a.bookmark_count)
-        / POWER(EXTRACT(EPOCH FROM (now() - a.created_at)) / 3600.0 + 2, 1.5)
-      ) * (0.6 + 0.8 * ((hashtext(a.id::text || ${safeSeed}) & 65535)::float / 65535)) DESC,
-      a.id
+    ${discoverOrderBy(safeSort, safeSeed)}
     LIMIT ${limit} OFFSET ${cursor}
   `);
   return result.rows;
@@ -419,6 +547,7 @@ export async function followingFeed({ userId, cursor = 0, limit = 30 }) {
       likeCount: schema.articles.likeCount,
       commentCount: schema.articles.commentCount,
       bookmarkCount: schema.articles.bookmarkCount,
+      viewCount: schema.articles.viewCount,
       createdAt: schema.articles.createdAt,
       username: schema.users.username,
       displayName: schema.users.displayName,
@@ -468,6 +597,7 @@ export async function searchArticles({ query, cursor = 0, limit = 30 }) {
       likeCount: schema.articles.likeCount,
       commentCount: schema.articles.commentCount,
       bookmarkCount: schema.articles.bookmarkCount,
+      viewCount: schema.articles.viewCount,
       createdAt: schema.articles.createdAt,
       username: schema.users.username,
       displayName: schema.users.displayName,

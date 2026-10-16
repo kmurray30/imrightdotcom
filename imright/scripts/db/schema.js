@@ -36,6 +36,11 @@ export const users = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     isGuest: boolean('is_guest').notNull().default(true),
+    // Grants access to the pipeline debug page (GET /api/articles/:id/debug)
+    // for any article, not scoped to what this account owns — a support/dev
+    // tool, not a social-layer permission. Set directly in the DB (see
+    // imright/scripts/grant-admin.js); no self-serve signup path, deliberately.
+    isAdmin: boolean('is_admin').notNull().default(false),
     username: citext('username').unique(),
     email: citext('email').unique(),
     passwordHash: text('password_hash'),
@@ -83,12 +88,16 @@ export const articles = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     claimText: text('claim_text').notNull(),
-    isPublic: boolean('is_public').notNull().default(false),
+    // Defaults to public: most claims generated here are jokes/bits meant to
+    // be shared, not kept private — private is now an explicit opt-out via
+    // VisibilityToggle rather than something every article starts as.
+    isPublic: boolean('is_public').notNull().default(true),
     // Exactly buildArticleData()'s current shape (title/body/sections/citations/images/counterarguments).
     articleData: jsonb('article_data').notNull(),
     likeCount: integer('like_count').notNull().default(0),
     commentCount: integer('comment_count').notNull().default(0),
     bookmarkCount: integer('bookmark_count').notNull().default(0),
+    viewCount: integer('view_count').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -96,6 +105,28 @@ export const articles = pgTable(
     index('articles_owner_user_id_idx').on(table.ownerUserId, table.createdAt.desc()),
     index('articles_is_public_idx').on(table.isPublic, table.createdAt.desc()).where(sql`${table.isPublic} = true`),
     index('articles_claim_text_trgm_idx').using('gin', sql`${table.claimText} gin_trgm_ops`),
+  ]
+);
+
+/** Dedupes views by the existing anonymous `imright_vid` visitor cookie
+ * (identity.js), not by users.id — a view has to work for a total drive-by
+ * visitor who has never generated or liked anything, and keying it to the
+ * guest/account identity system would mean minting a permanent `users` row
+ * on every single article pageview (the exact per-pageview-row problem that
+ * system was deliberately designed to avoid). visitor_id is therefore a bare
+ * cookie value, not a foreign key into users. */
+export const articleViews = pgTable(
+  'article_views',
+  {
+    articleId: uuid('article_id')
+      .notNull()
+      .references(() => articles.id, { onDelete: 'cascade' }),
+    visitorId: uuid('visitor_id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.articleId, table.visitorId] }),
+    index('article_views_article_id_idx').on(table.articleId),
   ]
 );
 
@@ -241,4 +272,99 @@ export const pipelineRuns = pgTable(
   (table) => [
     check('pipeline_runs_status_check', sql`${table.status} IN ('running', 'ready', 'done', 'error')`),
   ]
+);
+
+/**
+ * Durable copy of the full per-stage pipeline visualization (angles, wiki
+ * search/filter, link validation, raw LLM inputs/outputs, counterarguer) —
+ * exactly the `data` shape generate-debug.js's buildHtml() renders. Without
+ * this, that data only ever existed as per-stage YAML/JSON files under the
+ * project root, which are wiped on every Railway redeploy; this table is
+ * what lets an admin view a given article's debug page at any time, not just
+ * until the next deploy. One row per article, written once right after the
+ * pipeline finishes (see imright/index.js's collectDebugData() call and its
+ * caller in serve-site.js) — never read on a normal article pageview, so it
+ * deliberately isn't a column on `articles` itself.
+ */
+export const pipelineDebug = pgTable('pipeline_debug', {
+  articleId: uuid('article_id')
+    .primaryKey()
+    .references(() => articles.id, { onDelete: 'cascade' }),
+  debugData: jsonb('debug_data').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Feedback submitted from the header menu's "Give feedback" item. `userId`
+ * is whoever req.user resolved to at submit time (guest or real account),
+ * kept only for traceability — `onDelete: 'set null'` so deleting an
+ * account doesn't take its feedback history with it. `email` is always a
+ * real address to follow up at: a real account's own email (server-trusted,
+ * never the client-supplied one — see routes/social.js) for a logged-in
+ * submitter, or a typed one for a guest/anonymous visitor, who has no
+ * account email to fall back on.
+ */
+export const feedback = pgTable('feedback', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+  email: text('email').notNull(),
+  message: text('message').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Admin-only Workshop experiments: resume the pipeline from Conspirator (1),
+ * Tabloid Generator (5), or Counterarguer (7) — the only LLM stages — reusing
+ * an existing article's earlier-stage data (from pipelineDebug) unchanged,
+ * with a different provider/model/system-prompt for the stages that re-run.
+ * Deliberately NOT a view/branch of `articles`/`pipelineDebug` — a Workshop
+ * run must never be reachable from Discover/search/profile/any public
+ * listing, so it lives in its own table with no code path that ever joins
+ * it into those queries.
+ */
+export const workshopRuns = pgTable(
+  'workshop_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdByUserId: uuid('created_by_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    // Nullable: null for a from-scratch stage-1 run with no source article.
+    sourceArticleId: uuid('source_article_id').references(() => articles.id, { onDelete: 'set null' }),
+    claimText: text('claim_text').notNull(),
+    startStage: integer('start_stage').notNull(),
+    // { "1": {provider, model, systemPrompt}, "5": {...}, "7": {...} } — only
+    // keys for LLM stages at or after startStage.
+    stageConfig: jsonb('stage_config').notNull(),
+    status: text('status').notNull().default('running'), // running | done | error
+    errorMessage: text('error_message'),
+    // Populated once done: the same 13-key shape generate-debug.js's
+    // buildHtml() consumes, plus a stageRows array (model/cost/time per
+    // stage actually run, see run-workshop.js).
+    resultData: jsonb('result_data'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('workshop_runs_created_by_user_id_idx').on(table.createdByUserId, table.createdAt.desc()),
+    index('workshop_runs_source_article_id_idx').on(table.sourceArticleId),
+    check('workshop_runs_status_check', sql`${table.status} IN ('running', 'done', 'error')`),
+    check('workshop_runs_start_stage_check', sql`${table.startStage} IN (1, 5, 7)`),
+  ]
+);
+
+/**
+ * Persisted, learned "known models" per provider for the Workshop model
+ * dropdown. Seeded at migration time with the models already known to this
+ * codebase (see utils/grok-pricing.json); grown automatically the first time
+ * a custom model string completes a stage without throwing.
+ */
+export const workshopKnownModels = pgTable(
+  'workshop_known_models',
+  {
+    provider: text('provider').notNull(),
+    modelName: text('model_name').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.provider, table.modelName] })]
 );

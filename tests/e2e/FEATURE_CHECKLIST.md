@@ -18,6 +18,8 @@ handling and overlapped/ran off-screen at phone width).
 | 6 | Log out button shown when logged in; clears session | header-nav.spec.js A3+A4+A6 |
 | 59 | Menu closes on an outside click and after following a link | header-nav.spec.js "menu closes..." |
 | 60 | Header never overflows/overlaps at phone width | header-nav.spec.js "mobile viewport..." |
+| 63 | Menu toggle is a hamburger icon for guests, a circular avatar (initial) for a logged-in user | header-nav.spec.js A5/A6 |
+| 78 | "Give feedback" item in the menu opens a modal: a logged-in user's account email is used automatically (no email field shown); a guest is asked to type one, required and validated before the message can be sent. Always lands in the `feedback` table, no account required | header-nav.spec.js "Give feedback" describe block |
 
 ## B. Home page / idea generation
 | # | Feature | Test |
@@ -32,6 +34,7 @@ handling and overlapped/ran off-screen at phone width).
 | 14 | Discover feed renders below the idea-input form | home.spec.js B14 |
 | 15 | Home page doesn't repeat the "imright.com" heading already in the header | home.spec.js B15 |
 | 61 | Submit button is a legible, visually prominent primary action | home.spec.js "B7 style..." |
+| 64 | On mobile, the belief input takes clearly more width than the submit button (not an even 50/50 split) | home.spec.js "mobile viewport: the belief input..." |
 
 ## C. Discover feed
 | # | Feature | Test |
@@ -39,6 +42,10 @@ handling and overlapped/ran off-screen at phone width).
 | 15 | Discover / Following tabs both present | discover.spec.js C15 |
 | 16 | Switching tabs reloads the list | discover.spec.js C16 |
 | 17 | Discover surfaces a newly-published public article | discover.spec.js C17+C20 |
+| 72 | Discover tab defaults to newest-first so a just-submitted article is always easy to find | discover.spec.js "Discover tab lists articles newest-first" |
+| 73 | Discover sort control (Newest / Popular / Algo) collapses into one icon toggle (↕) in the search row, opening a dropdown menu; visible only on the Discover tab (not Following or while searching), Newest selected by default, closes on an outside click | discover.spec.js "Discover sort control: Newest is selected by default...", "Discover sort control: the dropdown closes on an outside click" |
+| 74 | Popular sort ranks by raw all-time engagement, ignoring recency | discover.spec.js "Discover sort control: switching to Popular..." |
+| 75 | Algo sort restores the popularity+time-decay+jitter ranking (the original Discover Feed Ranking design) | discover.spec.js "Discover sort control: Algo re-requests..." |
 | 18 | Following tab disabled + inline prompt for guests | discover.spec.js C18 |
 | 19 | Following tab shows followed users' public articles | discover.spec.js C19 |
 | 20 | Search filters to matching public articles | discover.spec.js C17+C20 |
@@ -46,29 +53,35 @@ handling and overlapped/ran off-screen at phone width).
 | 22 | "Load more" paginates in additional results | discover.spec.js C22 |
 | 23 | Empty state when a search matches nothing | discover.spec.js C23 |
 | 24 | Article card shows headline/byline/like/comment counts (no bookmark count) and a hero-image thumbnail when one exists | discover.spec.js C24, C17+C20 |
+| 65 | On mobile, the Discover grid shows two (smaller) cards per row instead of one | discover.spec.js "mobile viewport: the Discover grid..." |
 
 ## D. Article page
 | # | Feature | Test |
 |---|---|---|
 | 25 | Loads an article by id | article.spec.js D25+D34+D35 |
 | 26 | Not-found state for an unknown id | article.spec.js D26 |
-| 27 | Visibility toggle: owner-only; guest-owner sees a sign-up prompt instead | article.spec.js D27+D28, D27 (guest-owner) |
+| 27 | Visibility toggle: owner-only, including a guest owner (rendered, gated behind sign-up on click) | article.spec.js D27+D28, D27 (guest-owner) |
+| 70 | New articles default to public (Private is an explicit opt-out, not the starting state) | article.spec.js "a freshly created article is public by default..." |
 | 28 | Toggling visibility persists (survives reload) | article.spec.js D27+D28 |
-| 29 | Like: hidden on your own article; guest prompt; toggles for others | article.spec.js D29, D29 (guest) |
-| 30 | Bookmark: quick-add on first click; guest prompt | article.spec.js D30+D31, D30 (guest) |
+| 29 | Like: allowed on your own article too (identical display); allowed for a guest with no account (no sign-up gate, real engagement counted); persists per-user (or per-guest) across reload; a duplicate like is a no-op | article.spec.js D29 (×4) |
+| 30 | Bookmark: quick-add on first click; real button shown to a guest, gated on click | article.spec.js D30+D31, D30 (guest) |
 | 31 | Bookmark folder widget on second click: toggle/create folders, duplicate-name error | article.spec.js D30+D31 |
-| 32 | Follow: hidden on your own article; toggles for others | article.spec.js D32 |
+| 32 | Follow: moved off the article page entirely (see Profile page, H) | history-bookmarks-profile.spec.js "D32 (moved here)" |
 | 33 | Share copies the link and confirms it | article.spec.js D33 |
 | 34 | Article body renders headline/hero/sections/section-images/conclusion | article.spec.js D25+D34+D35 |
 | 35 | Citations render as inline links | article.spec.js D25+D34+D35 |
 | 36 | Bunky counterargument callout toggles open/closed | article.spec.js D36 |
 | 37 | Counterarguments arriving after load are picked up by polling | article.spec.js D37 |
-| 38 | Comments: guest sees a sign-up prompt instead of the composer | article.spec.js D38+D41 |
+| 38 | Comments: composer always shown, even to a guest — gated behind a sign-up prompt on submit | article.spec.js D38+D41 |
 | 39 | Posting a comment prepends it and clears the composer | article.spec.js D39+D40 |
-| 40 | Comment like toggles for a logged-in user | article.spec.js D39+D40 |
+| 40 | Comment like toggles for a logged-in user or a guest (no sign-up gate), persists per-user/per-guest across reload, and is idempotent against duplicates | article.spec.js D39+D40, D40, D40 (guest) |
 | 41 | Empty state when there are no comments | article.spec.js D38+D41 |
-| 42 | Article page shows the owner byline (linked when they have an account) and like/comment/bookmark stats | article.spec.js D42 |
+| 42 | Article page shows the owner byline ("by you" for the viewer's own article, a profile link otherwise) and like/comment/bookmark stats | article.spec.js D42 (×4) |
+| 76 | View count: visible to everyone, next to the like count on the article page and on Discover/profile/search cards; counted once per unique visitor (deduped on the existing anonymous visitor cookie, not per-account), a reload of the same page never double-counts | article.spec.js "D42 views" (×2), discover.spec.js "a Discover card shows the article's view count" |
 | 62 | On mobile, Enter submits a comment (Shift+Enter for a newline) without needing the Post button visible | article.spec.js D39 mobile |
+| 66 | Every remaining guest-gated control (Bookmark/Follow/Comment/Visibility — Like is no longer gated, see #29/#40) renders normally and prompts via one shared modal only on click, instead of hiding behind inline "Sign up to..." text | article.spec.js D27 (guest-owner), D30 (guest), D38+D41 |
+| 67 | Delete an article: buried/muted trigger, owner-only, a plain confirm for a private/no-interaction article, a stronger email-match confirm for a public article with likes/comments/bookmarks, guests can delete their own | article.spec.js "Delete article" describe block |
+| 77 | Admin-only "View debug" link on any article, opening the full pipeline visualization (angles → wiki search/filter → link validation → tabloid generation → counterarguer) — durably persisted per article (survives a redeploy, unlike the old disk-cache-only CLI tool), 404s for anyone whose account isn't flagged is_admin (including guests) and for an article with no debug data yet | article.spec.js "Admin pipeline debug page" describe block |
 
 ## Visual legibility (found from real user reports, not covered by the areas above)
 | # | Feature | Test |
@@ -82,8 +95,9 @@ handling and overlapped/ran off-screen at phone width).
 | 42 | Signup validation + server error mapping (duplicate username/email, already-logged-in, pattern) | auth.spec.js (Signup describe block) |
 | 43 | Successful signup logs in, redirects home, carries over guest history | auth.spec.js E43 |
 | 44 | Login error mapping (wrong credentials, lockout after repeated failures) | auth.spec.js (Login/logout describe block) |
-| 45 | Successful login redirects home and updates the header | auth.spec.js E44+E45 |
+| 45 | Successful login redirects home (or back to the page you were on, e.g. an article) and updates the header | auth.spec.js E44+E45, "E45: logging in from an article page..." |
 | 46 | Logout clears session, header reverts to guest state | auth.spec.js E46 |
+| 68 | Logging into an existing account auto-claims articles this browser generated as a guest first | auth.spec.js "E44/9: logging into an existing account..." |
 
 ## F. History page
 | # | Feature | Test |
@@ -104,9 +118,17 @@ handling and overlapped/ran off-screen at phone width).
 | 52 | "No such user" state for an unknown username | history-bookmarks-profile.spec.js H52 |
 | 53 | Shows display name, @username, hides Follow on your own profile | history-bookmarks-profile.spec.js H53+H54 |
 | 54 | Shows public articles grid; empty state if none | history-bookmarks-profile.spec.js H53+H54, H54 |
+| 69 | Follow toggles for another user (moved here from the article page) | history-bookmarks-profile.spec.js "D32 (moved here)" |
 
 ## I. Cross-cutting
 | # | Feature | Test |
 |---|---|---|
-| 55 | Every guest-gated social action shows a sign-up prompt, never a raw error | covered per-action across article.spec.js / discover.spec.js |
+| 55 | Every guest-gated social action shows a sign-up prompt (via the shared modal, see #66), never a raw error | covered per-action across article.spec.js / discover.spec.js |
 | 56 | Direct article links work regardless of visibility | article.spec.js I56 |
+| 71 | One-time backfill: pre-existing guest-owned private articles were retroactively made public (accounts' own deliberate Private choices are left alone) | `imright/scripts/db/migrations/0005_publicize_guest_owned_private_articles.sql`, applied automatically at server startup — not practical to exercise via a fresh-DB e2e test, verified manually against the dev DB |
+
+## J. Workshop (admin-only)
+| # | Feature | Test |
+|---|---|---|
+| 79 | Admin-only "Workshop": resume the pipeline from Conspirator/Tabloid Generator/Counterarguer, reusing an existing article's earlier-stage data, with a different provider/model/system-prompt for the stages that re-run. "Experiment in Workshop" link on the article page and "Workshop" nav link, both admin-only; non-admins and guests get the generic 404/"Page not found" treatment on the page and every `/api/workshop/*` route; resuming from Tabloid Generator/Counterarguer is rejected (and disabled in the UI) when the source article has no persisted pipeline debug data; a completed run's debug view reuses the same `buildHtml()` renderer as the article debug page, shown side-by-side with the original in a compare view | workshop.spec.js |
+| 80 | Admin-only "Feedback" page listing everything submitted via "Give feedback" (message, submitter — `@username` if a real account, else the typed email — and timestamp, newest first). "Feedback" nav link admin-only; non-admins and guests get the generic 404 treatment on the page and `GET /api/feedback` | header-nav.spec.js "Feedback admin page" describe block |

@@ -29,6 +29,48 @@
       "when": 1789673476765,
       "tag": "0003_pipeline_run_retries",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789946759485,
+      "tag": "0004_change_articles_is_public_default",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789946793662,
+      "tag": "0005_publicize_guest_owned_private_articles",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790183775907,
+      "tag": "0006_add_article_views",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790604992932,
+      "tag": "0007_elite_terrax",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791094889767,
+      "tag": "0008_tense_magma",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791107674117,
+      "tag": "0009_spotty_raza",
+      "breakpoints": true
     }
   ]
 }

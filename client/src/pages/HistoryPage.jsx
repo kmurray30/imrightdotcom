@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client.js';
+import { DeleteArticleModal } from '../components/article/DeleteArticleModal.jsx';
 
 /** Guest-ok: a guest's own history is visible to them regardless of
  * visibility, same as a real account's (requirement 2). */
 export function HistoryPage() {
   const [articles, setArticles] = useState(null);
+  const [deletingArticle, setDeletingArticle] = useState(null);
 
   useEffect(() => {
     api
@@ -25,12 +27,27 @@ export function HistoryPage() {
         {articles.map((article) => (
           <li key={article.id}>
             <Link to={`/a/${article.id}`}>{article.articleData?.headline || article.claimText}</Link>
-            <span className={`visibility-badge ${article.isPublic ? 'is-public' : 'is-private'}`}>
-              {article.isPublic ? 'Public' : 'Private'}
+            <span className="history-list-right">
+              <span className={`visibility-badge ${article.isPublic ? 'is-public' : 'is-private'}`}>
+                {article.isPublic ? 'Public' : 'Private'}
+              </span>
+              <button type="button" className="delete-article-trigger" onClick={() => setDeletingArticle(article)}>
+                Delete
+              </button>
             </span>
           </li>
         ))}
       </ul>
+      {deletingArticle && (
+        <DeleteArticleModal
+          article={deletingArticle}
+          onClose={() => setDeletingArticle(null)}
+          onDeleted={() => {
+            setArticles((prev) => prev.filter((a) => a.id !== deletingArticle.id));
+            setDeletingArticle(null);
+          }}
+        />
+      )}
     </div>
   );
 }

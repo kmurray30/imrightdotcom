@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api/client.js';
 import { useAuth } from '../context/AuthContext.jsx';
 
@@ -10,6 +10,7 @@ export function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
   const { refresh } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -18,7 +19,9 @@ export function LoginPage() {
     try {
       await api.post('/api/account/login', { username, password });
       await refresh();
-      navigate('/');
+      // Returns to wherever the user came from (e.g. logging in from an
+      // article page lands back on that article) instead of always home.
+      navigate(location.state?.from || '/');
     } catch (err) {
       setError(describeError(err.code));
     } finally {

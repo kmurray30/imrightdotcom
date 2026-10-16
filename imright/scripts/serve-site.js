@@ -68,7 +68,8 @@ import { resolveLinks } from './backup-links.js';
 import { resolveUser, ensureOwner, sweepExpiredSessions } from './auth-accounts.js';
 import { accountRouter } from './routes/account.js';
 import { socialRouter } from './routes/social.js';
-import { createArticle, mergeArticleData } from './articles.js';
+import { workshopRouter } from './routes/workshop.js';
+import { createArticle, mergeArticleData, saveDebugData } from './articles.js';
 import {
   createPipelineRun,
   markPipelineRunReady,
@@ -607,6 +608,18 @@ function startPipelineRun({ runId, ownerUserId, claim, visitorId, sessionId, tra
             console.error('[serve-site] failed to merge counterarguments:', mergeError?.message ?? mergeError);
           }
         }
+        // Durable copy of the pipeline debug data, so an admin can view it
+        // after this process's on-disk caches are gone (e.g. after the next
+        // Railway redeploy) — see schema.js's pipelineDebug table. Never
+        // blocks/affects the run's own outcome, same spirit as the
+        // counterarguments merge above.
+        if (articleRow && pipelineResult?.debugData) {
+          try {
+            await saveDebugData(articleRow.id, pipelineResult.debugData);
+          } catch (debugSaveError) {
+            console.error('[serve-site] failed to persist debug data:', debugSaveError?.message ?? debugSaveError);
+          }
+        }
         runState.finished = true;
         setTimeout(() => {
           for (const subscriberResponse of runState.subscribers) {
@@ -920,6 +933,7 @@ app.get('/api/placeholder-suggestions', async (req, res, next) => {
 
 app.use('/api/account', accountRouter);
 app.use('/api', socialRouter);
+app.use('/api/workshop', workshopRouter);
 
 // Stable URL namespace for an article's permanent images, decoupled from
 // where getArticleImagesRoot() actually points (a project-relative dev path,

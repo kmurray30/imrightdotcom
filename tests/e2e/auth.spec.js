@@ -1,7 +1,7 @@
 // Feature area E — Auth: signup, login, logout (see FEATURE_CHECKLIST.md #42-46).
 import { test, expect } from '@playwright/test';
 import { signupViaApi, uniqueUsername } from './helpers/auth.js';
-import { seedArticle } from './helpers/db.js';
+import { seedArticle, seedGuestUser } from './helpers/db.js';
 import { openMenu } from './helpers/nav.js';
 
 test.describe('Signup', () => {
@@ -122,6 +122,53 @@ test.describe('Login / logout', () => {
     await page.getByLabel('Password').fill('wrong-again');
     await page.getByRole('button', { name: 'Log in' }).click();
     await expect(page.locator('.form-error')).toHaveText('Too many failed attempts — try again in a few minutes.');
+  });
+
+  test('E45: logging in from an article page returns you to that page, not home', async ({ page }) => {
+    // Real report: logging in while reading an article dropped you back on
+    // the home page instead of where you were. Header carries `state: {
+    // from }` into the Login/Signup links; LoginPage navigates there instead
+    // of always '/'.
+    const { username, password } = await signupViaApi(page);
+    await page.request.post('/api/account/logout');
+    const owner = await seedGuestUser();
+    const article = await seedArticle({ ownerUserId: owner.id, isPublic: true });
+
+    await page.goto(article.url);
+    await openMenu(page);
+    await page.getByRole('link', { name: 'Log in' }).click();
+    await expect(page).toHaveURL('/login');
+
+    await page.getByLabel('Username').fill(username);
+    await page.getByLabel('Password').fill(password);
+    await page.getByRole('button', { name: 'Log in' }).click();
+
+    await expect(page).toHaveURL(new RegExp(`/a/${article.id}`));
+  });
+
+  test('E44/9: logging into an existing account auto-claims articles created by this browser\'s guest session', async ({
+    page,
+  }) => {
+    // Distinct from E43's guest->signup carryover (same row, same id,
+    // nothing to "transfer"): here the guest row and the real account are
+    // two different rows, so logging in must move ownership of whatever this
+    // browser generated as a guest onto the account being logged into.
+    const { username, password } = await signupViaApi(page);
+    await page.request.post('/api/account/logout');
+
+    await page.request.post('/api/run', { data: { claim: 'a guest claim before logging into an existing account' } });
+    const asGuest = await (await page.request.get('/api/account/me')).json();
+    expect(asGuest.user.isGuest).toBe(true);
+    const article = await seedArticle({ ownerUserId: asGuest.user.id, claim: 'transfer-on-login article' });
+
+    await page.goto('/login');
+    await page.getByLabel('Username').fill(username);
+    await page.getByLabel('Password').fill(password);
+    await page.getByRole('button', { name: 'Log in' }).click();
+    await expect(page).toHaveURL('/');
+
+    await page.goto('/history');
+    await expect(page.locator('.history-list')).toContainText('transfer-on-login article');
   });
 
   test('E46: logging out clears the session and reverts the header to guest state', async ({ page }) => {

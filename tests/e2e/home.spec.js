@@ -150,6 +150,18 @@ test.describe('Home page: idea-input form', () => {
     expect(feedBox.y).toBeGreaterThan(formBox.y);
   });
 
+  test('mobile viewport: the belief input gets noticeably more width than the submit button', async ({ page }) => {
+    // Real report: on mobile the input/submit split looked like an even
+    // 50/50, with the input cramped and the button oversized. Belief input
+    // now takes a clear majority share (flex: 3 vs flex: 1 in the mobile
+    // media query) instead of an even split.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/');
+    const inputBox = await page.locator('.belief-input-wrap').boundingBox();
+    const buttonBox = await page.locator('.belief-form button[type="submit"]').boundingBox();
+    expect(inputBox.width).toBeGreaterThan(buttonBox.width * 1.3);
+  });
+
   test('B15: the home page does not repeat the "imright.com" heading already in the header', async ({ page }) => {
     // Real report: the hero's big <h1>imright.com</h1> was pure duplication
     // of the header logo right above it. The header logo itself (outside

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api/client.js';
 import { useAuth } from '../context/AuthContext.jsx';
 
@@ -12,6 +12,7 @@ export function SignupPage() {
   const [submitting, setSubmitting] = useState(false);
   const { refresh } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -20,7 +21,7 @@ export function SignupPage() {
     try {
       await api.post('/api/account/signup', { username, email, password, displayName });
       await refresh();
-      navigate('/');
+      navigate(location.state?.from || '/');
     } catch (err) {
       setError(describeError(err.code));
     } finally {

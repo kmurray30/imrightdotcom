@@ -7,8 +7,12 @@
 
 import { Router } from 'express';
 import { requireAccount } from '../require-account.js';
+import { requireAdmin } from '../require-admin.js';
+import { ensureOwner } from '../auth-accounts.js';
 import { HttpError } from '../http-error.js';
+import { buildHtml as buildDebugHtml } from '../generate-debug.js';
 import * as Articles from '../articles.js';
+import * as Feedback from '../feedback.js';
 
 export const socialRouter = Router();
 
@@ -34,12 +38,27 @@ socialRouter.get('/me/articles', async (req, res, next) => {
 
 socialRouter.get('/articles/:id', async (req, res, next) => {
   try {
-    const article = await Articles.getArticleById(req.params.id);
+    const article = await Articles.getArticleById(req.params.id, req.user?.id);
     if (!article) throw new HttpError(404, 'article_not_found');
     // No visibility check here on purpose: any article, public or private, is
     // reachable via its direct link (requirement 4). Visibility only gates
     // Discover listing, handled separately below.
     res.json({ article });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Guest-ok, and deliberately not keyed to the guest/account identity system
+// (see schema.js's articleViews docstring) — a view has to count for every
+// visitor, including one who has never generated or liked anything, without
+// minting a permanent `users` row on every single pageview. req.identity is
+// set for every request by the global middleware in serve-site.js, so this
+// never fails for lack of an identity the way an account-gated action might.
+socialRouter.post('/articles/:id/view', async (req, res, next) => {
+  try {
+    const result = await Articles.recordArticleView({ articleId: req.params.id, visitorId: req.identity.visitorId });
+    res.json(result);
   } catch (error) {
     next(error);
   }
@@ -56,19 +75,58 @@ socialRouter.patch('/articles/:id/visibility', requireAccount, async (req, res, 
   }
 });
 
-// ---- Article likes ----
-
-socialRouter.post('/articles/:id/like', requireAccount, async (req, res, next) => {
+// Not gated by requireAccount on purpose: a guest can delete their own
+// guest-owned articles too (this only ever touches your own content).
+// Articles.deleteArticle's ownership check 403s anyone else, including a
+// visitor with no identity at all (req.user is then undefined).
+socialRouter.delete('/articles/:id', async (req, res, next) => {
   try {
-    res.json(await Articles.likeArticle({ userId: req.user.id, articleId: req.params.id }));
+    if (!req.user) throw new HttpError(403, 'account_required');
+    await Articles.deleteArticle({ articleId: req.params.id, userId: req.user.id });
+    res.json({ ok: true });
   } catch (error) {
     next(error);
   }
 });
 
-socialRouter.delete('/articles/:id/like', requireAccount, async (req, res, next) => {
+// Admin-only: the full pipeline visualization (angles, wiki search/filter,
+// link validation, raw LLM inputs/outputs, counterarguer) for any article,
+// durable across redeploys — see schema.js's pipelineDebug docstring for why
+// this couldn't just stay the existing disk-cache-based CLI tool. Served as
+// a plain self-contained HTML page (buildHtml() already embeds its own CSS/
+// JS), not JSON for a React view — same reasoning as the CLI's debug output,
+// there's no reason to rebuild that visualization as a SPA page.
+socialRouter.get('/articles/:id/debug', requireAdmin, async (req, res, next) => {
   try {
-    res.json(await Articles.unlikeArticle({ userId: req.user.id, articleId: req.params.id }));
+    const debugData = await Articles.getDebugDataForArticle(req.params.id);
+    if (!debugData) throw new HttpError(404, 'debug_data_not_found');
+    res.type('html').send(buildDebugHtml(debugData));
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ---- Article likes ----
+
+// Guest-ok, on purpose: liking is real engagement worth counting even from
+// someone who never made an account, and a guest's `users` row (see
+// ensureOwner) already gives article_likes a stable per-browser identity to
+// key its unique constraint on — same idempotency guarantee an account gets,
+// just scoped to this browser instead of a login. This does mean a guest can
+// clear cookies to re-like, same tradeoff as any anonymous-engagement metric.
+socialRouter.post('/articles/:id/like', async (req, res, next) => {
+  try {
+    const owner = await ensureOwner(req, res);
+    res.json(await Articles.likeArticle({ userId: owner.id, articleId: req.params.id }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+socialRouter.delete('/articles/:id/like', async (req, res, next) => {
+  try {
+    const owner = await ensureOwner(req, res);
+    res.json(await Articles.unlikeArticle({ userId: owner.id, articleId: req.params.id }));
   } catch (error) {
     next(error);
   }
@@ -185,7 +243,12 @@ socialRouter.get('/users/:userId/following', async (req, res, next) => {
 socialRouter.get('/articles/:id/comments', async (req, res, next) => {
   try {
     const seed = typeof req.query.seed === 'string' ? req.query.seed : '';
-    const comments = await Articles.listComments({ articleId: req.params.id, seed, cursor: parseCursor(req) });
+    const comments = await Articles.listComments({
+      articleId: req.params.id,
+      seed,
+      cursor: parseCursor(req),
+      viewerId: req.user?.id,
+    });
     res.json({ comments });
   } catch (error) {
     next(error);
@@ -201,17 +264,20 @@ socialRouter.post('/articles/:id/comments', requireAccount, async (req, res, nex
   }
 });
 
-socialRouter.post('/comments/:id/like', requireAccount, async (req, res, next) => {
+// Guest-ok too — same reasoning as article likes above.
+socialRouter.post('/comments/:id/like', async (req, res, next) => {
   try {
-    res.json(await Articles.likeComment({ userId: req.user.id, commentId: req.params.id }));
+    const owner = await ensureOwner(req, res);
+    res.json(await Articles.likeComment({ userId: owner.id, commentId: req.params.id }));
   } catch (error) {
     next(error);
   }
 });
 
-socialRouter.delete('/comments/:id/like', requireAccount, async (req, res, next) => {
+socialRouter.delete('/comments/:id/like', async (req, res, next) => {
   try {
-    res.json(await Articles.unlikeComment({ userId: req.user.id, commentId: req.params.id }));
+    const owner = await ensureOwner(req, res);
+    res.json(await Articles.unlikeComment({ userId: owner.id, commentId: req.params.id }));
   } catch (error) {
     next(error);
   }
@@ -222,7 +288,8 @@ socialRouter.delete('/comments/:id/like', requireAccount, async (req, res, next)
 socialRouter.get('/discover', async (req, res, next) => {
   try {
     const seed = typeof req.query.seed === 'string' ? req.query.seed : '';
-    const articles = await Articles.discoverFeed({ seed, cursor: parseCursor(req) });
+    const sort = typeof req.query.sort === 'string' ? req.query.sort : undefined;
+    const articles = await Articles.discoverFeed({ seed, cursor: parseCursor(req), sort });
     res.json({ articles });
   } catch (error) {
     next(error);
@@ -242,6 +309,35 @@ socialRouter.get('/discover/search', async (req, res, next) => {
   try {
     const articles = await Articles.searchArticles({ query: req.query.q, cursor: parseCursor(req) });
     res.json({ articles });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ---- Feedback ----
+
+// Guest-ok, and deliberately not behind ensureOwner: giving feedback
+// shouldn't require minting a permanent guest `users` row for a visitor who
+// has never generated anything (same reasoning as article views/likes).
+// For a real account, the email is always the server-known one, never the
+// client-supplied body field — a logged-in submitter can't be spoofed into
+// having their feedback attributed to a different address.
+socialRouter.post('/feedback', async (req, res, next) => {
+  try {
+    const email = req.user && !req.user.isGuest ? req.user.email : req.body?.email;
+    const feedback = await Feedback.submitFeedback({ userId: req.user?.id ?? null, email, message: req.body?.message });
+    res.json({ ok: true, feedback: { id: feedback.id } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Admin-only: view what's been submitted — see require-admin.js for why a
+// non-admin gets 404, not 403, same posture as the pipeline debug route.
+socialRouter.get('/feedback', requireAdmin, async (req, res, next) => {
+  try {
+    const feedback = await Feedback.listFeedback({ cursor: parseCursor(req) });
+    res.json({ feedback });
   } catch (error) {
     next(error);
   }

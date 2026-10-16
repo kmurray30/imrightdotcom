@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../api/client.js';
 import { useAuth } from '../../context/AuthContext.jsx';
-import { GuestPrompt } from '../auth/GuestPrompt.jsx';
+import { useGuestGate } from '../../context/GuestGateContext.jsx';
 import { BookmarkFolderModal } from './BookmarkFolderModal.jsx';
 
 /** First click on an un-bookmarked article: quick-add to the default
@@ -11,6 +11,7 @@ import { BookmarkFolderModal } from './BookmarkFolderModal.jsx';
  * (unlike liking it). */
 export function BookmarkButton({ articleId }) {
   const { isGuest } = useAuth();
+  const { promptSignup } = useGuestGate();
   const [folders, setFolders] = useState(null); // null = not loaded yet
   const [showModal, setShowModal] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -23,11 +24,13 @@ export function BookmarkButton({ articleId }) {
       .catch(() => {});
   }, [articleId, isGuest]);
 
-  if (isGuest) return <GuestPrompt message="Sign up to bookmark this" />;
-
   const isBookmarked = folders?.some((f) => f.checked) ?? false;
 
   async function handleClick() {
+    if (isGuest) {
+      promptSignup('bookmark this');
+      return;
+    }
     if (busy) return;
     if (folders && isBookmarked) {
       setShowModal(true);

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { api } from '../../api/client.js';
+import { FeedbackModal } from './FeedbackModal.jsx';
 
 /** All nav options live behind one dropdown — previously a flat row of
  * links that, with no responsive handling at all, overlapped and ran off
@@ -10,8 +11,14 @@ import { api } from '../../api/client.js';
 export function Header() {
   const { user, isGuest, refresh } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [isOpen, setIsOpen] = useState(false);
+  const [showFeedback, setShowFeedback] = useState(false);
   const menuRef = useRef(null);
+  // Carried to LoginPage/SignupPage so a successful auth returns here
+  // instead of always bouncing to home — e.g. logging in from an article
+  // page should land back on that article.
+  const returnTo = { from: `${location.pathname}${location.search}` };
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -41,8 +48,17 @@ export function Header() {
           onClick={() => setIsOpen((open) => !open)}
           aria-haspopup="true"
           aria-expanded={isOpen}
+          aria-label="Menu"
         >
-          Menu ☰
+          {isGuest ? (
+            <span className="nav-toggle-icon" aria-hidden="true">
+              ☰
+            </span>
+          ) : (
+            <span className="nav-toggle-avatar" aria-hidden="true">
+              {(user?.displayName || 'A').trim().charAt(0).toUpperCase()}
+            </span>
+          )}
         </button>
         {isOpen && (
           <nav className="site-nav-dropdown">
@@ -59,12 +75,32 @@ export function Header() {
                 {user.displayName}
               </Link>
             )}
+            {user?.isAdmin && (
+              <Link to="/workshop" onClick={() => setIsOpen(false)}>
+                Workshop
+              </Link>
+            )}
+            {user?.isAdmin && (
+              <Link to="/feedback" onClick={() => setIsOpen(false)}>
+                Feedback
+              </Link>
+            )}
+            <button
+              type="button"
+              className="link-button"
+              onClick={() => {
+                setIsOpen(false);
+                setShowFeedback(true);
+              }}
+            >
+              Give feedback
+            </button>
             {isGuest ? (
               <>
-                <Link to="/login" onClick={() => setIsOpen(false)}>
+                <Link to="/login" state={returnTo} onClick={() => setIsOpen(false)}>
                   Log in
                 </Link>
-                <Link to="/signup" onClick={() => setIsOpen(false)}>
+                <Link to="/signup" state={returnTo} onClick={() => setIsOpen(false)}>
                   Sign up
                 </Link>
               </>
@@ -76,6 +112,7 @@ export function Header() {
           </nav>
         )}
       </div>
+      {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} />}
     </header>
   );
 }

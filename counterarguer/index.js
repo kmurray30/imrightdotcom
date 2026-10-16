@@ -22,14 +22,19 @@ const SYSTEM_PROMPT = fs.readFileSync(
  * @param {object} article - Parsed tabloid article with sections array
  * @param {string} topic - The claim/topic (e.g. "dogs are bad for your mental health")
  * @param {string} [slug] - Filename-safe slug for saving raw input/output
+ * @param {object} [options] - Optional config
+ * @param {string} [options.model] - Grok model override (defaults to utils/grok.js's DEFAULT_MODEL)
+ * @param {string} [options.systemPrompt] - System prompt override (defaults to system_prompt.txt's contents)
+ * @param {function} [options.onRawCapture] - Called once (after the per-section loop) with { rawInput: {topic, sections}, rawOutput } — same data the disk-write branch below captures, for callers (e.g. Workshop) that need it without passing a slug
  * @returns {Promise<{ counterarguments: Array<{ blurb: string, analysis: string }> }>}
  */
-export async function generateCounterarguments(article, topic, slug = null) {
+export async function generateCounterarguments(article, topic, slug = null, options = {}) {
   const sections = article?.sections ?? [];
   if (sections.length === 0) {
     return { counterarguments: [] };
   }
 
+  const systemPrompt = options.systemPrompt ?? SYSTEM_PROMPT;
   const rawInputs = [];
   const rawOutputs = [];
   const counterarguments = [];
@@ -52,7 +57,7 @@ ${sectionText}
 Return JSON: { "blurb": "5-15 word zinger for a thought bubble", "analysis": "2-4 paragraphs: roast the logic, name fallacies, then counterpoints" }`;
 
     const messages = [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: systemPrompt },
       { role: 'user', content: userMessage },
     ];
 
@@ -62,6 +67,7 @@ Return JSON: { "blurb": "5-15 word zinger for a thought bubble", "analysis": "2-
       const { parsed, rawContent } = await callGrokJson(messages, {
         response_format: { type: 'json_object' },
         callerName: `counterarguer/section-${index + 1}`,
+        model: options.model,
       });
       rawOutputs.push({ sectionIndex: index, heading, rawContent });
 
@@ -75,6 +81,11 @@ Return JSON: { "blurb": "5-15 word zinger for a thought bubble", "analysis": "2-
       counterarguments.push({ blurb: '', analysis: '' });
     }
   }
+
+  options.onRawCapture?.({
+    rawInput: { topic, sections: rawInputs },
+    rawOutput: rawOutputs.map((out) => `--- Section ${out.sectionIndex}: ${out.heading} ---\n${out.rawContent}`).join('\n\n'),
+  });
 
   if (slug) {
     const inputDir = path.join(__dirname, 'input');

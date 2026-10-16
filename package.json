@@ -16,6 +16,7 @@
     "debug": "node imright/scripts/generate-debug.js",
     "serve-output": "node imright/scripts/serve-output.js",
     "migrate": "node imright/scripts/db/migrate.js",
+    "grant-admin": "node imright/scripts/grant-admin.js",
     "db:generate": "drizzle-kit generate",
     "build": "npm --prefix client install && npm --prefix client run build",
     "test:e2e": "playwright test"

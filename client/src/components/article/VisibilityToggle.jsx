@@ -1,20 +1,23 @@
 import { useState } from 'react';
 import { api } from '../../api/client.js';
 import { useAuth } from '../../context/AuthContext.jsx';
-import { GuestPrompt } from '../auth/GuestPrompt.jsx';
+import { useGuestGate } from '../../context/GuestGateContext.jsx';
 
-/** Only rendered for the article's own owner (see ArticlePage). Guests can't
- * publish at all (requirement 8) — shown here in case an owner is somehow
- * still a guest by the time this renders, though ArticlePage already only
- * shows this to the owner, and a guest owner would need to sign up first. */
+/** Only rendered for the article's own owner (see ArticlePage). Guests
+ * can't actually publish — a guest owner sees the real checkbox like
+ * everyone else, but toggling it prompts signup instead of calling the API,
+ * which still requires a real account. */
 export function VisibilityToggle({ articleId, initialIsPublic, onChange }) {
   const { isGuest } = useAuth();
+  const { promptSignup } = useGuestGate();
   const [isPublic, setIsPublic] = useState(initialIsPublic);
   const [busy, setBusy] = useState(false);
 
-  if (isGuest) return <GuestPrompt message="Sign up to make this article public" />;
-
   async function toggle() {
+    if (isGuest) {
+      promptSignup('make this article public');
+      return;
+    }
     if (busy) return;
     const next = !isPublic;
     // Optimistic update: setBusy(true) alone triggers a re-render, and
