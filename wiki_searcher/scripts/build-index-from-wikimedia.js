@@ -1215,7 +1215,8 @@ function isRemoteDiskFullError(error) {
 }
 
 main().catch((error) => {
-  console.error('\nFatal error:', error.message);
+  console.error(`\nFatal error at ${new Date().toLocaleString()}:`, error.message);
+  if (error.detail) console.error(`  ${error.detail}`); // Postgres errors name the offending row/key here
   if (isRemoteDiskFullError(error)) {
     console.error(
       'This looks like the remote Railway Postgres volume is full, not local disk — check/resize it in the Railway ' +
@@ -1224,7 +1225,7 @@ main().catch((error) => {
   }
   console.error('Re-run this script to resume — completed chunks (marked .done) are skipped, others pick up where they left off.');
   try {
-    logDebug(`=== fatal error: ${error.message} ===`);
+    logDebug(`=== fatal error: ${error.message}${error.detail ? ` (${error.detail})` : ''} ===`);
   } catch {
     // best-effort — don't let a logging failure hide the real error above
   }

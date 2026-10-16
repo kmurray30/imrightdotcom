@@ -131,6 +131,13 @@ function toVectorLiteral(vector) {
   return '[' + vector.map((x) => String(Number(x.toPrecision(9)))).join(',') + ']';
 }
 
+/** True only when both copies carry numeric versions and `a`'s is older; otherwise the later copy wins. */
+function isOlderVersion(a, b) {
+  const va = String(a.versionIdentifier ?? '');
+  const vb = String(b.versionIdentifier ?? '');
+  return /^\d+$/.test(va) && /^\d+$/.test(vb) && BigInt(va) < BigInt(vb);
+}
+
 const DB_RETRY_BASE_DELAY_MS = 2000;
 const DB_RETRY_MAX_DELAY_MS = 60_000; // cap backoff so "retry forever" doesn't mean waiting an hour between attempts
 
@@ -224,12 +231,29 @@ async function attemptUpsertBatch(pool, articles, timings) {
     timings.readMs += performance.now() - dbReadStart;
     const currentVersionByTitle = new Map(rows.map((row) => [row.title, row.version_identifier]));
 
+    // The snapshot can contain the same title more than once. Two copies in
+    // one batch would put duplicate (title, paragraph_index) rows into one
+    // INSERT, which always fails — reproduced the build's fatal
+    // "duplicate key ... title_paragraph_index_key" exactly, and ON CONFLICT
+    // can't absorb it either (it refuses to touch the same row twice in one
+    // statement). So only the newest copy of each title is written; the
+    // other copies are reported as skipped.
+    const keptIndexByTitle = new Map();
+    articles.forEach((article, i) => {
+      const kept = keptIndexByTitle.get(article.title);
+      if (kept === undefined || !isOlderVersion(article, articles[kept])) keptIndexByTitle.set(article.title, i);
+    });
+
     const results = new Array(articles.length);
     const targets = []; // { title, pageId } for every article needing a DELETE (and maybe an INSERT)
     const pendingEmbeds = []; // { article, paragraphs } for every article that also needs an INSERT
 
     articles.forEach((article, i) => {
       const { title, wikitext, versionIdentifier, pageId } = article;
+      if (keptIndexByTitle.get(title) !== i) {
+        results[i] = { title, paragraphCount: 0, skipped: true }; // superseded by another copy of this title in the batch
+        return;
+      }
       const currentVersion = currentVersionByTitle.get(title);
       const alreadyCurrent =
         versionIdentifier != null && currentVersion != null && String(currentVersion) === String(versionIdentifier);
@@ -317,6 +341,13 @@ async function attemptUpsertBatch(pool, articles, timings) {
         // that hasn't seen the DELETE yet and throw a duplicate-key error —
         // which would have fired on every single re-embed of an article
         // whose paragraph count didn't change.
+        //
+        // ON CONFLICT covers a different collision: the same title being
+        // written by two chunks at once (duplicate copies of a title can land
+        // in different chunks). Neither transaction's DELETE can see the
+        // other's uncommitted rows, so the second INSERT hit a duplicate-key
+        // error once the first committed — reproduced against the live
+        // database; with ON CONFLICT the second write simply overwrites.
         const insertParams = [];
         const insertPlaceholders = insertRows.map((row) => {
           const base = targetParams.length + insertParams.length;
@@ -336,7 +367,10 @@ async function attemptUpsertBatch(pool, articles, timings) {
            INSERT INTO wiki_paragraph_embeddings (title, page_id, paragraph_index, section, paragraph_text, embedding, version_identifier)
            SELECT v.title, v.page_id, v.paragraph_index, v.section, v.paragraph_text, v.embedding, v.version_identifier
            FROM (VALUES ${insertPlaceholders.join(', ')}) AS v(title, page_id, paragraph_index, section, paragraph_text, embedding, version_identifier)
-           CROSS JOIN (SELECT count(*) FROM deleted) AS dep(n)`,
+           CROSS JOIN (SELECT count(*) FROM deleted) AS dep(n)
+           ON CONFLICT (title, paragraph_index) DO UPDATE SET
+             page_id = EXCLUDED.page_id, section = EXCLUDED.section, paragraph_text = EXCLUDED.paragraph_text,
+             embedding = EXCLUDED.embedding, version_identifier = EXCLUDED.version_identifier, updated_at = now()`,
           [...targetParams, ...insertParams]
         );
       }
