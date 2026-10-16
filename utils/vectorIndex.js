@@ -15,8 +15,9 @@ const OVERFETCH_FACTOR = 10;
 // How many of the ivfflat index's clusters each search scans. pgvector's
 // default is 1, which misses most good matches; ≈ sqrt(lists) is its
 // suggested starting point (create-ann-index.js prints the value for the
-// index it built). Higher = better recall, slower queries.
-const DEFAULT_PROBES = 60;
+// index it built). Higher = better recall, slower queries. 69 ≈ sqrt(4787),
+// the lists the full English Wikipedia index (~22.9M paragraphs) gets.
+const DEFAULT_PROBES = 69;
 
 /**
  * @param {number[]} embedding
