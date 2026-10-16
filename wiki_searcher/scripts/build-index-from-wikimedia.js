@@ -399,6 +399,10 @@ function createProgressDisplay(totalArticles, chunkSlots) {
     addBytes(n) {
       bytes.add(n);
     },
+    /** Bytes already on disk from a prior run: counted toward the total, not toward DL MB/s (see createCounter's addBurst). */
+    addBytesBurst(n) {
+      bytes.addBurst(n);
+    },
     /** One batch's per-article ms for each stage: { embed, read, write }. */
     recordBatchTimings(perArticleMs) {
       for (const name of stageNames) stageTimers[name].record(perArticleMs[name]);
@@ -532,7 +536,7 @@ async function downloadOne(url, filePath, tracker, metadata) {
     // sidecar — a completed chunk has its sidecar deleted on success, so
     // checking the ETag first would make every completed chunk look
     // "rotated" (no sidecar to compare against) on a later run.
-    tracker.addBytes(startByte);
+    tracker.addBytesBurst(startByte);
     return;
   } else if (startByte > contentLength) {
     // Oversized/corrupted — can't be trusted at any size. Reset and re-download.
@@ -549,7 +553,7 @@ async function downloadOne(url, filePath, tracker, metadata) {
       startByte = 0;
     }
   }
-  tracker.addBytes(startByte); // whatever we're keeping/resuming from, credited exactly once, right here
+  tracker.addBytesBurst(startByte); // whatever we're keeping/resuming from, credited exactly once, right here
   fs.writeFileSync(etagSidecarPath, etag ?? '');
 
 
@@ -1000,7 +1004,7 @@ async function prepareChunk(chunk, tracker) {
     // Downloaded and extracted in a prior run, but not yet embedded when
     // that run stopped — pick up from here instead of re-downloading.
     logDebug(`${chunk.chunkId}: resuming from already-extracted .ndjson, skipping straight to embedding`);
-    tracker.addBytes(chunk.contentLength);
+    tracker.addBytesBurst(chunk.contentLength);
     return alreadyExtractedPath;
   }
   logDebug(`${chunk.chunkId}: starting download`);
@@ -1029,7 +1033,7 @@ async function prepareChunk(chunk, tracker) {
 async function processChunk(chunk, prepare, tracker, totals, avgArticlesPerChunk) {
   const donePath = donePathFor(chunk);
   if (fs.existsSync(donePath)) {
-    tracker.addBytes(chunk.contentLength); // already fully processed in a prior run
+    tracker.addBytesBurst(chunk.contentLength); // already fully processed in a prior run
     tracker.addArticlesBurst(loadChunkTotalLines(donePath) ?? avgArticlesPerChunk);
     return;
   }
@@ -1221,6 +1225,14 @@ main().catch((error) => {
     console.error(
       'This looks like the remote Railway Postgres volume is full, not local disk — check/resize it in the Railway ' +
         'dashboard (the volume\'s settings → Live Resize) before re-running.'
+    );
+  }
+  if (error.status === 404 && /^Download failed/.test(error.message)) {
+    // The chunk list is cached in snapshot-metadata.json; when Wikimedia
+    // regenerates the snapshot, its chunk set changes and old chunk ids 404.
+    console.error(
+      `Wikimedia most likely regenerated the snapshot since the chunk list was cached, so this chunk no longer exists. ` +
+        `Move ${path.join(destDir, 'snapshot-metadata.json')} aside and re-run to fetch the current chunk list.`
     );
   }
   console.error('Re-run this script to resume — completed chunks (marked .done) are skipped, others pick up where they left off.');
