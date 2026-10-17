@@ -69,9 +69,9 @@ export function setLogger(fn) {
  * @huggingface/transformers 4.3.0's actual source (src/utils/hub.js,
  * src/utils/hub/utils.js) rather than assumed from docs.
  */
-export function loadExtractor(device, dtype) {
+export function loadExtractor(device, dtype, modelName = MODEL_NAME) {
   const lastLoggedPct = {}; // per-file, so multi-file downloads (model + tokenizer) don't spam past each other
-  return pipeline('feature-extraction', MODEL_NAME, {
+  return pipeline('feature-extraction', modelName, {
     device,
     // Always passed explicitly rather than left to transformers.js's
     // per-device default, so a device switch can never silently load a
@@ -91,7 +91,7 @@ export function loadExtractor(device, dtype) {
       }
     },
   }).then((extractor) => {
-    log(`[embed] Model ready (device: ${device}, dtype: ${dtype}).`);
+    log(`[embed] Model ready (${modelName}, device: ${device}, dtype: ${dtype}).`);
     return extractor;
   });
 }
@@ -143,12 +143,12 @@ export async function embedTexts(texts) {
  * grows with batch × sequence²). The right `batchSize` depends on the device —
  * benchmark-embed-device.js sweeps it, calling this same function.
  */
-export async function embedSorted(extractor, texts, batchSize) {
+export async function embedSorted(extractor, texts, batchSize, pooling = 'mean') {
   const order = texts.map((_, i) => i).sort((a, b) => texts[a].length - texts[b].length);
   const results = new Array(texts.length);
   for (let start = 0; start < order.length; start += batchSize) {
     const indices = order.slice(start, start + batchSize);
-    const output = await extractor(indices.map((i) => texts[i]), { pooling: 'mean', normalize: true });
+    const output = await extractor(indices.map((i) => texts[i]), { pooling, normalize: true });
     output.tolist().forEach((vector, j) => {
       results[indices[j]] = vector;
     });

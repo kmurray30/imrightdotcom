@@ -36,3 +36,14 @@ CREATE INDEX IF NOT EXISTS wiki_paragraph_embeddings_page_id
 --
 -- No separate title index either: UNIQUE (title, paragraph_index) above
 -- already provides an index with title as its leading column.
+
+-- arctic-embed-m-v1.5 vectors for the same paragraphs (see
+-- wiki_searcher/arcticEmbeddings.js), cut to 256 dims and stored at half
+-- precision: the source for the compact (4-bit) search index that replaces
+-- the bge ANN index above. Filled by wiki_searcher/scripts/reembed-arctic.js
+-- (which also creates this table). Rows follow their paragraph: deleting or
+-- replacing a paragraph removes its vector too.
+CREATE TABLE IF NOT EXISTS wiki_paragraph_vectors_arctic (
+  id        BIGINT PRIMARY KEY REFERENCES wiki_paragraph_embeddings (id) ON DELETE CASCADE,
+  embedding halfvec(256) NOT NULL
+);
