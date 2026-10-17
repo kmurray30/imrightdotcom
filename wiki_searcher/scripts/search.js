@@ -6,10 +6,12 @@
  * (index pages read from Postgres's disk), later repeats "warm" (the same
  * pages now cached in RAM).
  *
- * Usage: node wiki_searcher/scripts/search.js "<query>" [--probes N] [--top N] [--repeat N]
- *   --probes  ivfflat clusters scanned per search (default: utils/vectorIndex.js's default)
- *   --top     distinct articles to return (default 5)
- *   --repeat  times to run the same search (default 2: cold, then warm)
+ * Usage: node wiki_searcher/scripts/search.js "<query>" [--probes N] [--top N] [--repeat N] [--prefix | --compare]
+ *   --probes   ivfflat clusters scanned per search (default: utils/vectorIndex.js's default)
+ *   --top      distinct articles to return (default 5)
+ *   --repeat   times to run the same search (default 2: cold, then warm)
+ *   --prefix   embed the query with bge's retrieval instruction (QUERY_PREFIX)
+ *   --compare  run the query both without and with the prefix, one after the other
  *
  * Run wherever DATABASE_URL points at the database (e.g. through the db
  * tunnel); the printed tunnel round trip shows how much of each search time
@@ -28,14 +30,20 @@ const { searchSimilarArticles } = await import('../../utils/vectorIndex.js');
 const { default: pgvector } = await import('pgvector/pg');
 
 const SNIPPET_LENGTH = 200;
+// bge-*-v1.5 was trained with this instruction in front of short search
+// queries (passages are embedded without it), steering a query toward
+// passages that answer it rather than text that merely sounds like it.
+const QUERY_PREFIX = 'Represent this sentence for searching relevant passages: ';
 
 function parseArgs(argv) {
-  const options = { query: null, probes: null, top: 5, repeat: 2 };
+  const options = { query: null, probes: null, top: 5, repeat: 2, prefix: false, compare: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--probes') options.probes = Number(argv[++i]);
     else if (arg === '--top') options.top = Number(argv[++i]);
     else if (arg === '--repeat') options.repeat = Number(argv[++i]);
+    else if (arg === '--prefix') options.prefix = true;
+    else if (arg === '--compare') options.compare = true;
     else if (!options.query) options.query = arg;
   }
   return options;
@@ -43,7 +51,7 @@ function parseArgs(argv) {
 
 const options = parseArgs(process.argv.slice(2));
 if (!options.query || [options.top, options.repeat].some((n) => !Number.isInteger(n) || n < 1) || (options.probes !== null && !(options.probes >= 1))) {
-  console.error('Usage: node wiki_searcher/scripts/search.js "<query>" [--probes N] [--top N] [--repeat N]');
+  console.error('Usage: node wiki_searcher/scripts/search.js "<query>" [--probes N] [--top N] [--repeat N] [--prefix | --compare]');
   process.exit(1);
 }
 if (options.probes !== null) process.env.VECTOR_SEARCH_PROBES = String(options.probes); // read per call by searchSimilarArticles
@@ -56,20 +64,12 @@ if (!pool) {
 
 const ms = (start) => Math.round(performance.now() - start);
 
-try {
+async function searchAndPrint(label, queryText) {
   let start = performance.now();
-  await embedText('warm-up'); // loads the model once, so it isn't counted as query time
-  console.log(`Model load:        ${ms(start)} ms (one-time per process)`);
-
-  start = performance.now();
-  const embedding = await embedText(options.query);
+  const embedding = await embedText(queryText);
+  console.log(`\n=== ${label} ===`);
   console.log(`Embed query:       ${ms(start)} ms`);
-
-  start = performance.now();
-  await pool.query('SELECT 1');
-  console.log(`DB round trip:     ${ms(start)} ms (network/tunnel overhead included in each search below)`);
-
-  console.log(`\nSearching "${options.query}" (probes = ${process.env.VECTOR_SEARCH_PROBES || 'default'}, top ${options.top}):`);
+  console.log(`Searching (probes = ${process.env.VECTOR_SEARCH_PROBES || 'default'}, top ${options.top}):`);
   let matches = [];
   for (let i = 1; i <= options.repeat; i++) {
     start = performance.now();
@@ -77,7 +77,7 @@ try {
     console.log(`  search #${i}: ${ms(start)} ms${i === 1 ? ' (likely cold: index read from disk)' : ''}`);
   }
 
-  console.log('\nResults:');
+  console.log('Results:');
   if (matches.length === 0) console.log('  (none)');
   for (const match of matches) {
     console.log(`  [${Number(match.score).toFixed(3)}] ${match.title}`);
@@ -90,6 +90,19 @@ try {
       console.log(`      (${rows[0].section}) "${text.length > SNIPPET_LENGTH ? `${text.slice(0, SNIPPET_LENGTH)}…` : text}"`);
     }
   }
+}
+
+try {
+  let start = performance.now();
+  await embedText('warm-up'); // loads the model once, so it isn't counted as query time
+  console.log(`Model load:        ${ms(start)} ms (one-time per process)`);
+
+  start = performance.now();
+  await pool.query('SELECT 1');
+  console.log(`DB round trip:     ${ms(start)} ms (network/tunnel overhead included in each search below)`);
+
+  if (options.compare || !options.prefix) await searchAndPrint(`"${options.query}" (no prefix)`, options.query);
+  if (options.compare || options.prefix) await searchAndPrint(`"${options.query}" (with retrieval prefix)`, QUERY_PREFIX + options.query);
 } catch (error) {
   console.error(`\nFailed: ${error.message}`);
   process.exitCode = 1;
