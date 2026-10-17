@@ -1,8 +1,9 @@
 /**
- * Shared logic for populating wiki_paragraph_embeddings — used by both the
- * one-time full build (scripts/build-index-from-snapshot.js) and the daily
- * refresh (scripts/refresh-daily.js), so there's exactly one place that
- * decides how an article's wikitext becomes indexed paragraphs.
+ * Shared logic for populating wiki_paragraph_embeddings — used by the
+ * one-time full build (scripts/build-index-from-wikimedia.js, or
+ * scripts/build-index-from-ndjson.js for an NDJSON file you already have)
+ * and the daily refresh (scripts/refresh-daily.js), so there's exactly one
+ * place that decides how an article's wikitext becomes indexed paragraphs.
  *
  * Two design decisions, both from the chunking discussion this came out of:
  *
@@ -25,10 +26,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import yaml from 'yaml';
 import { getPool } from '../imright/scripts/db.js';
-import { embedText } from './textEmbeddings.js';
+import { embedTexts } from './textEmbeddings.js';
 import { findAllRefs, stripWikiMarkup } from '../ref_extractor/parser/index.js';
 import { parseAllCiteTemplates } from '../ref_extractor/parser/citeTemplate.js';
-import pgvector from 'pgvector/pg';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIN_PARAGRAPH_LENGTH = 30;
@@ -118,57 +118,346 @@ function extractCitableParagraphs(wikitext) {
   return results;
 }
 
-/** True if this article's stored embeddings are already current — skips re-embedding on a re-run. */
-async function isAlreadyCurrent(client, title, versionIdentifier) {
-  if (versionIdentifier == null) return false;
-  const { rows } = await client.query(
-    'SELECT version_identifier FROM wiki_paragraph_embeddings WHERE title = $1 LIMIT 1',
-    [title]
-  );
-  return rows.length > 0 && rows[0].version_identifier === versionIdentifier;
+/**
+ * A vector as pgvector's text literal, with each value written to 9
+ * significant digits. pgvector stores float4, and 9 digits round-trip every
+ * float4 exactly (FLT_DECIMAL_DIG), so the stored vector is bit-identical to
+ * what pgvector.toSql would produce — but pgvector.toSql uses JS's default
+ * formatting (up to 17 digits), ~35% more bytes per row. During the bulk
+ * build those bytes go over a bandwidth-limited tunnel and were the measured
+ * bottleneck (the server spent its time waiting to receive write payloads).
+ */
+function toVectorLiteral(vector) {
+  return '[' + vector.map((x) => String(Number(x.toPrecision(9)))).join(',') + ']';
+}
+
+/** True only when both copies carry numeric versions and `a`'s is older; otherwise the later copy wins. */
+function isOlderVersion(a, b) {
+  const va = String(a.versionIdentifier ?? '');
+  const vb = String(b.versionIdentifier ?? '');
+  return /^\d+$/.test(va) && /^\d+$/.test(vb) && BigInt(va) < BigInt(vb);
+}
+
+const DB_RETRY_BASE_DELAY_MS = 2000;
+const DB_RETRY_MAX_DELAY_MS = 60_000; // cap backoff so "retry forever" doesn't mean waiting an hour between attempts
+
+// Error signatures that mean "the connection itself is the problem" (a flaky
+// tunnel dropping/reconnecting) as opposed to a real bug in the query or
+// data — only these are worth retrying forever. Node's network error codes
+// plus Postgres's connection-related SQLSTATEs (57P0x admin/crash shutdown,
+// 08xxx connection_exception family) and our own statement_timeout firing
+// (57014) all indicate the session is dead, not that the write was wrong.
+// "Connection terminated unexpectedly" has no .code at all (it's a plain
+// Error thrown by pg's own client.js), hence the message-based fallback.
+const RETRYABLE_ERROR_CODES = new Set([
+  'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'EHOSTUNREACH', 'ENETUNREACH', 'EAI_AGAIN',
+  '57P01', '57P02', '57P03',
+  '08000', '08001', '08003', '08004', '08006',
+  '57014',
+]);
+const RETRYABLE_ERROR_MESSAGES = ['Connection terminated unexpectedly', 'Connection terminated due to connection timeout'];
+
+function isRetryableConnectionError(error) {
+  if (error?.code && RETRYABLE_ERROR_CODES.has(error.code)) return true;
+  return typeof error?.message === 'string' && RETRYABLE_ERROR_MESSAGES.some((msg) => error.message.includes(msg));
+}
+
+let logConnectionWarning = console.error;
+
+/**
+ * Redirects this module's connection-drop warnings (below) away from a bare
+ * console.error — e.g. so a caller with its own live display (the progress
+ * table in build-index-from-wikimedia.js) can redraw around them instead of
+ * having them print mid-table and desync its in-place cursor tracking.
+ * Defaults to console.error, so nothing changes for callers that never call
+ * this (refresh-daily.js, build-index-from-ndjson.js).
+ */
+export function setConnectionWarningLogger(fn) {
+  logConnectionWarning = fn;
 }
 
 /**
- * Embeds and upserts an article's citation-adjacent paragraphs. Replaces all
- * of that article's existing rows, so a shrinking article (fewer citable
- * paragraphs than before) doesn't leave stale ones behind. Resumable: a
- * second call with the same versionIdentifier is a no-op.
+ * One attempt at upserting a whole BATCH of articles in (at most) two
+ * Postgres round trips TOTAL, instead of two round trips PER ARTICLE. Each
+ * round trip over the SSH tunnel pays a fixed latency cost regardless of how
+ * much the query actually does (Postgres itself answers each of these in
+ * low single-digit ms), so the win here is in not paying that fixed cost
+ * once per article. Still returns one result per input article, in the
+ * same order, so a batch of one (upsertArticleEmbeddings, below) behaves
+ * identically to the old per-article version.
  *
- * @param {object} article - { title, wikitext, versionIdentifier }
- * @returns {Promise<{ title: string, paragraphCount: number, skipped: boolean }>}
+ * Adds this attempt's wall-clock time per stage into `timings` (readMs,
+ * embedMs, writeMs) — see upsertArticlesBatch.
  */
-export async function upsertArticleEmbeddings({ title, wikitext, versionIdentifier }) {
+async function attemptUpsertBatch(pool, articles, timings) {
+  const client = await pool.connect();
+  // pg-pool removes its own idle-client error listener the instant a client
+  // is handed off via pool.connect() (see _acquireClient in pg-pool's
+  // source) -- from here until client.release(), an unexpected connection
+  // drop (e.g. a flaky SSH tunnel) has no listener at all unless we add one,
+  // which Node then treats as an unhandled 'error' event and crashes the
+  // whole process, bypassing the try/catch below entirely. The in-flight
+  // client.query() call still rejects on its own and surfaces through the
+  // retry loop's own (louder, more useful) warning below -- so this one
+  // stays silent on purpose, purely to stop the raw socket error from being
+  // "unhandled"; logging it too would just print the same drop twice.
+  const onClientError = () => {};
+  client.on('error', onClientError);
+  // pool.connect() hands back the SAME underlying client across many calls
+  // to this function -- leaving the listener above attached after release
+  // would pile up one more on every reuse of that connection, which is
+  // exactly what caused the "MaxListenersExceededWarning: 11 error
+  // listeners added to [Client]" seen in practice. Always pair release with
+  // removing our own listener first, on every exit path.
+  const release = (err) => {
+    client.removeListener('error', onClientError);
+    client.release(err);
+  };
+  try {
+    // ONE round trip to find out which titles are already current, instead
+    // of one per article. version_identifier is BIGINT, which node-postgres
+    // returns as a JS STRING (not a number — a bigint can exceed Number's
+    // safe integer range), while a caller's versionIdentifier may arrive as
+    // a plain JS number (e.g. Wikimedia's article.version.identifier,
+    // JSON-parsed) — string-normalizing both sides before comparing is what
+    // makes this check actually skip anything (a strict `===` between "100"
+    // and 100 never matches, confirmed against a live Postgres where that
+    // bug meant re-embedding an unchanged article never skipped at all).
+    const dbReadStart = performance.now();
+    const { rows } = await client.query(
+      'SELECT title, version_identifier FROM wiki_paragraph_embeddings WHERE title = ANY($1::text[])',
+      [articles.map((a) => a.title)]
+    );
+    timings.readMs += performance.now() - dbReadStart;
+    const currentVersionByTitle = new Map(rows.map((row) => [row.title, row.version_identifier]));
+
+    // The snapshot can contain the same title more than once. Two copies in
+    // one batch would put duplicate (title, paragraph_index) rows into one
+    // INSERT, which always fails — reproduced the build's fatal
+    // "duplicate key ... title_paragraph_index_key" exactly, and ON CONFLICT
+    // can't absorb it either (it refuses to touch the same row twice in one
+    // statement). So only the newest copy of each title is written; the
+    // other copies are reported as skipped.
+    const keptIndexByTitle = new Map();
+    articles.forEach((article, i) => {
+      const kept = keptIndexByTitle.get(article.title);
+      if (kept === undefined || !isOlderVersion(article, articles[kept])) keptIndexByTitle.set(article.title, i);
+    });
+
+    const results = new Array(articles.length);
+    const targets = []; // { title, pageId } for every article needing a DELETE (and maybe an INSERT)
+    const pendingEmbeds = []; // { article, paragraphs } for every article that also needs an INSERT
+
+    articles.forEach((article, i) => {
+      const { title, wikitext, versionIdentifier, pageId } = article;
+      if (keptIndexByTitle.get(title) !== i) {
+        results[i] = { title, paragraphCount: 0, skipped: true }; // superseded by another copy of this title in the batch
+        return;
+      }
+      const currentVersion = currentVersionByTitle.get(title);
+      const alreadyCurrent =
+        versionIdentifier != null && currentVersion != null && String(currentVersion) === String(versionIdentifier);
+      if (alreadyCurrent) {
+        results[i] = { title, paragraphCount: 0, skipped: true };
+        return;
+      }
+
+      const paragraphs = extractCitableParagraphs(wikitext ?? '');
+      // When pageId is null, `page_id = t.page_id` compares against SQL
+      // NULL, which is never true for any row — so the rename-cleanup half
+      // simply never matches, with no need for an explicit "IS NOT NULL" guard.
+      targets.push({ title, pageId: pageId ?? null });
+      if (paragraphs.length === 0) {
+        // Nothing to embed for this version, but a prior version's rows (or
+        // a renamed page's stale rows under this title/page_id) may still
+        // need cleaning up — this article only contributes to the DELETE side.
+        results[i] = { title, paragraphCount: 0, skipped: false };
+        return;
+      }
+      results[i] = { title, paragraphCount: paragraphs.length, skipped: false };
+      pendingEmbeds.push({ article, paragraphs });
+    });
+
+    // Every pending article's paragraphs go into ONE embedTexts call, not one
+    // call per article — the model's fixed per-call overhead dwarfs the
+    // actual compute for a handful of paragraphs, especially on a GPU (see
+    // textEmbeddings.js's embedTexts, which also sub-batches by length).
+    // Vectors come back in input order, so each article's slice starts where
+    // its paragraphs were appended.
+    const insertRows = [];
+    if (pendingEmbeds.length > 0) {
+      const allTexts = pendingEmbeds.flatMap(({ article, paragraphs }) =>
+        paragraphs.map(({ section, text }) => `${article.title} — ${section}: ${text}`)
+      );
+      const embedStart = performance.now();
+      const embeddings = await embedTexts(allTexts);
+      timings.embedMs += performance.now() - embedStart;
+
+      let offset = 0;
+      for (const { article, paragraphs } of pendingEmbeds) {
+        paragraphs.forEach((paragraph, index) => {
+          insertRows.push({
+            title: article.title,
+            pageId: article.pageId ?? null,
+            index,
+            section: paragraph.section,
+            text: paragraph.text,
+            embedding: toVectorLiteral(embeddings[offset + index]),
+            versionIdentifier: article.versionIdentifier ?? null,
+          });
+        });
+        offset += paragraphs.length;
+      }
+    }
+
+    if (targets.length > 0) {
+      const dbWriteStart = performance.now();
+      const targetParams = [];
+      const targetPlaceholders = targets.map(({ title, pageId }) => {
+        const base = targetParams.length;
+        targetParams.push(title, pageId);
+        return `($${base + 1}::text, $${base + 2}::bigint)`;
+      });
+
+      if (insertRows.length === 0) {
+        // Only stale rows to clean up across this batch (rename/deletion
+        // cases) — no INSERT half to combine it with.
+        await client.query(
+          `DELETE FROM wiki_paragraph_embeddings e
+           USING (VALUES ${targetPlaceholders.join(', ')}) AS t(title, page_id)
+           WHERE e.title = t.title OR (e.page_id = t.page_id AND e.title != t.title)`,
+          targetParams
+        );
+      } else {
+        // DELETE and INSERT combined into ONE round-trip via a data-modifying
+        // CTE, instead of two round-trips wrapped in BEGIN/COMMIT. The
+        // INSERT's SELECT is CROSS JOINed against the DELETE CTE's row count
+        // (always exactly one row, whether or not anything was deleted)
+        // purely to create a real data dependency between them — verified
+        // against a live Postgres that without this, an *unreferenced*
+        // data-modifying CTE runs "concurrently" with the main query (per
+        // Postgres's own documented semantics for WITH), so the INSERT's
+        // unique(title, paragraph_index) check can run against a snapshot
+        // that hasn't seen the DELETE yet and throw a duplicate-key error —
+        // which would have fired on every single re-embed of an article
+        // whose paragraph count didn't change.
+        //
+        // ON CONFLICT covers a different collision: the same title being
+        // written by two chunks at once (duplicate copies of a title can land
+        // in different chunks). Neither transaction's DELETE can see the
+        // other's uncommitted rows, so the second INSERT hit a duplicate-key
+        // error once the first committed — reproduced against the live
+        // database; with ON CONFLICT the second write simply overwrites.
+        const insertParams = [];
+        const insertPlaceholders = insertRows.map((row) => {
+          const base = targetParams.length + insertParams.length;
+          insertParams.push(row.title, row.pageId, row.index, row.section, row.text, row.embedding, row.versionIdentifier);
+          return `($${base + 1}::text, $${base + 2}::bigint, $${base + 3}::int, $${base + 4}::text, $${base + 5}::text, $${base + 6}::vector, $${base + 7}::bigint)`;
+        });
+        await client.query(
+          `WITH targets(title, page_id) AS (
+             VALUES ${targetPlaceholders.join(', ')}
+           ),
+           deleted AS (
+             DELETE FROM wiki_paragraph_embeddings e
+             USING targets t
+             WHERE e.title = t.title OR (e.page_id = t.page_id AND e.title != t.title)
+             RETURNING 1
+           )
+           INSERT INTO wiki_paragraph_embeddings (title, page_id, paragraph_index, section, paragraph_text, embedding, version_identifier)
+           SELECT v.title, v.page_id, v.paragraph_index, v.section, v.paragraph_text, v.embedding, v.version_identifier
+           FROM (VALUES ${insertPlaceholders.join(', ')}) AS v(title, page_id, paragraph_index, section, paragraph_text, embedding, version_identifier)
+           CROSS JOIN (SELECT count(*) FROM deleted) AS dep(n)
+           ON CONFLICT (title, paragraph_index) DO UPDATE SET
+             page_id = EXCLUDED.page_id, section = EXCLUDED.section, paragraph_text = EXCLUDED.paragraph_text,
+             embedding = EXCLUDED.embedding, version_identifier = EXCLUDED.version_identifier, updated_at = now()`,
+          [...targetParams, ...insertParams]
+        );
+      }
+      timings.writeMs += performance.now() - dbWriteStart;
+    }
+
+    release();
+    return results;
+  } catch (error) {
+    release(error); // tell pg-pool to discard this client rather than hand a possibly-broken connection to the next caller
+    throw error;
+  }
+}
+
+/**
+ * Embeds and upserts many articles' citation-adjacent paragraphs in (at
+ * most) two Postgres round trips for the WHOLE BATCH, instead of two per
+ * article — see attemptUpsertBatch for why that matters. Replaces all of
+ * each article's existing rows, so a shrinking article (fewer citable
+ * paragraphs than before) doesn't leave stale ones behind. Resumable: a
+ * second call with the same versionIdentifier is a no-op for that article.
+ *
+ * title is the only key search actually uses at fetch time (see
+ * providers/wikimedia.js) — Wikimedia's On-demand API has no ID-based lookup,
+ * only /v2/articles/{title}. But title alone can't survive a page rename: the
+ * old title would keep its embedded rows forever, quietly dead (they'd never
+ * again resolve via On-demand, since the article now lives under a different
+ * title). pageId (Wikimedia's article.identifier, stable across renames) is
+ * what closes that gap — when provided, any other row sharing this pageId
+ * under a *different* title is deleted before writing this one, so a rename
+ * cleans up its old title's rows instead of leaving them to rot.
+ *
+ * Retries forever (capped backoff, never a max attempt count) on a
+ * connection-shaped failure specifically — e.g. a flaky local SSH tunnel
+ * dropping mid-run — logging loudly on every attempt so a long unattended
+ * run is distinguishable from "stuck" rather than silently hanging or dying.
+ * A non-connection error (a real bug, bad data) still fails immediately;
+ * retrying that forever would just be a different flavor of silent hang.
+ * Safe to retry the whole batch from scratch: every DB statement here is a
+ * single atomic statement (no partial writes to undo), so a retried attempt
+ * just re-does the same read-then-write cleanly rather than risking
+ * double-written rows.
+ *
+ * `timings` (optional) receives this batch's wall-clock time per stage:
+ * readMs (already-current check), embedMs, writeMs (DELETE+INSERT) —
+ * accumulated across retries, so it's the real time this batch cost. Passed
+ * in per call rather than reported through a global hook, so a caller running
+ * several batches concurrently can attribute each batch's numbers exactly.
+ *
+ * @param {Array<{title: string, wikitext: string, versionIdentifier: *, pageId: *}>} articles
+ * @param {{readMs: number, embedMs: number, writeMs: number}} [timings]
+ * @returns {Promise<Array<{title: string, paragraphCount: number, skipped: boolean}>>} one result per input article, same order
+ */
+export async function upsertArticlesBatch(articles, timings = { readMs: 0, embedMs: 0, writeMs: 0 }) {
+  if (articles.length === 0) return [];
   const pool = getPool();
   if (!pool) {
     throw new Error('DATABASE_URL is not set; cannot write to the wiki paragraph vector index.');
   }
 
-  const client = await pool.connect();
-  try {
-    if (await isAlreadyCurrent(client, title, versionIdentifier)) {
-      return { title, paragraphCount: 0, skipped: true };
+  let attempt = 0;
+  while (true) {
+    attempt++;
+    try {
+      return await attemptUpsertBatch(pool, articles, timings);
+    } catch (error) {
+      if (!isRetryableConnectionError(error)) throw error;
+      const delayMs = Math.min(DB_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), DB_RETRY_MAX_DELAY_MS);
+      logConnectionWarning(`⚠ connection lost (attempt ${attempt}) — ${error.message}, retrying in ${(delayMs / 1000).toFixed(0)}s`);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
-
-    const paragraphs = extractCitableParagraphs(wikitext ?? '');
-
-    await client.query('BEGIN');
-    await client.query('DELETE FROM wiki_paragraph_embeddings WHERE title = $1', [title]);
-
-    for (let index = 0; index < paragraphs.length; index++) {
-      const { section, text } = paragraphs[index];
-      const embedding = await embedText(`${title} — ${section}: ${text}`);
-      await client.query(
-        `INSERT INTO wiki_paragraph_embeddings (title, paragraph_index, section, paragraph_text, embedding, version_identifier)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [title, index, section, text, pgvector.toSql(embedding), versionIdentifier ?? null]
-      );
-    }
-    await client.query('COMMIT');
-    return { title, paragraphCount: paragraphs.length, skipped: false };
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
   }
+}
+
+/**
+ * Single-article convenience wrapper around upsertArticlesBatch (a batch of
+ * one) — for callers that process one article at a time (refresh-daily.js,
+ * build-index-from-ndjson.js). See upsertArticlesBatch for the full
+ * behavior/retry contract; nothing here changes for them. A caller that
+ * already has several articles ready together (build-index-from-wikimedia.js)
+ * should call upsertArticlesBatch directly instead, to get the round-trip
+ * savings.
+ *
+ * @param {object} article - { title, wikitext, versionIdentifier, pageId }
+ * @returns {Promise<{ title: string, paragraphCount: number, skipped: boolean }>}
+ */
+export async function upsertArticleEmbeddings(article) {
+  const [result] = await upsertArticlesBatch([article]);
+  return result;
 }
