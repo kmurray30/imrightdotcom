@@ -15,8 +15,11 @@
  *
  * Usage: node wiki_searcher/scripts/sample-article-structure.js
  *          [--articles 500] [--chunk random|<index>] [--dest ./wiki-snapshots-v2]
- *          [--fixtures 10] [--no-structured] [--ndjson <already-extracted chunk file>]
- *   Needs WIKIMEDIA_USERNAME / WIKIMEDIA_PASSWORD (see utils/wikimediaAuth.js).
+ *          [--fixtures 10] [--fixtures-to-db 0] [--no-structured] [--ndjson <already-extracted chunk file>]
+ *   --fixtures N        write N raw records to __tests__/fixtures/enterprise-sample.ndjson (when run in the repo)
+ *   --fixtures-to-db N  store N raw records in Postgres table wiki_sample_fixtures instead (when run on
+ *                       Railway, where the repo isn't writable; pull them later with scripts/pull-sample-fixtures.js)
+ *   Needs WIKIMEDIA_USERNAME / WIKIMEDIA_PASSWORD (see utils/wikimediaAuth.js); DATABASE_URL for --fixtures-to-db.
  */
 import fs from 'fs';
 import path from 'path';
@@ -25,6 +28,7 @@ import { Readable } from 'stream';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { fileURLToPath } from 'url';
+import * as cheerio from 'cheerio';
 import { loadEnv } from '../../imright/load-env.js';
 import { getAccessToken } from '../../utils/wikimediaAuth.js';
 import { analyzeArticleHtml, MIN_SPAN_WORDS, MIN_SPAN_CHARS } from '../spanExtractor.js';
@@ -38,13 +42,14 @@ const IDENTIFIER = 'enwiki_namespace_0';
 const FIXTURE_PATH = path.join(__dirname, '..', '__tests__', 'fixtures', 'enterprise-sample.ndjson');
 
 function parseArgs(argv) {
-  const options = { articles: 500, chunk: 'random', dest: './wiki-snapshots-v2', fixtures: 10, structured: true, ndjson: null };
+  const options = { articles: 500, chunk: 'random', dest: './wiki-snapshots-v2', fixtures: 10, fixturesToDb: 0, structured: true, ndjson: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--articles') options.articles = Number(argv[++i]);
     else if (a === '--chunk') options.chunk = argv[++i];
     else if (a === '--dest') options.dest = argv[++i];
     else if (a === '--fixtures') options.fixtures = Number(argv[++i]);
+    else if (a === '--fixtures-to-db') options.fixturesToDb = Number(argv[++i]);
     else if (a === '--no-structured') options.structured = false;
     else if (a === '--ndjson') options.ndjson = argv[++i];
   }
@@ -227,16 +232,72 @@ function report(records, totalInChunk) {
   examples('Cited table rows (as spans):', agg.exampleRows);
 }
 
-function writeFixtures(records, n) {
+/** N records with HTML, spread across sizes (small to ~600 KB), so the fixtures cover stubs and long articles alike. */
+function chooseFixtureRecords(records, n) {
   const candidates = records
     .filter((r) => r.article_body?.html && Buffer.byteLength(r.article_body.html) < 600_000)
     .sort((a, b) => Buffer.byteLength(a.article_body.html) - Buffer.byteLength(b.article_body.html));
-  if (!candidates.length) return;
-  const step = Math.max(1, Math.floor(candidates.length / n));
-  const chosen = candidates.filter((_, i) => i % step === 0).slice(0, n); // spread across sizes
+  const step = Math.max(1, Math.floor(candidates.length / Math.max(1, n)));
+  return candidates.filter((_, i) => i % step === 0).slice(0, n);
+}
+
+function writeFixtures(records, n) {
+  const chosen = chooseFixtureRecords(records, n);
+  if (!chosen.length) return;
   fs.mkdirSync(path.dirname(FIXTURE_PATH), { recursive: true });
   fs.writeFileSync(FIXTURE_PATH, chosen.map((r) => JSON.stringify(r)).join('\n') + '\n');
   console.log(`\nWrote ${chosen.length} raw records (${fmtMB(fs.statSync(FIXTURE_PATH).size)}) to ${path.relative(process.cwd(), FIXTURE_PATH)} — commit it so the unit tests cover real articles.`);
+}
+
+/** Same records, but into Postgres (for a run on Railway); scripts/pull-sample-fixtures.js turns them into the fixture file. */
+async function storeFixturesInDb(records, n) {
+  const chosen = chooseFixtureRecords(records, n);
+  if (!chosen.length) return;
+  const { getPool } = await import('../../imright/scripts/db.js');
+  const pool = getPool();
+  if (!pool) {
+    console.log('\n--fixtures-to-db: DATABASE_URL is not set; skipping.');
+    return;
+  }
+  await pool.query(`CREATE TABLE IF NOT EXISTS wiki_sample_fixtures (
+    id SERIAL PRIMARY KEY, name TEXT NOT NULL, page_id BIGINT, html_bytes INT, record JSONB NOT NULL, sampled_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+  await pool.query('TRUNCATE wiki_sample_fixtures');
+  for (const r of chosen) {
+    await pool.query('INSERT INTO wiki_sample_fixtures (name, page_id, html_bytes, record) VALUES ($1, $2, $3, $4::jsonb)', [
+      r.name, r.identifier ?? null, Buffer.byteLength(r.article_body.html), JSON.stringify(r),
+    ]);
+  }
+  await pool.end();
+  console.log(`\nStored ${chosen.length} raw records in Postgres table wiki_sample_fixtures — run node wiki_searcher/scripts/pull-sample-fixtures.js (through the tunnel) to turn them into the unit-test fixture file.`);
+}
+
+/**
+ * Raw markup of the things the extractor's selectors depend on, from one real
+ * record, so a mismatch between Parsoid's spec and what Enterprise actually
+ * ships (e.g. data-mw stripped) shows up in this report rather than as silent
+ * zero counts.
+ */
+function markupCheck(records) {
+  console.log('\n================ MARKUP CHECK (first record with citations) ================');
+  const record = records.find((r) => r.article_body?.html && /cite_note/.test(r.article_body.html));
+  if (!record) {
+    console.log('  no sampled record contains "cite_note" — citation markup is not what the extractor expects!');
+    return;
+  }
+  const $ = cheerio.load(record.article_body.html);
+  const count = (selector) => $(selector).length;
+  console.log(`  article: ${record.name}`);
+  console.log(`  counts: sup.mw-ref=${count('sup.mw-ref')} sup.reference=${count('sup.reference')} span.mw-ref=${count('span.mw-ref')} [typeof~=mw:Extension/ref]=${count('[typeof~="mw:Extension/ref"]')} ` +
+    `li[id^=cite_note]=${count('li[id^="cite_note"]')} cite.citation=${count('cite.citation')} [data-mw]=${count('[data-mw]')} section[data-mw-section-id]=${count('section[data-mw-section-id]')} ` +
+    `p=${count('p')} table.infobox=${count('table.infobox')} figure=${count('figure')} .hatnote=${count('.hatnote')} sup.Inline-Template=${count('sup.Inline-Template')}`);
+  const show = (label, selector, max) => {
+    const el = $(selector).first();
+    console.log(`  ${label}: ${el.length ? $.html(el).replace(/\s+/g, ' ').slice(0, max) : '(none)'}`);
+  };
+  show('first citation marker', 'sup.mw-ref, sup.reference, span.mw-ref, [typeof~="mw:Extension/ref"]', 700);
+  show('first reference-list entry', 'li[id^="cite_note"]', 1400);
+  show('first paragraph with a marker', 'p:has(sup.mw-ref), p:has(sup.reference), p:has([typeof~="mw:Extension/ref"])', 900);
+  show('first inline template (if any)', 'sup.Inline-Template', 500);
 }
 
 /** Does Enterprise's Structured Contents payload place citations within paragraph text? Prints the raw shape so we can tell. */
@@ -283,7 +344,9 @@ try {
   const { lines, total } = await sampleLines(ndjsonPath, options.articles);
   const records = lines.map((line) => JSON.parse(line));
   report(records, total);
+  markupCheck(records);
   if (options.fixtures > 0) writeFixtures(records, options.fixtures);
+  if (options.fixturesToDb > 0) await storeFixturesInDb(records, options.fixturesToDb);
   if (options.structured) await probeStructuredContents(records);
 } catch (error) {
   console.error(`\nFailed: ${error.stack ?? error.message}`);
