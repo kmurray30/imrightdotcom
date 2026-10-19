@@ -364,7 +364,9 @@ export function analyzeArticleHtml(html, options = {}) {
       const reason = linklessReason($, el);
       stats.referencesWithoutUrlByReason[reason] = (stats.referencesWithoutUrlByReason[reason] ?? 0) + 1;
       if (stats.linklessExamples.length < 3) {
-        const text = normalize(el.find('.mw-reference-text, .reference-text').first().text() || el.text()).replace(/^↑\s*/, '');
+        const clone = el.clone();
+        clone.find('style, script, .mw-cite-backlink').remove(); // TemplateStyles CSS would otherwise show up as text
+        const text = normalize(clone.find('.mw-reference-text, .reference-text').first().text() || clone.text()).replace(/^↑\s*/, '');
         stats.linklessExamples.push(`${reason} — "${text.slice(0, 110)}${text.length > 110 ? '…' : ''}"`);
       }
     });
