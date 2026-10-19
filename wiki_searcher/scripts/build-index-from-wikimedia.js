@@ -77,7 +77,7 @@ import { promisify } from 'util';
 import { loadEnv } from '../../imright/load-env.js';
 import { getAccessToken } from '../../utils/wikimediaAuth.js';
 import { callExternalApi, HttpStatusError, timeoutSignal } from '../../utils/external-api.js';
-import { upsertArticlesBatch, setConnectionWarningLogger } from '../embeddingIndex.js';
+import { upsertSpansBatch, ensureSpansTable, SPANS_TABLE, SPAN_OPTIONS, setConnectionWarningLogger } from '../embeddingIndex.js';
 import { setLogger as setEmbedLogger, embedConfig } from '../textEmbeddings.js';
 import { formatDuration, fitToTerminal, tableBorder, tableRow } from './terminalTable.js';
 
@@ -90,7 +90,7 @@ setEmbedLogger(logDebug);
 
 const API_BASE = 'https://api.enterprise.wikimedia.com';
 const identifier = process.argv[2] || 'enwiki_namespace_0';
-const destDir = process.argv[3] || './wiki-snapshots';
+const destDir = process.argv[3] || './wiki-snapshots-v2'; // v2: the cited-span rebuild keeps its own state, separate from the old paragraph build's
 const CONCURRENCY = 6; // sizing pass only — pure network, raise if you're on a paid plan with a higher QPS limit
 // Chunks in flight at once (CHUNK_CONCURRENCY env, default 4). Each chunk
 // processes its batches strictly in sequence (read → embed → write), so most
@@ -100,7 +100,7 @@ const CONCURRENCY = 6; // sizing pass only — pure network, raise if you're on 
 // Safe to change between runs: every chunk resumes from its own checkpoint.
 const EMBED_CONCURRENCY = Number(process.env.CHUNK_CONCURRENCY) || 4;
 // Articles embedded concurrently WITHIN each chunk, and how many go into one
-// upsertArticlesBatch call (embeddingIndex.js) — the DB side of that call is
+// upsertSpansBatch call (embeddingIndex.js) — the DB side of that call is
 // now batched into (at most) two round trips for the whole group rather than
 // per article, so each chunk only ever holds ONE DB connection at a time
 // regardless of this number; DB_POOL_MAX below just needs EMBED_CONCURRENCY
@@ -788,7 +788,7 @@ function saveLineCheckpoint(chunkId, lineNumber) {
  * paragraphs, then deletes the raw extracted file.
  *
  * Processes ARTICLE_CONCURRENCY articles at a time, as one batch handed to
- * upsertArticlesBatch (embeddingIndex.js) rather than one call per article —
+ * upsertSpansBatch (embeddingIndex.js) rather than one call per article —
  * each article's own DB round-trips over the tunnel to a remote Postgres pay
  * a fixed latency cost regardless of concurrency, so batching them into (at
  * most) two round-trips for the WHOLE group of articles cuts that overhead
@@ -807,7 +807,7 @@ function saveLineCheckpoint(chunkId, lineNumber) {
 async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
   const resumeFromLine = loadLineCheckpoint(chunkId);
   const rl = readline.createInterface({ input: fs.createReadStream(ndjsonPath), crlfDelay: Infinity });
-  const stats = { articles: 0, paragraphs: 0, alreadyCurrent: 0, totalLines: 0 };
+  const stats = { articles: 0, spans: 0, alreadyCurrent: 0, totalLines: 0 };
   let lastLoggedAt = 0;
   let lineNumber = 0;
 
@@ -824,13 +824,13 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
     // Malformed lines or records with no embeddable body (deleted/
     // visibility-changed/empty) never reach the DB at all — same as before,
     // just filtered up front instead of bailing out of a per-article call.
-    const embeddable = batch.filter(({ article }) => article?.article_body?.wikitext);
+    const embeddable = batch.filter(({ article }) => article?.article_body?.html);
     const timings = { readMs: 0, embedMs: 0, writeMs: 0 };
     if (embeddable.length > 0) {
-      const results = await upsertArticlesBatch(
+      const results = await upsertSpansBatch(
         embeddable.map(({ article }) => ({
           title: article.name,
-          wikitext: article.article_body.wikitext,
+          html: article.article_body.html,
           versionIdentifier: article.version?.identifier,
           pageId: article.identifier,
         })),
@@ -838,7 +838,7 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
       );
       for (const result of results) {
         stats.articles++;
-        stats.paragraphs += result.paragraphCount;
+        stats.spans += result.spanCount;
         if (result.skipped) stats.alreadyCurrent++;
       }
     }
@@ -867,7 +867,7 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
       const overallDone = tracker.articlesDone();
       const overallPct = tracker.totalArticles > 0 ? ((overallDone / tracker.totalArticles) * 100).toFixed(1) : '?';
       logDebug(
-        `${chunkId}: embedding in progress — ${stats.articles} articles, ${stats.paragraphs} paragraphs this chunk` +
+        `${chunkId}: embedding in progress — ${stats.articles} articles, ${stats.spans} cited spans this chunk` +
           ` | overall: ${formatCount(overallDone)}/${formatCount(tracker.totalArticles)} articles (${overallPct}%)`
       );
       saveLineCheckpoint(chunkId, lastLineInBatch); // only ever advances past a batch that Promise.all above has already fully completed
@@ -983,13 +983,13 @@ async function processChunk(chunk, prepare, tracker, totals, avgArticlesPerChunk
   }
   totals.chunksDone++;
   totals.articles += stats.articles;
-  totals.paragraphs += stats.paragraphs;
+  totals.spans += stats.spans;
   totals.alreadyCurrent += stats.alreadyCurrent;
 
   const overallDone = tracker.articlesDone();
   const overallPct = tracker.totalArticles > 0 ? ((overallDone / tracker.totalArticles) * 100).toFixed(1) : '?';
   logDebug(
-    `${chunk.chunkId}: done — ${stats.articles} articles, ${stats.paragraphs} paragraphs, ${stats.alreadyCurrent} already current` +
+    `${chunk.chunkId}: done — ${stats.articles} articles, ${stats.spans} cited spans, ${stats.alreadyCurrent} already current` +
       ` | overall: ${formatCount(overallDone)}/${formatCount(tracker.totalArticles)} articles (${overallPct}%)`
   );
   fs.writeFileSync(donePath, JSON.stringify({ completedAt: new Date().toISOString(), totalLines: stats.totalLines }));
@@ -1027,6 +1027,8 @@ function saveSnapshotMetadata(recordCount, chunks) {
 async function main() {
   fs.mkdirSync(destDir, { recursive: true });
   await getAccessToken(); // log in up front, so bad credentials fail immediately rather than at the first download
+  await ensureSpansTable(); // creates wiki_citation_spans if needed and checks the vector encoding against the live server before any real write
+  console.log(`Writing cited spans to ${SPANS_TABLE} (paragraphs${SPAN_OPTIONS.includeListItems ? ' + list items' : ''}${SPAN_OPTIONS.includeTableRows ? ' + table rows' : ''}).`);
 
   let chunks;
   let recordCount;
@@ -1082,8 +1084,8 @@ async function main() {
       `(at most ${EMBED_CONCURRENCY * 2} chunks' worth of raw data on disk)...`
   );
   console.log(
-    `Per-chunk stage progress is logged to wiki-snapshots/debug.log — if the progress bar below stalls, ` +
-      `run "tail -f wiki-snapshots/debug.log" in another terminal to see exactly which chunk and stage it's stuck on.`
+    `Per-chunk stage progress is logged to ${destDir}/debug.log — if the progress bar below stalls, ` +
+      `run "tail -f ${destDir}/debug.log" in another terminal to see exactly which chunk and stage it's stuck on.`
   );
   console.log(
     `Embed/Read/Write = ms per article within one embedding chunk (they add up: Art/s ≈ Busy × 1000 / their sum). ` +
@@ -1093,7 +1095,7 @@ async function main() {
 
   const tracker = createProgressDisplay(recordCount, EMBED_CONCURRENCY);
   const avgArticlesPerChunk = recordCount > 0 ? recordCount / chunks.length : 0;
-  const totals = { chunksDone: 0, articles: 0, paragraphs: 0, alreadyCurrent: 0 };
+  const totals = { chunksDone: 0, articles: 0, spans: 0, alreadyCurrent: 0 };
 
   // Routes DB connection-drop warnings through the table (full redraw, not a
   // bare console.error mid-row) as well as into debug.log for later tailing.
@@ -1134,9 +1136,9 @@ async function main() {
 
   console.log(
     `\nDone. ${chunks.length} chunks total (${totals.chunksDone} newly processed this run): ` +
-      `${totals.articles} articles seen, ${totals.paragraphs} paragraphs embedded, ${totals.alreadyCurrent} already current.`
+      `${totals.articles} articles seen, ${totals.spans} cited spans embedded, ${totals.alreadyCurrent} already current.`
   );
-  console.log('The vector index is up to date — no separate build step needed.');
+  console.log(`Spans are in ${SPANS_TABLE}. Next: build the compact search index from them (see README).`);
 }
 
 /**

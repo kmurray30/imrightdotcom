@@ -24,9 +24,16 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createHash } from 'crypto';
+import { Readable } from 'stream';
+import { pipeline as streamPipeline } from 'stream/promises';
 import yaml from 'yaml';
+import copyStreams from 'pg-copy-streams';
 import { getPool } from '../imright/scripts/db.js';
 import { embedTexts } from './textEmbeddings.js';
+import { embedPassages, ARCTIC_DIMS } from './arcticEmbeddings.js';
+import { extractCitedSpans } from './spanExtractor.js';
+import { binaryCopyRows, encodeText, encodeInt4, encodeInt8, encodeJsonb, encodeHalfvec } from './vectorCopy.js';
 import { findAllRefs, stripWikiMarkup } from '../ref_extractor/parser/index.js';
 import { parseAllCiteTemplates } from '../ref_extractor/parser/citeTemplate.js';
 
@@ -136,6 +143,59 @@ function isOlderVersion(a, b) {
   const va = String(a.versionIdentifier ?? '');
   const vb = String(b.versionIdentifier ?? '');
   return /^\d+$/.test(va) && /^\d+$/.test(vb) && BigInt(va) < BigInt(vb);
+}
+
+/**
+ * True when what's stored for a title is the incoming revision or a newer
+ * one, so there is nothing to write. The snapshot can carry an older copy of
+ * a title in a later chunk; it must not overwrite the newer rows.
+ */
+function isStoredVersionCurrent(stored, incoming) {
+  if (stored == null || incoming == null) return false;
+  const s = String(stored);
+  const i = String(incoming);
+  if (/^\d+$/.test(s) && /^\d+$/.test(i)) return BigInt(s) >= BigInt(i);
+  return s === i;
+}
+
+/**
+ * Newest stored revision for each of the articles' titles and page_ids (a
+ * renamed page's rows sit under its old title but share the page_id).
+ * One query; both columns are indexed.
+ */
+async function readStoredVersions(client, articles) {
+  const { rows } = await client.query(
+    `SELECT title, page_id, max(version_identifier) AS version_identifier FROM ${SPANS_TABLE}
+     WHERE title = ANY($1::text[]) OR page_id = ANY($2::bigint[]) GROUP BY title, page_id`,
+    [articles.map((a) => a.title), articles.map((a) => a.pageId).filter((id) => id != null)]
+  );
+  const byTitle = new Map();
+  const byPageId = new Map();
+  const keepNewest = (map, key, version) => {
+    if (key == null || version == null) return;
+    const current = map.get(key);
+    if (current == null || isStoredVersionCurrent(version, current)) map.set(key, version);
+  };
+  for (const row of rows) {
+    keepNewest(byTitle, row.title, row.version_identifier);
+    keepNewest(byPageId, row.page_id == null ? null : String(row.page_id), row.version_identifier);
+  }
+  return {
+    /** True when the table already holds this article's revision or a newer one, under this title or this page_id. */
+    isCurrent: ({ title, pageId, versionIdentifier }) =>
+      isStoredVersionCurrent(byTitle.get(title), versionIdentifier) ||
+      (pageId != null && isStoredVersionCurrent(byPageId.get(String(pageId)), versionIdentifier)),
+  };
+}
+
+/** Advisory-lock keys for a batch's titles and page_ids: sorted, deduplicated, as int8 strings for a bigint[] parameter. */
+function lockKeysFor(targets) {
+  const keys = new Set();
+  for (const { title, pageId } of targets) {
+    keys.add(BigInt.asIntN(64, BigInt('0x' + createHash('sha1').update(title).digest('hex').slice(0, 16))));
+    if (pageId != null) keys.add(BigInt(pageId)); // page ids are small positive numbers: no overlap with the hashes in practice, and a collision only over-serializes
+  }
+  return [...keys].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map(String);
 }
 
 const DB_RETRY_BASE_DELAY_MS = 2000;
@@ -459,5 +519,269 @@ export async function upsertArticlesBatch(articles, timings = { readMs: 0, embed
  */
 export async function upsertArticleEmbeddings(article) {
   const [result] = await upsertArticlesBatch([article]);
+  return result;
+}
+
+// =====================================================================
+// Cited spans (wiki_citation_spans): the rebuilt index. One row per
+// citation group inside a paragraph — the text that group supports, plus its
+// citations — extracted from Wikimedia's rendered HTML by spanExtractor.js
+// and embedded with arctic-embed-m-v1.5 (arcticEmbeddings.js). Nothing
+// uncited is stored. The paragraph functions above stay until serving and
+// the daily refresh move over.
+// =====================================================================
+
+export const SPANS_TABLE = 'wiki_citation_spans';
+/**
+ * Which content units become spans. Measured on a 500-article Enterprise
+ * sample (scripts/sample-article-structure.js): paragraphs hold 83% of cited
+ * text, table rows 14%, list items 3%; rows and items add ~21% more spans
+ * (7.7M of 37M projected). Both are in: dropping a kind later is one DELETE
+ * by `kind`, adding one later means re-reading the whole snapshot.
+ */
+export const SPAN_OPTIONS = { includeListItems: true, includeTableRows: true };
+
+const SPANS_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS ${SPANS_TABLE} (
+    id                 BIGSERIAL PRIMARY KEY,
+    title              TEXT NOT NULL,
+    page_id            BIGINT,
+    version_identifier BIGINT,
+    section            TEXT NOT NULL,
+    kind               TEXT NOT NULL,
+    unit_index         INT NOT NULL,
+    span_index         INT NOT NULL,
+    span_text          TEXT NOT NULL,
+    citations          JSONB NOT NULL,
+    embedding          halfvec(${ARCTIC_DIMS}) NOT NULL,
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (title, kind, unit_index, span_index)
+  )`;
+
+/** Same columns as the COPY below, minus id/updated_at (the table's defaults fill those on INSERT). */
+const SPAN_COLUMNS = ['title', 'page_id', 'version_identifier', 'section', 'kind', 'unit_index', 'span_index', 'span_text', 'citations', 'embedding'];
+
+/**
+ * Creates the spans table if needed and round-trips one known vector through
+ * the exact binary COPY path the build uses, so an encoding mismatch fails
+ * here — before any real rows — instead of silently storing garbage vectors.
+ */
+export async function ensureSpansTable() {
+  const pool = getPool();
+  if (!pool) throw new Error('DATABASE_URL is not set; cannot create the wiki citation span index.');
+  await pool.query(SPANS_TABLE_SQL);
+  await pool.query(`CREATE INDEX IF NOT EXISTS ${SPANS_TABLE}_page_id ON ${SPANS_TABLE} (page_id)`);
+
+  const probe = Array.from({ length: ARCTIC_DIMS }, (_, i) => Math.sin(i + 1) / 10);
+  const client = await pool.connect();
+  try {
+    await client.query(`CREATE TEMP TABLE encoding_check (id bigint, embedding halfvec(${ARCTIC_DIMS}))`);
+    await streamPipeline(
+      Readable.from([binaryCopyRows([[encodeInt8(1), encodeHalfvec(probe)]])]),
+      client.query(copyStreams.from('COPY encoding_check (id, embedding) FROM STDIN (FORMAT binary)'))
+    );
+    const { rows: [{ text }] } = await client.query('SELECT embedding::text AS text FROM encoding_check');
+    const stored = JSON.parse(text);
+    const worst = Math.max(...stored.map((v, i) => Math.abs(v - probe[i])));
+    if (stored.length !== ARCTIC_DIMS || !(worst < 1e-3)) {
+      throw new Error(`halfvec binary encoding check failed (dims ${stored.length}, worst error ${worst}) — nothing was written`);
+    }
+    await client.query('DROP TABLE encoding_check');
+  } finally {
+    client.release();
+  }
+}
+
+function toInt8OrNull(value) {
+  return value == null || value === '' ? null : encodeInt8(value);
+}
+
+/**
+ * One attempt at upserting a batch of articles' cited spans: one read round
+ * trip (which titles are already current), one embedding call for every
+ * span in the batch, then one transaction: DELETE the articles' old rows
+ * (incl. a renamed page's rows under its old title, via page_id), binary
+ * COPY the new rows into a temp table, INSERT … ON CONFLICT from it. Same
+ * contract and reasoning as attemptUpsertBatch above; the COPY replaces the
+ * giant VALUES list because a span row carries ~1 KB (text + citations JSON
+ * + a 516-byte vector) and this goes over a bandwidth-limited tunnel.
+ */
+async function attemptUpsertSpans(pool, articles, timings) {
+  const client = await pool.connect();
+  const onClientError = () => {};
+  client.on('error', onClientError);
+  const release = (err) => {
+    client.removeListener('error', onClientError);
+    client.release(err);
+  };
+  let inTransaction = false;
+  try {
+    const dbReadStart = performance.now();
+    const stored = await readStoredVersions(client, articles);
+    timings.readMs += performance.now() - dbReadStart;
+
+    const keptIndexByTitle = new Map();
+    articles.forEach((article, i) => {
+      const kept = keptIndexByTitle.get(article.title);
+      if (kept === undefined || !isOlderVersion(article, articles[kept])) keptIndexByTitle.set(article.title, i);
+    });
+
+    const results = new Array(articles.length);
+    const targets = [];
+    const pending = [];
+    articles.forEach((article, i) => {
+      const { title, html, versionIdentifier, pageId } = article;
+      if (keptIndexByTitle.get(title) !== i) {
+        results[i] = { title, spanCount: 0, skipped: true };
+        return;
+      }
+      if (stored.isCurrent(article)) {
+        results[i] = { title, spanCount: 0, skipped: true };
+        return;
+      }
+      const spans = extractCitedSpans({ name: title, article_body: { html } }, SPAN_OPTIONS);
+      targets.push({ index: i, title, pageId: pageId ?? null });
+      results[i] = { title, spanCount: spans.length, skipped: false };
+      if (spans.length > 0) pending.push({ index: i, article, spans, vectors: [] });
+    });
+
+    if (pending.length > 0) {
+      const texts = pending.flatMap(({ article, spans }) => spans.map((s) => `${article.title} — ${s.section}: ${s.text}`));
+      const embedStart = performance.now();
+      const vectors = await embedPassages(texts);
+      timings.embedMs += performance.now() - embedStart;
+      let offset = 0;
+      for (const entry of pending) {
+        entry.vectors = vectors.slice(offset, offset + entry.spans.length);
+        offset += entry.spans.length;
+      }
+    }
+
+    let dbWriteStart = 0;
+    if (targets.length > 0) {
+      dbWriteStart = performance.now();
+      await client.query('BEGIN');
+      inTransaction = true;
+
+      // Parallel chunks can carry copies of the same page, so two batches can
+      // reach this point with the same title (or page_id). Per-title/page
+      // advisory locks, held to the end of the transaction and taken in sorted
+      // order (no deadlocks between batches), serialize them; the re-read
+      // under the lock then drops anything the other writer already stored,
+      // so an older copy never undoes a newer one. The locks are one round
+      // trip for the whole batch.
+      await client.query('SELECT pg_advisory_xact_lock(k) FROM unnest($1::bigint[]) AS k', [lockKeysFor(targets)]);
+      const locked = await readStoredVersions(client, targets.map((t) => articles[t.index]));
+      for (let j = targets.length - 1; j >= 0; j--) {
+        const target = targets[j];
+        if (!locked.isCurrent(articles[target.index])) continue;
+        results[target.index] = { title: target.title, spanCount: 0, skipped: true };
+        targets.splice(j, 1);
+        const p = pending.findIndex((entry) => entry.index === target.index);
+        if (p !== -1) pending.splice(p, 1);
+      }
+    }
+
+    if (targets.length > 0) {
+
+      const targetParams = [];
+      const targetPlaceholders = targets.map(({ title, pageId }) => {
+        const base = targetParams.length;
+        targetParams.push(title, pageId);
+        return `($${base + 1}::text, $${base + 2}::bigint)`;
+      });
+      await client.query(
+        `DELETE FROM ${SPANS_TABLE} e USING (VALUES ${targetPlaceholders.join(', ')}) AS t(title, page_id)
+         WHERE e.title = t.title OR (e.page_id = t.page_id AND e.title != t.title)`,
+        targetParams
+      );
+
+      if (pending.length > 0) {
+        const rowsToCopy = [];
+        for (const { article, spans, vectors } of pending) {
+          spans.forEach((span, index) => {
+            rowsToCopy.push([
+              encodeText(article.title),
+              toInt8OrNull(article.pageId),
+              toInt8OrNull(article.versionIdentifier),
+              encodeText(span.section),
+              encodeText(span.kind),
+              encodeInt4(span.unitIndex),
+              encodeInt4(span.spanIndex),
+              encodeText(span.text),
+              encodeJsonb(span.citations),
+              encodeHalfvec(vectors[index]),
+            ]);
+          });
+        }
+        await client.query(
+          `CREATE TEMP TABLE spans_in (title text, page_id bigint, version_identifier bigint, section text, kind text,
+             unit_index int, span_index int, span_text text, citations jsonb, embedding halfvec(${ARCTIC_DIMS})) ON COMMIT DROP`
+        );
+        await streamPipeline(
+          Readable.from([binaryCopyRows(rowsToCopy)]),
+          client.query(copyStreams.from(`COPY spans_in (${SPAN_COLUMNS.join(', ')}) FROM STDIN (FORMAT binary)`))
+        );
+        // ON CONFLICT: the same title written by two chunks at once (duplicate
+        // copies of a title can land in different chunks) — the second write
+        // overwrites instead of failing on the unique key.
+        await client.query(
+          `INSERT INTO ${SPANS_TABLE} (${SPAN_COLUMNS.join(', ')})
+           SELECT ${SPAN_COLUMNS.join(', ')} FROM spans_in
+           ON CONFLICT (title, kind, unit_index, span_index) DO UPDATE SET
+             page_id = EXCLUDED.page_id, version_identifier = EXCLUDED.version_identifier, section = EXCLUDED.section,
+             span_text = EXCLUDED.span_text, citations = EXCLUDED.citations, embedding = EXCLUDED.embedding, updated_at = now()`
+        );
+      }
+    }
+    if (inTransaction) {
+      await client.query('COMMIT');
+      inTransaction = false;
+      timings.writeMs += performance.now() - dbWriteStart;
+    }
+
+    release();
+    return results;
+  } catch (error) {
+    if (inTransaction) await client.query('ROLLBACK').catch(() => {});
+    release(error);
+    throw error;
+  }
+}
+
+/**
+ * Embeds and upserts many articles' cited spans. Replaces all of each
+ * article's existing rows (so a shrinking article leaves nothing stale),
+ * skips articles whose version_identifier is already stored, and retries
+ * connection failures forever with capped backoff — the same contract as
+ * upsertArticlesBatch, which see. The whole write is one transaction, so a
+ * retried attempt never finds half a batch already committed.
+ *
+ * @param {Array<{title: string, html: string, versionIdentifier: *, pageId: *}>} articles - `html` is article_body.html
+ * @param {{readMs: number, embedMs: number, writeMs: number}} [timings]
+ * @returns {Promise<Array<{title: string, spanCount: number, skipped: boolean}>>} one result per input article, same order
+ */
+export async function upsertSpansBatch(articles, timings = { readMs: 0, embedMs: 0, writeMs: 0 }) {
+  if (articles.length === 0) return [];
+  const pool = getPool();
+  if (!pool) throw new Error('DATABASE_URL is not set; cannot write to the wiki citation span index.');
+
+  let attempt = 0;
+  while (true) {
+    attempt++;
+    try {
+      return await attemptUpsertSpans(pool, articles, timings);
+    } catch (error) {
+      if (!isRetryableConnectionError(error) && error.code !== '40P01' /* deadlock_detected: retry the attempt */) throw error;
+      const delayMs = Math.min(DB_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), DB_RETRY_MAX_DELAY_MS);
+      logConnectionWarning(`⚠ connection lost (attempt ${attempt}) — ${error.message}, retrying in ${(delayMs / 1000).toFixed(0)}s`);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
+/** Single-article wrapper around upsertSpansBatch (a batch of one). */
+export async function upsertArticleSpans(article) {
+  const [result] = await upsertSpansBatch([article]);
   return result;
 }

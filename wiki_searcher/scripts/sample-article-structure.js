@@ -145,6 +145,7 @@ function report(records, totalInChunk) {
     units: { paragraph: 0, list_item: 0, table_row: 0 }, citedUnits: { paragraph: 0, list_item: 0, table_row: 0 },
     unitChars: { paragraph: 0, list_item: 0, table_row: 0 }, spansKept: { paragraph: 0, list_item: 0, table_row: 0 },
     spanChars: { paragraph: 0, list_item: 0, table_row: 0 }, droppedShort: 0, droppedNoCitation: 0, uncitedTailChars: 0,
+    charsDroppedShort: 0, charsDroppedNoCitation: 0, linklessByReason: {}, linklessExamples: [],
     unsourcedTags: 0, markers: 0, noteMarkers: 0, stacked: 0, references: 0, referencesWithoutUrl: 0, citationTypes: {},
     spanLen: {}, spanSentences: {}, endsAtSentence: 0, totalSpans: 0, articlesNoSpans: 0, articlesNoMarkers: 0, articlesNoHtml: 0,
     citationsPerSpan: {}, exampleParagraphSpans: [], exampleListItems: [], exampleRows: [],
@@ -155,12 +156,15 @@ function report(records, totalInChunk) {
     if (wikitext) { agg.withWikitext++; agg.wikitextBytes += Buffer.byteLength(wikitext); }
     if (!html) { agg.articlesNoHtml++; continue; }
     agg.withHtml++; agg.htmlBytes += Buffer.byteLength(html);
-    const { spans, stats } = analyzeArticleHtml(html, { includeListItems: true, includeTableRows: true });
+    const { spans, stats } = analyzeArticleHtml(html, { includeListItems: true, includeTableRows: true, diagnostics: true });
     for (const kind of Object.keys(agg.units)) {
       agg.units[kind] += stats.units[kind]; agg.citedUnits[kind] += stats.citedUnits[kind]; agg.unitChars[kind] += stats.unitChars[kind];
       agg.spansKept[kind] += stats.spansKept[kind]; agg.spanChars[kind] += stats.spanChars[kind];
     }
     agg.droppedShort += stats.spansDroppedShort; agg.droppedNoCitation += stats.spansDroppedNoUsableCitation; agg.uncitedTailChars += stats.uncitedTailChars;
+    agg.charsDroppedShort += stats.charsDroppedShort; agg.charsDroppedNoCitation += stats.charsDroppedNoUsableCitation;
+    for (const [reason, n] of Object.entries(stats.referencesWithoutUrlByReason)) addTo(agg.linklessByReason, reason, n);
+    for (const example of stats.linklessExamples) if (agg.linklessExamples.length < 12) agg.linklessExamples.push(`${record.name}: ${example}`);
     agg.unsourcedTags += stats.unsourcedTagBoundaries; agg.markers += stats.markers; agg.noteMarkers += stats.noteMarkers; agg.stacked += stats.stackedGroups;
     agg.references += stats.references; agg.referencesWithoutUrl += stats.referencesWithoutUrl;
     for (const [type, n] of Object.entries(stats.citationTypes)) addTo(agg.citationTypes, type, n);
@@ -193,12 +197,16 @@ function report(records, totalInChunk) {
     ]),
   ]);
 
+  const notKeptChars = agg.uncitedTailChars + agg.charsDroppedNoCitation + agg.charsDroppedShort;
   printTable('Spans:', [
     ['metric', 'value'],
     ['kept', agg.totalSpans.toLocaleString()],
     [`dropped: under ${MIN_SPAN_WORDS} words / ${MIN_SPAN_CHARS} chars`, `${agg.droppedShort.toLocaleString()} (${pct(agg.droppedShort, agg.droppedShort + agg.totalSpans)} of candidates)`],
     ['dropped: no usable citation (notes, sfn, no-link, excluded host)', agg.droppedNoCitation.toLocaleString()],
-    ['text in cited units NOT kept (uncited tails, {{cn}}-tagged, dropped spans)', `${fmtMB(agg.uncitedTailChars)} (${pct(agg.uncitedTailChars, agg.uncitedTailChars + totalKeptChars)} of cited-unit text)`],
+    ['text in cited units NOT kept', `${pct(notKeptChars, notKeptChars + totalKeptChars)} of cited-unit text, of which:`],
+    ['    spans whose citations have no usable link', pct(agg.charsDroppedNoCitation, notKeptChars)],
+    [`    spans under ${MIN_SPAN_WORDS} words / ${MIN_SPAN_CHARS} chars`, pct(agg.charsDroppedShort, notKeptChars)],
+    ['    uncited tails after the last citation, {{cn}}-tagged claims', pct(agg.uncitedTailChars, notKeptChars)],
     ['{{citation needed}} boundaries', agg.unsourcedTags.toLocaleString()],
     ['stacked citation groups', `${agg.stacked.toLocaleString()} (${pct(agg.stacked, agg.totalSpans)} of spans)`],
     ['spans ending at sentence punctuation', pct(agg.endsAtSentence, agg.totalSpans)],
@@ -211,7 +219,8 @@ function report(records, totalInChunk) {
   printTable('References and markers:', [
     ['metric', 'value'],
     ['reference-list entries', agg.references.toLocaleString()],
-    ['entries with no http link (notes, {{sfn}}, books w/o url, excluded hosts)', `${agg.referencesWithoutUrl.toLocaleString()} (${pct(agg.referencesWithoutUrl, agg.references)})`],
+    ['entries with no usable http link', `${agg.referencesWithoutUrl.toLocaleString()} (${pct(agg.referencesWithoutUrl, agg.references)})`],
+    ['    by reason', Object.entries(agg.linklessByReason).sort((a, b) => b[1] - a[1]).map(([r, n]) => `${r}: ${n}`).join(' | ')],
     ['inline markers', agg.markers.toLocaleString()],
     ['of which notes', `${agg.noteMarkers.toLocaleString()} (${pct(agg.noteMarkers, agg.markers)})`],
     ['citation types (kept spans)', Object.entries(agg.citationTypes).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${t} ${n}`).join(', ')],
@@ -230,6 +239,7 @@ function report(records, totalInChunk) {
   examples('Random paragraph spans:', agg.exampleParagraphSpans);
   examples('Cited list items (as spans):', agg.exampleListItems);
   examples('Cited table rows (as spans):', agg.exampleRows);
+  examples('Reference entries with no usable link (first few per article):', agg.linklessExamples);
 }
 
 /** N records with HTML, spread across sizes (small to ~600 KB), so the fixtures cover stubs and long articles alike. */

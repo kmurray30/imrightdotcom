@@ -37,13 +37,30 @@ CREATE INDEX IF NOT EXISTS wiki_paragraph_embeddings_page_id
 -- No separate title index either: UNIQUE (title, paragraph_index) above
 -- already provides an index with title as its leading column.
 
--- arctic-embed-m-v1.5 vectors for the same paragraphs (see
--- wiki_searcher/arcticEmbeddings.js), cut to 256 dims and stored at half
--- precision: the source for the compact (4-bit) search index that replaces
--- the bge ANN index above. Filled by wiki_searcher/scripts/reembed-arctic.js
--- (which also creates this table). Rows follow their paragraph: deleting or
--- replacing a paragraph removes its vector too.
-CREATE TABLE IF NOT EXISTS wiki_paragraph_vectors_arctic (
-  id        BIGINT PRIMARY KEY REFERENCES wiki_paragraph_embeddings (id) ON DELETE CASCADE,
-  embedding halfvec(256) NOT NULL
+
+-- Cited spans: the unit the rebuilt index stores and embeds. One row per
+-- citation group inside a paragraph (or list item / table row): the text
+-- between the previous citation and this one, with this group's citations.
+-- Nothing uncited is stored. Extracted from Wikimedia Enterprise's rendered
+-- HTML by wiki_searcher/spanExtractor.js; filled by
+-- wiki_searcher/scripts/build-index-from-wikimedia.js (which also creates the
+-- table). Vectors are arctic-embed-m-v1.5 cut to 256 dims
+-- (wiki_searcher/arcticEmbeddings.js); the compact search index is built from
+-- them separately. Replaces wiki_paragraph_embeddings once serving switches.
+CREATE TABLE IF NOT EXISTS wiki_citation_spans (
+  id                 BIGSERIAL PRIMARY KEY,
+  title              TEXT NOT NULL,
+  page_id            BIGINT,               -- Wikimedia article identifier (survives renames)
+  version_identifier BIGINT,               -- Wikimedia revision; matched on re-run to skip current articles
+  section            TEXT NOT NULL,
+  kind               TEXT NOT NULL,        -- 'paragraph' | 'list_item' | 'table_row'
+  unit_index         INT NOT NULL,         -- nth unit of that kind in the article
+  span_index         INT NOT NULL,         -- nth citation group within the unit
+  span_text          TEXT NOT NULL,        -- the text this group's citations support (cleaned, no markup)
+  citations          JSONB NOT NULL,       -- [{type, url, archive_url, title, publisher, date}], deduped by url
+  embedding          halfvec(256) NOT NULL,
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (title, kind, unit_index, span_index)
 );
+
+CREATE INDEX IF NOT EXISTS wiki_citation_spans_page_id ON wiki_citation_spans (page_id);

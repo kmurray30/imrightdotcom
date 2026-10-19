@@ -3,7 +3,7 @@
  * Streams an already-decompressed Wikimedia Enterprise Snapshot NDJSON file
  * (one article JSON object per line — see
  * https://enterprise.wikimedia.com/docs/snapshot/) and embeds+upserts every
- * article's paragraphs into wiki_paragraph_embeddings.
+ * article's cited spans into wiki_citation_spans (see embeddingIndex.js).
  *
  * For the primary workflow — downloading the snapshot from Wikimedia and
  * building the index from it — use build-index-from-wikimedia.js instead.
@@ -20,7 +20,7 @@
 import fs from 'fs';
 import readline from 'readline';
 import { loadEnv } from '../../imright/load-env.js';
-import { upsertArticleEmbeddings } from '../embeddingIndex.js';
+import { upsertSpansBatch, ensureSpansTable, SPANS_TABLE } from '../embeddingIndex.js';
 
 loadEnv();
 
@@ -30,74 +30,69 @@ if (!ndjsonPath) {
   process.exit(1);
 }
 
-const CONCURRENCY = 4; // local embedding model is CPU-bound; tune to your box's core count
-
-async function processInBatches(lines, worker, concurrency) {
-  let cursor = 0;
-  let processed = 0;
-  async function runNext() {
-    while (cursor < lines.length) {
-      const index = cursor++;
-      await worker(lines[index]);
-      processed++;
-      if (processed % 500 === 0) console.log(`  ...${processed} articles indexed`);
-    }
-  }
-  await Promise.all(Array.from({ length: concurrency }, runNext));
-}
+// Articles per upsertSpansBatch call: one embedding call and one transaction
+// per batch. Batches run one after another — the local embedding model is
+// the bottleneck and gains nothing from concurrent callers, and sequential
+// batches let the in-batch version check (newest copy of a title wins) hold
+// across the whole file.
+const BATCH_SIZE = 50;
+const PROGRESS_EVERY = 500;
 
 async function main() {
+  await ensureSpansTable();
+  console.log(`Writing cited spans from ${ndjsonPath} to ${SPANS_TABLE}`);
   const rl = readline.createInterface({ input: fs.createReadStream(ndjsonPath), crlfDelay: Infinity });
 
-  // Buffer in reasonably sized chunks so we're not holding the whole file in
-  // memory, but still get useful concurrency within each chunk.
-  const CHUNK_SIZE = 2000;
-  let chunk = [];
-  const totals = { articles: 0, paragraphs: 0, alreadyCurrent: 0 };
+  const totals = { lines: 0, malformed: 0, noBody: 0, articles: 0, alreadyCurrent: 0, spans: 0 };
+  const timings = { readMs: 0, embedMs: 0, writeMs: 0 };
+  let nextProgress = PROGRESS_EVERY;
+  let batch = [];
+
+  async function flush() {
+    if (batch.length === 0) return;
+    const results = await upsertSpansBatch(batch, timings);
+    batch = [];
+    for (const result of results) {
+      totals.articles++;
+      totals.spans += result.spanCount;
+      if (result.skipped) totals.alreadyCurrent++;
+    }
+    if (totals.articles >= nextProgress) {
+      nextProgress += PROGRESS_EVERY;
+      console.log(`  ...${totals.articles} articles processed (${totals.spans} spans, ${totals.alreadyCurrent} already current)`);
+    }
+  }
 
   for await (const line of rl) {
     if (!line.trim()) continue;
-    chunk.push(line);
-    if (chunk.length >= CHUNK_SIZE) {
-      await processChunk(chunk, totals);
-      chunk = [];
+    totals.lines++;
+    let article;
+    try {
+      article = JSON.parse(line);
+    } catch {
+      totals.malformed++; // skip malformed lines rather than aborting the whole build
+      continue;
     }
+    const html = article.article_body?.html;
+    if (!html) {
+      totals.noBody++; // deleted/visibility-changed/empty articles omit article_body
+      continue;
+    }
+    batch.push({
+      title: article.name,
+      html,
+      versionIdentifier: article.version?.identifier,
+      pageId: article.identifier,
+    });
+    if (batch.length >= BATCH_SIZE) await flush();
   }
-  if (chunk.length > 0) {
-    await processChunk(chunk, totals);
-  }
+  await flush();
 
+  const seconds = (ms) => `${(ms / 1000).toFixed(1)}s`;
   console.log(
-    `\nDone. Indexed ${totals.articles} articles (${totals.alreadyCurrent} already current, skipped), ${totals.paragraphs} paragraphs.`
-  );
-}
-
-async function processChunk(lines, totals) {
-  await processInBatches(
-    lines,
-    async (line) => {
-      let article;
-      try {
-        article = JSON.parse(line);
-      } catch {
-        return; // skip malformed lines rather than aborting the whole build
-      }
-      const wikitext = article.article_body?.wikitext;
-      if (!wikitext) return; // deleted/visibility-changed/empty articles omit article_body
-      const result = await upsertArticleEmbeddings({
-        title: article.name,
-        wikitext,
-        versionIdentifier: article.version?.identifier,
-        pageId: article.identifier,
-      });
-      totals.articles++;
-      totals.paragraphs += result.paragraphCount;
-      if (result.skipped) totals.alreadyCurrent++;
-      if (totals.articles % 500 === 0) {
-        console.log(`  ...${totals.articles} articles processed (${totals.paragraphs} paragraphs, ${totals.alreadyCurrent} already current)`);
-      }
-    },
-    CONCURRENCY
+    `\nDone. ${totals.lines} lines: ${totals.articles} articles (${totals.alreadyCurrent} already current, skipped), ` +
+      `${totals.noBody} without article_body, ${totals.malformed} malformed. ${totals.spans} cited spans written to ${SPANS_TABLE}. ` +
+      `Time: read ${seconds(timings.readMs)}, embed ${seconds(timings.embedMs)}, write ${seconds(timings.writeMs)}.`
   );
 }
 

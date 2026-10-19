@@ -61,14 +61,56 @@ export function encodeVector(values) {
  * @param {Array<[number|bigint, Buffer]>} rows - id (bigint column) and an encoded vector value.
  */
 export function binaryCopyPayload(rows) {
+  return binaryCopyRows(rows.map(([id, value]) => [encodeInt8(id), value]));
+}
+
+// --- Generic field encoders (Postgres binary send formats) ---------------
+
+/** text / varchar: the UTF-8 bytes. */
+export function encodeText(value) {
+  return Buffer.from(String(value), 'utf8');
+}
+
+/** integer (int4), big-endian. */
+export function encodeInt4(value) {
+  const buffer = Buffer.allocUnsafe(4);
+  buffer.writeInt32BE(Number(value), 0);
+  return buffer;
+}
+
+/** bigint (int8), big-endian. */
+export function encodeInt8(value) {
+  const buffer = Buffer.allocUnsafe(8);
+  buffer.writeBigInt64BE(BigInt(value), 0);
+  return buffer;
+}
+
+/** jsonb: a one-byte format version (1) followed by the JSON text. */
+export function encodeJsonb(value) {
+  return Buffer.concat([Buffer.from([1]), Buffer.from(JSON.stringify(value), 'utf8')]);
+}
+
+/**
+ * Complete binary COPY payload for arbitrary rows. Each row is an array of
+ * pre-encoded field Buffers (null for SQL NULL), in the COPY column order.
+ * @param {Array<Array<Buffer|null>>} rows
+ */
+export function binaryCopyRows(rows) {
   const parts = [COPY_SIGNATURE, Buffer.alloc(8)]; // flags int32 = 0, header extension length int32 = 0
-  for (const [id, value] of rows) {
-    const head = Buffer.allocUnsafe(2 + 4 + 8 + 4);
-    head.writeInt16BE(2, 0); // field count
-    head.writeInt32BE(8, 2);
-    head.writeBigInt64BE(BigInt(id), 6);
-    head.writeInt32BE(value.length, 14);
-    parts.push(head, value);
+  for (const fields of rows) {
+    const count = Buffer.allocUnsafe(2);
+    count.writeInt16BE(fields.length, 0);
+    parts.push(count);
+    for (const field of fields) {
+      const length = Buffer.allocUnsafe(4);
+      if (field === null || field === undefined) {
+        length.writeInt32BE(-1, 0);
+        parts.push(length);
+      } else {
+        length.writeInt32BE(field.length, 0);
+        parts.push(length, field);
+      }
+    }
   }
   const trailer = Buffer.allocUnsafe(2);
   trailer.writeInt16BE(-1, 0);

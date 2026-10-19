@@ -194,6 +194,21 @@ function buildReferenceMap($) {
   return map;
 }
 
+/** Why a reference-list entry produced no citation (diagnostics only; see analyzeArticleHtml's `diagnostics` option). */
+function linklessReason($, li) {
+  const body = li.find('.mw-reference-text, .reference-text').first();
+  const scope = body.length ? body : li;
+  if (scope.find('a[href^="http"]').length) return 'has a link, but only to an excluded host';
+  const cite = scope.find('cite').first();
+  if (cite.length) {
+    const classes = (cite.attr('class') ?? '').split(/\s+/).filter(Boolean);
+    const type = classes.find((c) => c !== 'citation' && !/^cs[12]$/.test(c) && !c.startsWith('cs1-')) ?? 'citation';
+    return `{{cite ${type}}} with no url`;
+  }
+  if (/^cite_note-FOOTNOTE/.test(li.attr('id') ?? '') || scope.find('a[href*="#CITEREF"]').length) return '{{sfn}}/{{harvnb}} short footnote';
+  return 'plain text: no template, no link';
+}
+
 function markerInfo($, sup) {
   const dataMw = parseDataMw(sup);
   const text = $(sup).text().trim();
@@ -313,6 +328,7 @@ function headingText($, el) {
  * @param {boolean} [options.includeTableRows=false]
  * @param {number} [options.minWords=MIN_SPAN_WORDS]
  * @param {number} [options.minChars=MIN_SPAN_CHARS]
+ * @param {boolean} [options.diagnostics=false] - also classify reference entries that yield no citation (stats only; costs a second pass over the reference list)
  * @returns {{ spans: Array<{section:string, kind:string, unitIndex:number, spanIndex:number, text:string, citations:Array}>, stats: object }}
  */
 export function analyzeArticleHtml(html, options = {}) {
@@ -327,7 +343,9 @@ export function analyzeArticleHtml(html, options = {}) {
     spanChars: { paragraph: 0, list_item: 0, table_row: 0 },
     spansDroppedShort: 0,
     spansDroppedNoUsableCitation: 0,
-    uncitedTailChars: 0,
+    charsDroppedShort: 0,
+    charsDroppedNoUsableCitation: 0,
+    uncitedTailChars: 0, // text after a unit's last citation, {{cn}}-tagged claims: never a span candidate
     unsourcedTagBoundaries: 0,
     markers: 0,
     noteMarkers: 0,
@@ -336,7 +354,21 @@ export function analyzeArticleHtml(html, options = {}) {
     referencesWithoutUrl: [...refMap.values()].filter((c) => c.length === 0).length,
     citationTypes: {},
     skippedSectionUnits: 0,
+    referencesWithoutUrlByReason: {},
+    linklessExamples: [],
   };
+  if (opts.diagnostics) {
+    $('li[id^="cite_note"]').each((_, li) => {
+      const el = $(li);
+      if (refMap.get(el.attr('id'))?.length) return;
+      const reason = linklessReason($, el);
+      stats.referencesWithoutUrlByReason[reason] = (stats.referencesWithoutUrlByReason[reason] ?? 0) + 1;
+      if (stats.linklessExamples.length < 3) {
+        const text = normalize(el.find('.mw-reference-text, .reference-text').first().text() || el.text()).replace(/^↑\s*/, '');
+        stats.linklessExamples.push(`${reason} — "${text.slice(0, 110)}${text.length > 110 ? '…' : ''}"`);
+      }
+    });
+  }
   const spans = [];
   const unitCounters = { paragraph: 0, list_item: 0, table_row: 0 };
 
@@ -364,6 +396,7 @@ export function analyzeArticleHtml(html, options = {}) {
     const candidates = spansFromSegments(segments);
     let spanIndex = 0;
     let keptChars = 0;
+    let droppedChars = 0;
     for (const candidate of candidates) {
       if (candidate.refIds.length > 1) stats.stackedGroups++;
       const text = normalize(candidate.text);
@@ -373,10 +406,14 @@ export function analyzeArticleHtml(html, options = {}) {
       }
       if (citations.length === 0) {
         stats.spansDroppedNoUsableCitation++;
+        stats.charsDroppedNoUsableCitation += text.length;
+        droppedChars += text.length;
         continue;
       }
       if (countWords(text) < opts.minWords || text.length < opts.minChars) {
         stats.spansDroppedShort++;
+        stats.charsDroppedShort += text.length;
+        droppedChars += text.length;
         continue;
       }
       for (const c of citations) stats.citationTypes[c.type] = (stats.citationTypes[c.type] ?? 0) + 1;
@@ -385,7 +422,7 @@ export function analyzeArticleHtml(html, options = {}) {
       stats.spanChars[kind] += text.length;
       keptChars += text.length;
     }
-    stats.uncitedTailChars += Math.max(0, unitText.length - keptChars);
+    stats.uncitedTailChars += Math.max(0, unitText.length - keptChars - droppedChars);
   };
 
   const unitSelector = ['h2', 'h3', 'h4', 'h5', 'h6', 'p', opts.includeListItems ? 'li' : null, opts.includeTableRows ? 'tr' : null].filter(Boolean).join(', ');
