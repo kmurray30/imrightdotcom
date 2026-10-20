@@ -115,6 +115,18 @@ const CONCURRENCY = 6; // sizing pass only — pure network, raise if you're on 
 // flight holds its archive + extracted NDJSON) and one DB connection each.
 // Safe to change between runs: every chunk resumes from its own checkpoint.
 const EMBED_CONCURRENCY = Number(process.env.CHUNK_CONCURRENCY) || 4;
+// CHUNK_SHARD=k/n: this process takes every n-th chunk starting at k (0-based),
+// so several processes — a second one on the same machine, or a Railway
+// service writing over the internal network — can build disjoint slices of
+// the snapshot into the same tables at once. Give each its own state dir
+// (3rd argument) when they share a filesystem. Unset = all chunks.
+const CHUNK_SHARD = (() => {
+  const raw = process.env.CHUNK_SHARD;
+  if (!raw) return null;
+  const m = /^(\d+)\/(\d+)$/.exec(raw.trim());
+  if (!m || Number(m[2]) < 1 || Number(m[1]) >= Number(m[2])) throw new Error(`CHUNK_SHARD must look like k/n with 0 ≤ k < n, got "${raw}"`);
+  return { index: Number(m[1]), count: Number(m[2]) };
+})();
 // Articles per upsertSpansBatch call (ARTICLES_PER_BATCH env, default 100):
 // one embedding call and ONE transaction of a dozen or so statements per
 // batch. Over the tunnel every statement is a ~100–250 ms round trip, so the
@@ -1218,6 +1230,12 @@ async function main() {
     saveSnapshotMetadata(recordCount, chunks);
   }
 
+  if (CHUNK_SHARD) {
+    const all = chunks.length;
+    chunks = chunks.filter((_, i) => i % CHUNK_SHARD.count === CHUNK_SHARD.index);
+    recordCount = recordCount ? Math.round((recordCount * chunks.length) / all) : recordCount;
+    console.log(`Shard ${CHUNK_SHARD.index}/${CHUNK_SHARD.count}: ${chunks.length} of ${all} chunks (≈${recordCount ?? '?'} articles).`);
+  }
   const totalBytes = chunks.reduce((sum, chunk) => sum + chunk.contentLength, 0);
   const embed = embedConfig();
   console.log(

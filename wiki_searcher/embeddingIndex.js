@@ -32,7 +32,7 @@ import copyStreams from 'pg-copy-streams';
 import { getPool } from '../imright/scripts/db.js';
 import { embedTexts } from './textEmbeddings.js';
 import { embedPassages, ARCTIC_DIMS } from './arcticEmbeddings.js';
-import { extractSpans } from './spanExtractor.js';
+import { extractSpansParallel } from './spanWorkerPool.js';
 import { binaryCopyRows, encodeText, encodeInt4, encodeInt8, encodeJsonb, encodeHalfvec } from './vectorCopy.js';
 import { findAllRefs, stripWikiMarkup } from '../ref_extractor/parser/index.js';
 import { parseAllCiteTemplates } from '../ref_extractor/parser/citeTemplate.js';
@@ -658,20 +658,26 @@ async function attemptUpsertSpans(pool, articles, timings) {
     const results = new Array(articles.length);
     const targets = [];
     const pending = [];
+    const toExtract = [];
     articles.forEach((article, i) => {
-      const { title, html, versionIdentifier, pageId } = article;
-      if (keptIndexByTitle.get(title) !== i) {
+      const { title } = article;
+      if (keptIndexByTitle.get(title) !== i || stored.isCurrent(article)) {
         results[i] = { title, spanCount: 0, unembeddedCount: 0, skipped: true };
         return;
       }
-      if (stored.isCurrent(article)) {
-        results[i] = { title, spanCount: 0, unembeddedCount: 0, skipped: true };
-        return;
-      }
-      const { spans, unembedded } = extractSpans({ name: title, article_body: { html } }, SPAN_OPTIONS);
+      toExtract.push(i);
+    });
+    // HTML parsing runs on worker threads (spanWorkerPool.js) so it overlaps
+    // with other batches' embedding and writes instead of blocking them.
+    const extractStart = performance.now();
+    const extracted = await extractSpansParallel(toExtract.map((i) => articles[i]), SPAN_OPTIONS);
+    timings.extractMs = (timings.extractMs ?? 0) + (performance.now() - extractStart);
+    toExtract.forEach((i, j) => {
+      const { title, pageId } = articles[i];
+      const { spans, unembedded } = extracted[j];
       targets.push({ index: i, title, pageId: pageId ?? null });
       results[i] = { title, spanCount: spans.length, unembeddedCount: unembedded.length, skipped: false };
-      if (spans.length > 0 || unembedded.length > 0) pending.push({ index: i, article, spans, unembedded, vectors: [] });
+      if (spans.length > 0 || unembedded.length > 0) pending.push({ index: i, article: articles[i], spans, unembedded, vectors: [] });
     });
 
     const texts = pending.flatMap(({ article, spans }) => spans.map((s) => `${article.title} — ${s.section}: ${s.text}`));
