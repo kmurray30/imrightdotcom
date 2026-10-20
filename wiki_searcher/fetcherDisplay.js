@@ -49,6 +49,35 @@ export function fit(text, width) {
   return out + ' '.repeat(Math.max(0, width - shown));
 }
 
+/**
+ * Word-wraps `text` to `width` visible characters; continuation lines start
+ * `indent` spaces in, in the color that was active where the line broke.
+ */
+export function wrap(text, width, indent = 13) {
+  if (visibleLength(text) <= width) return [text];
+  const lines = [];
+  let line = '';
+  let length = 0;
+  let active = '';
+  let first = true;
+  for (const word of text.split(' ')) {
+    const wordLength = visibleLength(word);
+    const sep = first ? 0 : 1;
+    first = false;
+    if (length + sep + wordLength > width && length > indent && word !== '') {
+      lines.push(line);
+      line = ' '.repeat(indent) + active + word;
+      length = indent + wordLength;
+    } else {
+      line += (sep ? ' ' : '') + word;
+      length += sep + wordLength;
+    }
+    for (const code of word.match(ANSI) ?? []) active = code === '\x1b[0m' ? '' : code;
+  }
+  lines.push(line);
+  return lines;
+}
+
 /** A bar `width` wide made of colored segments: [{ fraction, paint, char }], the rest drawn as an empty track. */
 export function bar(width, segments) {
   let out = '';
@@ -100,7 +129,7 @@ export function createPanel(render) {
     const tail = right ? ` ${right} ` : '';
     const fill = Math.max(1, outer - 3 - visibleLength(head) - visibleLength(tail));
     const rows = [color.gray('╭─') + head + color.gray('─'.repeat(fill)) + tail + color.gray('╮')];
-    for (const line of lines) rows.push(`${color.gray('│')} ${fit(line, inner)} ${color.gray('│')}`);
+    for (const line of lines) for (const row of wrap(line, inner)) rows.push(`${color.gray('│')} ${fit(row, inner)} ${color.gray('│')}`);
     rows.push(color.gray(`╰${'─'.repeat(outer - 2)}╯`));
     return rows;
   }

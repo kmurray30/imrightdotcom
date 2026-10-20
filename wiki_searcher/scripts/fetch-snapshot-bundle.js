@@ -229,7 +229,7 @@ async function convertRawFile(rawPath, unitId, { stage = true } = {}) {
   stats.converted++;
   ui.raw.converted++;
   log(`converted ${rawPath} → ${out} (${lines} lines)`);
-  say(`${color.green('✓')} ${color.bold(unitLabel(unitId))} converted from the raw file on disk → ${stage ? color.green('ready for the embedder') : color.blue('saved for later')}${stage ? '' : ' (already embedded)'} · ${formatCount(articles)} articles · ${formatBytes(bytes)} ${color.gray('(raw copy deleted)')}`);
+  say(`${stage ? color.green('✓') : color.blue('✓')} ${color.bold(unitLabel(unitId))} ${stage ? color.green('sent to the embedder') : color.blue('kept for later (already embedded)')} · converted from a leftover raw file · ${formatCount(articles)} articles, ${formatBytes(bytes)} ${color.gray('(raw file deleted)')}`);
 }
 
 /** Step 1: raw files already on disk → spans files; raw deleted. */
@@ -282,9 +282,10 @@ async function convertLocalRawFiles() {
     else await queue.stageChunk(unitId, file);
     handed++;
   }
-  if (handed) say(`${handed} saved chunk(s) handed to the embedder that a stop had cut off before the hand-over`);
-  if (raw.length || stale.length) say(`Step 1 done: ${ui.raw.converted} raw file(s) converted, ${raw.length - ui.raw.converted} already saved (raw copy removed)${stale.length ? `, ${stale.length} stale hand-over(s) cleared` : ''}`);
-  else say('Step 1 done: no raw files on disk to convert');
+  if (handed) say(`${handed} chunk(s) on disk sent to the embedder (a stop had cut them off before the hand-over)`);
+  if (raw.length) say(`Leftover raw files: ${ui.raw.converted} converted, ${raw.length - ui.raw.converted} were already converted (raw copy deleted)`);
+  else say(color.gray('No leftover raw chunk files on disk (earlier runs already converted them)'));
+  if (stale.length) log(`${stale.length} stale hand-over(s) cleared`);
 }
 
 // ---------------------------------------------------------------- the bundle stream
@@ -376,7 +377,7 @@ async function* bundleBytes() {
       clearTimeout(stall);
       if (error.fatal || /request cap/.test(error.message)) throw error;
       const reason = error.name === 'AbortError' ? `no data for ${STALL_MS / 1000}s` : error.message || error.code;
-      say(`${color.yellow('!')} ${color.yellow(`Download dropped at ${formatGB(download.offset)} GB`)} (${reason}) — picking it up again in ${RETRY_PAUSE_MS / 1000}s, nothing is lost`);
+      say(`${color.yellow('!')} ${color.yellow(`Connection dropped at ${formatGB(download.offset)} GB`)} (${reason}). Reconnecting in ${RETRY_PAUSE_MS / 1000}s; nothing is lost.`);
       ui.retryAt = Date.now() + RETRY_PAUSE_MS;
       await sleep(RETRY_PAUSE_MS);
     }
@@ -403,13 +404,13 @@ async function skipMember(stream, unitId) {
   ui.current = { verb: 'Skipping', label: unitLabel(unitId), note: 'already saved (its bytes still stream past)' };
   await drain(stream);
   ui.current = null;
-  say(color.gray(`– ${unitLabel(unitId)} already saved earlier, skipped`));
+  say(color.gray(`– ${unitLabel(unitId)} skipped (done on an earlier run)`));
 }
 
 /** Parse a member straight into a spans file in the archive, and stage it for the embedder unless it is already done. */
 async function convertMember(stream, unitId, register, sourceName) {
   const out = path.join(spansDir, `${unitId}${SPANS_SUFFIX}`);
-  ui.current = { verb: 'Parsing', label: unitLabel(unitId), note: register ? 'new → for the embedder' : 'already embedded → saving for later', parsing: true };
+  ui.current = { verb: 'Parsing', label: unitLabel(unitId), note: register ? 'new, for the embedder' : 'already embedded, keeping it for later', parsing: true };
   const { lines, articles, bytes } = await convertLines(Readable.from(stream), out);
   ui.current = null;
   writeManifest(unitId, { source: `bundle member ${sourceName}`, lines, articles, ...(register ? {} : { embeddedBefore: true }) });
@@ -417,10 +418,10 @@ async function convertMember(stream, unitId, register, sourceName) {
     await register(unitId, out);
     stats.converted++;
     stats.memberStaged++;
-    say(`${color.green('✓')} ${color.bold(unitLabel(unitId))} → ${color.green('ready for the embedder')} · ${formatCount(articles)} articles · ${formatBytes(bytes)}`);
+    say(`${color.green('✓')} ${color.bold(unitLabel(unitId))} ${color.green('sent to the embedder')} · ${formatCount(articles)} articles, ${formatBytes(bytes)}`);
   } else {
     stats.archivedDone++;
-    say(`${color.blue('✓')} ${color.bold(unitLabel(unitId))} → ${color.blue('saved for later')} (already embedded) · ${formatCount(articles)} articles · ${formatBytes(bytes)}`);
+    say(`${color.blue('✓')} ${color.bold(unitLabel(unitId))} ${color.blue('kept for later (already embedded)')} · ${formatCount(articles)} articles, ${formatBytes(bytes)}`);
   }
   return { out, lines, articles };
 }
@@ -442,7 +443,7 @@ async function handleMember(header, stream) {
       if (stats.verified < MAPPING_CHECKS && row.total_lines != null) {
         // Check that members line up with chunks before trusting the mapping.
         const out = path.join(spansDir, `${chunkId}${SPANS_SUFFIX}`);
-        ui.current = { verb: 'Parsing', label: unitLabel(chunkId), note: `already embedded → saving for later (mapping check ${stats.verified + 1}/${MAPPING_CHECKS})`, parsing: true };
+        ui.current = { verb: 'Parsing', label: unitLabel(chunkId), note: `already embedded, keeping it for later (mapping check ${stats.verified + 1}/${MAPPING_CHECKS})`, parsing: true };
         const { lines, articles, bytes } = await convertLines(Readable.from(stream), out);
         ui.current = null;
         if (lines !== row.total_lines) {
@@ -461,7 +462,7 @@ async function handleMember(header, stream) {
         log(`mapping check ${stats.verified}/${MAPPING_CHECKS}: ${name} has ${lines} lines = ${chunkId}`);
         writeManifest(chunkId, { source: `bundle member ${name}`, lines, articles, embeddedBefore: true });
         stats.archivedDone++;
-        say(`${color.blue('✓')} ${color.bold(unitLabel(chunkId))} → ${color.blue('saved for later')} (already embedded) · ${formatCount(articles)} articles · ${formatBytes(bytes)}`);
+        say(`${color.blue('✓')} ${color.bold(unitLabel(chunkId))} ${color.blue('kept for later (already embedded)')} · ${formatCount(articles)} articles, ${formatBytes(bytes)}`);
         return;
       }
       await convertMember(stream, chunkId, null, name);
@@ -556,84 +557,82 @@ function streamRate() {
 function renderPanel(width) {
   const { bold, gray, green, yellow, red, cyan, blue, magenta } = color;
   const indent = ' '.repeat(13);
-  const barWidth = Math.max(10, Math.min(40, width - 42));
+  const barWidth = Math.max(10, Math.min(36, width - 40));
   const lines = [''];
 
-  // The two steps
-  const stepLine = (n, state, label, detail) => {
-    const icon = { waiting: gray('○'), active: cyan('▸'), done: green('✓'), failed: red('✗') }[state];
-    return `  ${icon} ${gray(`Step ${n}`)}  ${fit(state === 'waiting' ? gray(label) : state === 'active' ? bold(label) : label, 28)} ${detail}`;
-  };
-  const step1 = ui.rawDone ? 'done' : { starting: 'waiting', converting: 'active', stopped: 'failed' }[ui.phase] ?? 'done';
-  const step1Detail =
-    step1 === 'waiting' ? '' : step1 === 'active' ? `${ui.raw.done} of ${ui.raw.total} files` : ui.raw.total ? `${ui.raw.converted} converted, raw copies deleted` : gray('nothing on disk to convert');
-  const step2 = { starting: 'waiting', converting: 'waiting', streaming: 'active', done: 'done', stopped: ui.rawDone ? 'failed' : 'waiting' }[ui.phase];
-  const step2Detail = { waiting: gray('starts after step 1'), active: 'in progress', done: green('finished'), failed: red('stopped — run it again to continue') }[step2];
-  lines.push(stepLine(1, step1, 'Convert raw files on disk', step1Detail));
-  lines.push(stepLine(2, step2, 'Stream + parse the bundle', step2Detail));
-  lines.push('');
-
-  // Download
-  if (download.total) {
-    const fraction = download.offset / download.total;
-    lines.push(`  ${bold('Download')}   ${bar(barWidth, [{ fraction, paint: cyan }])}  ${formatGB(download.offset)} / ${formatGB(download.total)} GB  ${bold(`${Math.floor(fraction * 100)}%`)}`);
-    const rate = streamRate();
-    let detail;
-    if (ui.retryAt) detail = yellow(`connection dropped — reconnecting in ${Math.max(0, Math.ceil((ui.retryAt - Date.now()) / 1000))}s`);
-    else if (ui.phase !== 'streaming') detail = gray(ui.phase === 'done' ? 'complete' : 'not started yet');
-    else if (download.fromNetwork === 0 && download.seedBytes > 0) detail = `reading the ${formatBytes(download.seedBytes)} saved earlier (no download needed)`;
-    else detail = rate > 0 ? `${rate.toFixed(1)} MB/s · about ${bold(formatDuration(((download.total - download.offset) / (rate * 1e6)) * 1000))} left` : 'measuring speed…';
-    lines.push(`${indent}${detail} ${gray(`· download ${loadRequests().gets} of ${MAX_REQUESTS} allowed`)}`);
-    lines.push('');
-  }
-
-  // Chunks
+  // Progress: chunks of the bundle read, and the download behind it.
   const total = Math.max(ui.expectedMembers || 0, stats.members) || 1;
+  const percent = ui.phase === 'done' ? 100 : Math.floor((stats.members / total) * 100);
   lines.push(
-    `  ${bold('Chunks')}     ${bar(barWidth, [
+    `  ${bold('Progress')}   ${bar(barWidth, [
       { fraction: stats.memberStaged / total, paint: green },
       { fraction: stats.archivedDone / total, paint: blue },
       { fraction: stats.skippedConverted / total, paint: magenta },
-    ])}  ${stats.members} of ${ui.expectedMembers ?? '?'} read`
+    ])}  ${bold(`${percent}%`)}  ${gray(`${stats.members} of ${ui.expectedMembers ?? '?'} chunks`)}`
   );
-  lines.push(`${indent}${green('■')} ${String(stats.memberStaged).padEnd(4)} new → handed to the embedder`);
-  lines.push(`${indent}${blue('■')} ${String(stats.archivedDone).padEnd(4)} already embedded → saved for later`);
-  lines.push(`${indent}${magenta('■')} ${String(stats.skippedConverted).padEnd(4)} already saved earlier → skipped`);
+  if (download.total) {
+    const rate = streamRate();
+    let detail = `${formatGB(download.offset)} of ${formatGB(download.total)} GB`;
+    if (ui.retryAt) detail += ` · ${yellow(`connection dropped, reconnecting in ${Math.max(0, Math.ceil((ui.retryAt - Date.now()) / 1000))}s`)}`;
+    else if (ui.phase === 'done') detail += ' · finished';
+    else if (ui.phase !== 'streaming') detail += gray(' · starts after the leftover files');
+    else if (download.fromNetwork === 0 && download.seedBytes > 0 && download.offset < download.seedBytes) detail += ` · reading the ${formatBytes(download.seedBytes)} downloaded on an earlier run (no internet needed)`;
+    else if (rate > 0) detail += ` · ${rate.toFixed(1)} MB/s · ${bold(`about ${formatDuration(((download.total - download.offset) / (rate * 1e6)) * 1000)} left`)}`;
+    else detail += gray(' · measuring speed…');
+    lines.push(`${indent}${detail}`);
+    const gets = loadRequests().gets;
+    if (gets >= MAX_REQUESTS - 3) lines.push(`${indent}${yellow(`! ${gets} of ${MAX_REQUESTS} downloads used (BUNDLE_MAX_REQUESTS)`)}`);
+  }
   lines.push('');
 
-  // Right now
+  // What it's doing right now.
   let now;
   if (ui.current) {
-    now = `${ui.current.verb} ${cyan(bold(ui.current.label))}${ui.current.parsing ? ` · ${formatCount(ui.currentArticles)} articles so far` : ''} ${gray(`· ${ui.current.note}`)}`;
+    now = `${ui.current.verb} ${cyan(bold(ui.current.label))}${ui.current.parsing ? ` (${formatCount(ui.currentArticles)} articles so far)` : ''} ${gray(`· ${ui.current.note}`)}`;
+    if (ui.phase === 'converting' && ui.raw.total) now += gray(` · leftover ${ui.raw.done + 1} of ${ui.raw.total}`);
   } else {
-    now = gray({ starting: 'starting up…', converting: 'looking for raw files…', streaming: 'reading the bundle to the next chunk…', done: 'nothing — all done', stopped: 'nothing — stopped' }[ui.phase]);
+    now = gray({ starting: 'starting up…', converting: 'looking for leftover raw files…', streaming: 'downloading the next chunk…', done: 'nothing, all done', stopped: 'nothing, stopped' }[ui.phase]);
   }
-  lines.push(`  ${bold('Right now')}  ${now}`);
+  lines.push(`  ${bold('Now')}        ${now}`);
+  lines.push('');
 
-  // Embedder (the queue in Postgres)
+  // Where the chunks went.
+  lines.push(`  ${bold('Chunks')}     ${green('■')} ${bold(String(stats.memberStaged).padStart(3))}  new, sent to the embedder`);
+  lines.push(`${indent}${blue('■')} ${bold(String(stats.archivedDone).padStart(3))}  already embedded, only kept on disk for later`);
+  lines.push(`${indent}${magenta('■')} ${bold(String(stats.skippedConverted).padStart(3))}  done on an earlier run, skipped`);
+  if (ui.raw.converted) lines.push(`${indent}${gray(`+ ${ui.raw.converted} leftover raw file(s) converted at the start`)}`);
+  lines.push('');
+
+  // Is the embedder fed?
   const e = ui.embedder;
   let embedder;
   if (!e) embedder = gray('checking…');
+  else if (e.left === 0) embedder = green('● everything is embedded');
   else {
-    const counts = `${e.embedding} being embedded · ${e.done} of ${e.done + e.left} done`;
-    if (e.waiting > 0) embedder = `${green(bold(e.waiting))} ${e.waiting === 1 ? 'chunk' : 'chunks'} ready and waiting · ${counts}`;
-    else if (e.left === 0) embedder = green('every chunk is embedded');
-    else if (e.embedding > 0) embedder = `${yellow('nothing waiting')} · ${counts}`;
-    else embedder = `${yellow('idle, waiting for chunks from this fetcher')} · ${e.done} of ${e.done + e.left} done`;
+    const queued = e.waiting > 0 ? green(`● ${e.waiting} ${e.waiting === 1 ? 'chunk' : 'chunks'} queued up for it`) : yellow('● nothing queued up for it right now');
+    embedder = `${queued} ${gray(`· ${e.done} of ${e.done + e.left} chunks embedded`)}`;
   }
   lines.push(`  ${bold('Embedder')}   ${embedder}`);
 
-  // Archive
+  // The archive on disk.
   const files = ui.archiveAtStart.files + stats.converted + stats.archivedDone;
-  lines.push(`  ${bold('Saved')}      ${formatCount(files)} chunks · ${formatBytes(ui.archiveAtStart.bytes + stats.spansBytes)} in ${shortPath(spansDir)}/ ${gray(`· ${formatCount(stats.convertedArticles)} articles parsed this run`)}`);
+  lines.push(`  ${bold('On disk')}    ${formatCount(files)} chunks, ${formatBytes(ui.archiveAtStart.bytes + stats.spansBytes)} in ${shortPath(spansDir)}/`);
   lines.push('');
-  const footer = {
-    done: 'All done · the archive is complete',
-    stopped: 'Run it again to continue from the chunk it was on',
-  }[ui.phase] ?? 'Ctrl-C to stop any time · running it again continues from the chunk it was on';
-  lines.push(gray(`  ${footer} · log: ${shortPath(logPath)}`));
 
-  const phaseLabel = { starting: cyan('starting'), converting: cyan('step 1 of 2'), streaming: cyan('step 2 of 2'), done: green('done'), stopped: red('stopped') }[ui.phase];
+  const footer = {
+    done: 'All done: every chunk is in the archive.',
+    stopped: 'Stopped. Run it again to continue from this chunk.',
+  }[ui.phase] ?? 'Safe to Ctrl-C: next time it picks up from the chunk it is on.';
+  lines.push(gray(`  ${footer}`));
+  lines.push(gray(`  Details: ${shortPath(logPath)}`));
+
+  const phaseLabel = {
+    starting: cyan('starting'),
+    converting: cyan('converting leftovers'),
+    streaming: cyan('downloading + parsing'),
+    done: green('done'),
+    stopped: red('stopped'),
+  }[ui.phase];
   return { title: 'Wikipedia fetcher', right: `${phaseLabel} ${gray(`· ${formatDuration(Date.now() - download.startedAt)}`)}`, lines };
 }
 
@@ -663,7 +662,7 @@ const ticker = setInterval(() => {
 
 let failure = null;
 try {
-  say(`Saving parsed articles to ${shortPath(spansDir)}/ (${formatCount(ui.archiveAtStart.files)} chunks there already) · log: ${shortPath(logPath)}`);
+  say(`Starting. ${formatCount(ui.archiveAtStart.files)} chunks already on disk in ${shortPath(spansDir)}/`);
   await headBundle();
   ui.phase = 'converting';
   panel.draw();
@@ -677,13 +676,13 @@ try {
   }
   if (resume?.complete) {
     download.offset = download.total;
-    say('Step 2: this snapshot was already read to the end on an earlier run; nothing left to stream');
+    say('This snapshot was already fully read on an earlier run; nothing left to download');
   } else {
     if (resume) {
-      say(`Step 2: ${color.green('resuming')} at ${formatGB(resume.compressedOffset)} of ${formatGB(download.total)} GB, at the start of the chunk it was in when it stopped (${stats.members} bundle members already done)`);
+      say(`${color.green('Resuming')} at ${formatGB(resume.compressedOffset)} of ${formatGB(download.total)} GB, from the start of the chunk it was on (${stats.members} chunks already done)`);
       if (fs.existsSync(seedPath) && fs.statSync(seedPath).size <= resume.compressedOffset) fs.rmSync(seedPath, { force: true }); // already past it
     } else {
-      say(`Step 2: streaming the ${formatGB(download.total)} GB bundle${fs.existsSync(seedPath) ? `, starting with the ${formatGB(fs.statSync(seedPath).size)} GB already saved in ${path.basename(seedPath)}` : ''}…`);
+      say(`Downloading + parsing the ${formatGB(download.total)} GB snapshot${fs.existsSync(seedPath) ? `, starting with the ${formatGB(fs.statSync(seedPath).size)} GB downloaded on an earlier run` : ''}…`);
     }
     await streamBundle(resume);
   }
@@ -706,6 +705,6 @@ if (failure) {
   process.exit(1);
 }
 await queue.setBundleFetcherState('done');
-say(`${color.green('✓ Bundle fully read:')} ${stats.memberStaged} chunk(s) handed to the embedder, ${stats.archivedDone} saved for later. The archive in ${shortPath(spansDir)}/ is complete; ${shortPath(bundleDir)}/ only holds logs now.`);
+say(`${color.green('✓ Done:')} ${stats.memberStaged} chunk(s) sent to the embedder, ${stats.archivedDone} kept for later. The archive in ${shortPath(spansDir)}/ is complete; ${shortPath(bundleDir)}/ only holds logs now.`);
 panel.close();
 process.exit(0);
