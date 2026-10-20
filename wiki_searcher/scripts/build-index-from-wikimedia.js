@@ -75,6 +75,7 @@ import readline from 'readline';
 import { Readable } from 'stream';
 import { execFile } from 'child_process';
 import { createHash } from 'crypto';
+import zlib from 'zlib';
 import { fileURLToPath } from 'url';
 import { promisify } from 'util';
 import { loadEnv } from '../../imright/load-env.js';
@@ -84,6 +85,7 @@ import { upsertSpansBatch, ensureSpansTable, SPANS_TABLE, UNEMBEDDED_TABLE, SPAN
 import {
   ensureQueueTable, registerChunks, importLocalState, claimNext, heartbeat, markDone, release, queueSnapshot,
   runQueue, pendingCount, setQueueWarningLogger, recordProgressSample, seedActiveMs, doneChunkIds, setCodeVersion, chunkRow, unclaimMine, bundleFetcherActive,
+  unstage, releaseClaimsExcept,
   QUEUE_TABLE, MAX_CHUNK_ATTEMPTS,
 } from '../chunkQueue.js';
 import { setLogger as setEmbedLogger, embedConfig } from '../textEmbeddings.js';
@@ -137,6 +139,9 @@ if (process.env.CHUNK_SHARD) {
 // per-chunk downloads — for when the monthly chunk-download allowance is used
 // up. Workers then only take chunks the fetcher has staged.
 const BUNDLE_MODE = process.env.CHUNK_SOURCE === 'bundle';
+/** Bundle mode's input: one line per article with its spans already parsed (written by fetch-snapshot-bundle.js). */
+const SPANS_SUFFIX = '.spans.ndjson.gz';
+const SPANS_ARCHIVE_DIR = path.resolve(process.env.SPANS_ARCHIVE_DIR || './wiki-spans'); // kept: read in place, never deleted
 const QUEUE_REFRESH_MS = 10_000; // how often the display re-reads corpus-wide progress from the queue
 const HEARTBEAT_MS = 15_000; // lease renewal + lines done, for every chunk this process holds
 // Articles per upsertSpansBatch call (ARTICLES_PER_BATCH env, default 100):
@@ -1122,7 +1127,9 @@ function saveLineCheckpoint(chunkId, lineNumber) {
  */
 async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
   const resumeFromLine = loadLineCheckpoint(chunkId);
-  const rl = readline.createInterface({ input: fs.createReadStream(ndjsonPath), crlfDelay: Infinity });
+  const isSpansFile = ndjsonPath.endsWith(SPANS_SUFFIX);
+  const input = isSpansFile ? fs.createReadStream(ndjsonPath).pipe(zlib.createGunzip()) : fs.createReadStream(ndjsonPath);
+  const rl = readline.createInterface({ input, crlfDelay: Infinity });
   const stats = { articles: 0, spans: 0, unembedded: 0, alreadyCurrent: 0, totalLines: 0, failedBatches: 0, failedArticles: 0 };
   let lastLoggedAt = 0;
   let lineNumber = 0;
@@ -1141,14 +1148,14 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
     // Malformed lines or records with no embeddable body (deleted/
     // visibility-changed/empty) never reach the DB at all — same as before,
     // just filtered up front instead of bailing out of a per-article call.
-    const embeddable = batch.filter(({ article }) => article?.article_body?.html);
+    const embeddable = batch.filter(({ article }) => article?.article_body?.html || article?.extracted);
     const timings = { readMs: 0, embedMs: 0, writeMs: 0 };
     if (embeddable.length > 0) {
       try {
         const results = await upsertSpansBatch(
           embeddable.map(({ article }) => ({
             title: article.name,
-            html: article.article_body.html,
+            ...(article.extracted ? { extracted: article.extracted } : { html: article.article_body.html }),
             versionIdentifier: article.version?.identifier,
             pageId: article.identifier,
           })),
@@ -1234,6 +1241,15 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
     let article;
     try {
       article = JSON.parse(line);
+      if (isSpansFile && article) {
+        // Already parsed by the fetcher: { title, pageId, versionIdentifier, spans, unembedded } or { …, error }.
+        article = {
+          name: article.title,
+          identifier: article.pageId,
+          version: { identifier: article.versionIdentifier },
+          extracted: article.error ? { error: article.error } : { spans: article.spans, unembedded: article.unembedded },
+        };
+      }
     } catch {
       article = null; // still counted/checkpointed below rather than aborting the whole chunk
     }
@@ -1246,7 +1262,9 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
   stats.totalLines = lineNumber; // the chunk's TRUE record count, known for free now that the stream has reached EOF — see processChunk's use of this for exact (not averaged) done-chunk crediting
 
   fs.rmSync(progressCheckpointPath(chunkId), { force: true }); // chunk fully embedded — checkpoint no longer needed, .done supersedes it
-  if (stats.failedBatches > 0) {
+  if (isSpansFile) {
+    // the archived spans file stays: it is the local corpus for later re-embedding and refreshes
+  } else if (stats.failedBatches > 0) {
     // Keep the extracted file and leave the chunk without a .done marker: a
     // re-run picks it straight up from disk and redoes it; articles already
     // stored are skipped by the version check, the failed ones get written.
@@ -1290,6 +1308,7 @@ function donePathFor(chunk) {
  * slot sat idle through its whole download + extraction before embedding.
  */
 async function prepareChunk(chunk, tracker) {
+  if (BUNDLE_MODE) return takeStagedChunk(chunk);
   const alreadyExtractedPath = path.join(destDir, `${chunk.chunkId}.ndjson`);
   if (fs.existsSync(alreadyExtractedPath)) {
     // Downloaded and extracted in a prior run, but not yet embedded when
@@ -1298,7 +1317,6 @@ async function prepareChunk(chunk, tracker) {
     tracker.addBytesBurst(chunk.contentLength);
     return alreadyExtractedPath;
   }
-  if (BUNDLE_MODE) return takeStagedChunk(chunk);
   logDebug(`${chunk.chunkId}: starting download`);
   tracker.setChunkStage(chunk.chunkId, 'downloading', chunk.contentLength);
   // The download reports bytes to the shared counters; this also attributes
@@ -1341,16 +1359,19 @@ async function prepareChunk(chunk, tracker) {
  * when the file is nowhere to be found.
  */
 async function takeStagedChunk(chunk) {
-  const target = path.join(destDir, `${chunk.chunkId}.ndjson`);
   const row = await chunkRow(chunk.chunkId);
   const siblings = siblingStateDirs();
-  const candidates = [row?.staged_path, ...siblings.map((dir) => path.join(dir, `${chunk.chunkId}.ndjson`))].filter(Boolean);
+  const candidates = [row?.staged_path, path.join(SPANS_ARCHIVE_DIR, `${chunk.chunkId}${SPANS_SUFFIX}`)].filter(Boolean);
   for (const source of candidates) {
     if (!fs.existsSync(source)) continue;
-    moveFile(source, target);
-    const checkpoint = path.join(path.dirname(source), `${chunk.chunkId}.progress`);
-    if (siblings.includes(path.dirname(source)) && fs.existsSync(checkpoint)) moveFile(checkpoint, progressCheckpointPath(chunk.chunkId));
-    logDebug(`${chunk.chunkId}: took the staged file from ${source}`);
+    const target = source; // read in place from the archive; never moved or deleted
+    // A checkpoint left by an earlier worker in another state dir: same line
+    // numbers (spans files have one line per raw line), so it still applies.
+    if (!fs.existsSync(progressCheckpointPath(chunk.chunkId))) {
+      const checkpoint = siblings.map((dir) => path.join(dir, `${chunk.chunkId}.progress`)).find((file) => fs.existsSync(file));
+      if (checkpoint) moveFile(checkpoint, progressCheckpointPath(chunk.chunkId));
+    }
+    logDebug(`${chunk.chunkId}: reading the archived spans file ${source}`);
     return target;
   }
   const error = new Error('its staged file is not on disk (re-run fetch-snapshot-bundle.js to stage it again)');
@@ -1531,7 +1552,7 @@ function scanLocalState(chunks, fallbackLines) {
       done.push({ chunkId, totalLines: loadChunkTotalLines(path.join(doneDir, `${chunkId}.done`)) ?? fallbackLines });
       continue;
     }
-    const hasWorkIn = (dir) => (BUNDLE_MODE ? ['.ndjson'] : ['.progress', '.ndjson', '.tar.gz']).some((ext) => fs.existsSync(path.join(dir, `${chunkId}${ext}`)));
+    const hasWorkIn = (dir) => (BUNDLE_MODE ? [] : ['.progress', '.ndjson', '.tar.gz']).some((ext) => fs.existsSync(path.join(dir, `${chunkId}${ext}`)));
     if (hasWorkIn(resolved)) {
       inProgress.push({ chunkId, linesDone: loadLineCheckpoint(chunkId) });
       continue;
@@ -1659,20 +1680,10 @@ async function main() {
   await registerChunks(chunks.map((c) => c.chunkId));
   await adoptPreviousClaims(workerPrefix, workerId);
   if (BUNDLE_MODE) {
-    // No more per-chunk downloads in bundle mode: drop partial ones (the
-    // fetcher stages those chunks from the bundle) and give back their claims.
-    const dropped = [];
-    for (const { chunkId } of chunks) {
-      const partial = path.join(destDir, `${chunkId}.tar.gz`);
-      if (!fs.existsSync(partial) || fs.existsSync(path.join(destDir, `${chunkId}.ndjson`))) continue;
-      for (const ext of ['.tar.gz', '.tar.gz.etag', '.progress']) fs.rmSync(path.join(destDir, `${chunkId}${ext}`), { force: true });
-      dropped.push(chunkId);
-    }
-    await unclaimMine(workerId, dropped);
-    if (dropped.length) {
-      logDebug(`bundle mode: dropped ${dropped.length} partial chunk download(s): ${dropped.join(', ')}`);
-      console.log(`Bundle mode: dropped ${dropped.length} partial chunk download(s); the bundle fetcher stages those chunks instead.`);
-    }
+    // Only spans files are work in bundle mode (raw files are the fetcher's
+    // to convert): keep claims on chunks whose spans file is in this dir,
+    // give the rest back so they're handed out once their spans are staged.
+    await releaseClaimsExcept(workerId, []); // claims are re-taken from staged archive files
   }
   const local = scanLocalState(chunks, recordCount > 0 ? Math.round(recordCount / chunks.length) : null);
   await importLocalState(workerId, local.done, local.inProgress, local.reserved);
@@ -1812,7 +1823,7 @@ async function main() {
       if (outcome.status === 'done') {
         await markDone(id, outcome.totalLines);
       } else if (outcome.status === 'not_staged') {
-        givenUp.add(id); // not for this session; the fetcher can stage it again
+        await unstage([id]); // its spans file is gone: handed out again once the fetcher re-stages it
         await unclaimMine(workerId, [id]);
         tracker.noteIssue('notstaged', 'chunks whose staged file was missing');
       } else {

@@ -698,11 +698,15 @@ async function attemptUpsertSpans(pool, articles, timings) {
       }
       toExtract.push(i);
     });
-    // HTML parsing runs on worker threads (spanWorkerPool.js) so it overlaps
-    // with other batches' embedding and writes instead of blocking them.
+    // Articles that arrive already parsed (`extracted`, from the bundle
+    // fetcher's spans files) skip this; the rest are parsed on worker threads
+    // (spanWorkerPool.js) so parsing overlaps other batches' embedding and writes.
+    const needParse = toExtract.filter((i) => !articles[i].extracted);
     const extractStart = performance.now();
-    const extracted = await extractSpansParallel(toExtract.map((i) => articles[i]), SPAN_OPTIONS);
+    const parsed = await extractSpansParallel(needParse.map((i) => articles[i]), SPAN_OPTIONS);
     timings.extractMs = (timings.extractMs ?? 0) + (performance.now() - extractStart);
+    const parsedByIndex = new Map(needParse.map((i, k) => [i, parsed[k]]));
+    const extracted = toExtract.map((i) => articles[i].extracted ?? parsedByIndex.get(i));
     toExtract.forEach((i, j) => {
       const { title, pageId } = articles[i];
       if (extracted[j].error) {
@@ -847,7 +851,7 @@ async function attemptUpsertSpans(pool, articles, timings) {
  * upsertArticlesBatch, which see. The whole write is one transaction, so a
  * retried attempt never finds half a batch already committed.
  *
- * @param {Array<{title: string, html: string, versionIdentifier: *, pageId: *}>} articles - `html` is article_body.html
+ * @param {Array<{title: string, html?: string, extracted?: {spans: Array, unembedded: Array}|{error: string}, versionIdentifier: *, pageId: *}>} articles - `html` is article_body.html; or `extracted`, spans already parsed (bundle spans files)
  * @param {{readMs: number, embedMs: number, writeMs: number}} [timings]
  * @returns {Promise<Array<{title: string, spanCount: number, unembeddedCount: number, skipped: boolean}>>} one result per input article, same order; spanCount = embedded spans, unembeddedCount = spans stored in UNEMBEDDED_TABLE
  */

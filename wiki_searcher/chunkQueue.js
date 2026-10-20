@@ -247,6 +247,23 @@ export async function bundleFetcherActive() {
   return rows.length > 0;
 }
 
+/** Drops this worker's claims except on `keepIds` (bundle mode: chunks without a spans file go back to the queue). */
+export async function releaseClaimsExcept(workerId, keepIds) {
+  await query(`UPDATE ${QUEUE_TABLE} SET claimed_by = NULL, heartbeat_at = NULL WHERE claimed_by = $1 AND done_at IS NULL AND NOT (chunk_id = ANY($2::text[]))`, [workerId, keepIds]);
+}
+
+/** Rows currently marked as staged (not done). */
+export async function stagedRows() {
+  const { rows } = await query(`SELECT chunk_id, staged_path, claimed_by FROM ${QUEUE_TABLE} WHERE staged_path IS NOT NULL AND done_at IS NULL`);
+  return rows;
+}
+
+/** Clears staging (the staged file is gone): the fetcher stages these again; workers won't be handed them meanwhile. */
+export async function unstage(chunkIds) {
+  if (chunkIds.length === 0) return;
+  await query(`UPDATE ${QUEUE_TABLE} SET staged_path = NULL, staged_at = NULL WHERE chunk_id = ANY($1::text[]) AND done_at IS NULL`, [chunkIds]);
+}
+
 /** One chunk's queue row (or null). */
 export async function chunkRow(chunkId) {
   const { rows } = await query(`SELECT chunk_id, done_at, total_lines, staged_path, claimed_by FROM ${QUEUE_TABLE} WHERE chunk_id = $1`, [chunkId]);
@@ -274,7 +291,7 @@ export async function doneChunkIds() {
 /**
  * @param {string} workerId
  * @param {string[]} [exclude]
- * @param {{ stagedOnly?: boolean }} [options] - bundle mode: only chunks the bundle fetcher has staged on disk (or that this worker already holds)
+ * @param {{ stagedOnly?: boolean }} [options] - bundle mode: only chunks the bundle fetcher has staged (a spans file exists for them)
  */
 export async function claimNext(workerId, exclude = [], { stagedOnly = false } = {}) {
   const { rows } = await query(
@@ -283,7 +300,7 @@ export async function claimNext(workerId, exclude = [], { stagedOnly = false } =
        SELECT chunk_id FROM ${QUEUE_TABLE}
        WHERE done_at IS NULL AND (attempts < $3 OR failed_version IS DISTINCT FROM $5) AND NOT (chunk_id = ANY($2::text[]))
          AND (claimed_by IS NULL OR claimed_by = $1 OR heartbeat_at < now() - make_interval(secs => $4))
-         AND (NOT $6 OR staged_path IS NOT NULL OR claimed_by = $1)
+         AND (NOT $6 OR staged_path IS NOT NULL)
        ORDER BY (claimed_by IS NOT DISTINCT FROM $1) DESC, ord
        LIMIT 1 FOR UPDATE SKIP LOCKED)
      RETURNING chunk_id`,
