@@ -582,6 +582,7 @@ function createProgressDisplay(totalArticles, chunkSlots, shard = null) {
     },
     totalArticles,
     start() {
+      shareAndReadPeers(Date.now(), articles.stats()); // so the very first status line already knows the other shards
       printHeaderBlock();
       render(); // first data row — cursor ends up mid-row, no newline yet
       if (isTTY) {
