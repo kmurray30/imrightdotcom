@@ -162,6 +162,13 @@ const PROGRESS_RENDER_INTERVAL_MS = 200;
 // counter updates.
 const STALL_EXCLUDE_MS = 30_000;
 const ELAPSED_SAVE_INTERVAL_MS = 5_000;
+// Sharded runs (CHUNK_SHARD) share progress through small files in
+// BUILD_PROGRESS_DIR, one per shard, rewritten every PROGRESS_SHARE_INTERVAL_MS,
+// so every process can show the same corpus-wide Progress/Articles/ETA. A
+// shard whose file is older than SHARD_STALE_MS is treated as not running.
+const PROGRESS_DIR = process.env.BUILD_PROGRESS_DIR || './wiki-build-progress';
+const PROGRESS_SHARE_INTERVAL_MS = 2_000;
+const SHARD_STALE_MS = 90_000;
 // Long enough to span several ARTICLE_CONCURRENCY batch-flush cycles (so
 // Art/s doesn't swing between "a batch just landed" and "nothing yet," the
 // problem with the old 5s window), short enough to actually reflect a real
@@ -234,7 +241,7 @@ function createCounter() {
       const recentElapsedSec = (now - oldest.time) / 1000;
       const recentRate = recentElapsedSec > 0 ? (realDone - oldest.realDone) / recentElapsedSec : rate;
 
-      return { done, rate, recentRate };
+      return { done, realDone, rate, recentRate };
     },
   };
 }
@@ -284,7 +291,12 @@ function createStageTimer() {
  * addBytes calls, so the printed row updates at a steady cadence regardless
  * of how bursty either counter's actual updates are.
  */
-function createProgressDisplay(totalArticles, chunkSlots) {
+/**
+ * @param {number} totalArticles - articles this process is responsible for (its shard's share when sharded)
+ * @param {number} chunkSlots
+ * @param {{ index: number, count: number, corpusArticles: number } | null} shard - set in a sharded run: Progress/Articles/ETA then cover all shards
+ */
+function createProgressDisplay(totalArticles, chunkSlots, shard = null) {
   const articles = createCounter();
   const bytes = createCounter();
   const stageNames = ['embed', 'read', 'write'];
@@ -308,6 +320,65 @@ function createProgressDisplay(totalArticles, chunkSlots) {
   let lastSignature = '';
   let stallExcluded = false;
   let lastSavedAt = sessionStart;
+
+  // Sharded run: publish this process's progress and read the other shards'.
+  const statusLineCount = shard ? 2 : 1;
+  const blockHeight = statusLineCount + 5; // status line(s) + top border + header + separator + row + bottom border
+  const shardFile = (k) => path.join(PROGRESS_DIR, `shard-${k}-of-${shard.count}.json`);
+  let lastShareAt = 0;
+  let peers = []; // one entry per shard, this one included; refreshed every PROGRESS_SHARE_INTERVAL_MS
+  function shareAndReadPeers(now, own) {
+    if (!shard || now - lastShareAt < PROGRESS_SHARE_INTERVAL_MS) return;
+    lastShareAt = now;
+    const mine = { shard: shard.index, shards: shard.count, pid: process.pid, articlesDone: own.done, totalArticles, realDone: own.realDone, recentRate: own.recentRate, startedAt: sessionStart, updatedAt: now };
+    try {
+      fs.mkdirSync(PROGRESS_DIR, { recursive: true });
+      fs.writeFileSync(`${shardFile(shard.index)}.tmp`, JSON.stringify(mine));
+      fs.renameSync(`${shardFile(shard.index)}.tmp`, shardFile(shard.index)); // atomic: a reader never sees a half-written file
+    } catch {
+      // unwritable progress dir: the other shards just won't see this one
+    }
+    peers = [];
+    for (let k = 0; k < shard.count; k++) {
+      if (k === shard.index) {
+        peers.push({ ...mine, stale: false, missing: false });
+        continue;
+      }
+      try {
+        const record = JSON.parse(fs.readFileSync(shardFile(k), 'utf8'));
+        peers.push({ ...record, stale: now - record.updatedAt > SHARD_STALE_MS, missing: false });
+      } catch {
+        // never started (or its file is gone): count its share of the corpus as not done
+        peers.push({ shard: k, articlesDone: 0, totalArticles: Math.round(shard.corpusArticles / shard.count), realDone: 0, recentRate: 0, startedAt: now, updatedAt: 0, stale: false, missing: true });
+      }
+    }
+  }
+  /** Corpus-wide numbers across shards. ETA = when the slowest live shard finishes; unknown while any shard is missing or stale and still has work. */
+  function overallProgress(now) {
+    let done = 0;
+    let total = 0;
+    let etaSeconds = 0;
+    let unknown = false;
+    let combinedRate = 0;
+    let live = 0;
+    for (const peer of peers) {
+      done += peer.articlesDone;
+      total += peer.totalArticles;
+      const remaining = peer.totalArticles - peer.articlesDone;
+      if (peer.missing || peer.stale) {
+        if (remaining > 0) unknown = true;
+        continue;
+      }
+      live++;
+      combinedRate += peer.recentRate || 0;
+      if (remaining <= 0) continue;
+      const elapsed = (now - peer.startedAt) / 1000;
+      const rate = elapsed > 0 ? peer.realDone / elapsed : 0;
+      if (rate <= 0) unknown = true;
+      else etaSeconds = Math.max(etaSeconds, remaining / rate);
+    }
+    return { done, total, etaSeconds: unknown ? NaN : etaSeconds, combinedRate, live };
+  }
 
   function saveActive() {
     try {
@@ -353,7 +424,22 @@ function createProgressDisplay(totalArticles, chunkSlots) {
     if (byStage('embedding').length) slotParts.push(`embedding ${byStage('embedding').length}`);
     parts.push(`chunks: ${slotParts.length ? slotParts.join(', ') : 'none in flight'}`);
     parts.push(`model: ${modelStatus ?? 'loads on the first batch'}`);
-    return fitToTerminal(parts.join(' | '));
+    const lines = [fitToTerminal(parts.join(' | '))];
+    if (shard) {
+      const now = Date.now();
+      const { combinedRate, live } = overallProgress(now);
+      const shardParts = [
+        `Shards: this is ${shard.index}/${shard.count} at ${formatCount(articles.done)}/${formatCount(totalArticles)}`,
+        `${live}/${shard.count} live`,
+        `combined ${combinedRate.toFixed(1)} art/s`,
+      ];
+      for (const peer of peers) {
+        if (peer.missing) shardParts.push(`shard ${peer.shard}: not started`);
+        else if (peer.stale) shardParts.push(`shard ${peer.shard}: stale ${formatDuration((now - peer.updatedAt) / 1000)}`);
+      }
+      lines.push(fitToTerminal(shardParts.join(' · ')));
+    }
+    return lines;
   }
 
   // Embed / Read / Write: milliseconds per article within one chunk, reported
@@ -366,7 +452,7 @@ function createProgressDisplay(totalArticles, chunkSlots) {
   const headers = ['Progress', 'Articles', 'ETA', 'Elapsed', 'Art/s', 'DL MB/s', 'Embed', 'Read', 'Write', 'Busy'];
   const widths = [
     Math.max(headers[0].length, PROGRESS_BAR_WIDTH + 2 + 1 + 6), // "[" + bar + "]" + " " + "100.0%"
-    Math.max(headers[1].length, formatCount(totalArticles).length * 2 + 1), // "done/total", sized to the known total on both sides
+    Math.max(headers[1].length, formatCount(shard ? shard.corpusArticles : totalArticles).length * 2 + 1), // "done/total", sized to the known total on both sides
     Math.max(headers[2].length, 7), // "999d23h"-ish worst case
     Math.max(headers[3].length, 7), // active time over all runs, same format
     Math.max(headers[4].length, 6), // rate, e.g. "9999.9"
@@ -381,8 +467,15 @@ function createProgressDisplay(totalArticles, chunkSlots) {
     // rate (lifetime average) drives the ETA; recentRate (short rolling
     // window) drives the displayed Art/s — see createCounter's comment for
     // why these are deliberately different numbers.
-    const { done: articlesDone, rate: lifetimeRate, recentRate: articleRate } = articles.stats();
+    const own = articles.stats();
+    const { done: ownDone, rate: lifetimeRate, recentRate: articleRate } = own;
     const { recentRate: bytesRate } = bytes.stats();
+    shareAndReadPeers(Date.now(), own);
+    // Sharded: the bar, count and ETA describe the whole corpus (identical in
+    // every process); the per-process columns describe this one.
+    const scope = shard ? overallProgress(Date.now()) : null;
+    const articlesDone = scope ? scope.done : ownDone;
+    const scopeTotal = scope ? scope.total : totalArticles;
     const embeddingCount = [...stages.values()].filter((st) => st.stage === 'embedding').length;
     const speedCells = [
       formatDuration(activeMs / 1000),
@@ -393,15 +486,15 @@ function createProgressDisplay(totalArticles, chunkSlots) {
     ];
 
     let cells;
-    if (totalArticles > 0) {
-      const remaining = totalArticles - articlesDone;
-      const etaSeconds = lifetimeRate > 0 ? remaining / lifetimeRate : NaN;
-      const fraction = Math.min(1, articlesDone / totalArticles);
+    if (scopeTotal > 0) {
+      const remaining = scopeTotal - articlesDone;
+      const etaSeconds = scope ? scope.etaSeconds : lifetimeRate > 0 ? remaining / lifetimeRate : NaN;
+      const fraction = Math.min(1, articlesDone / scopeTotal);
       const filled = Math.round(fraction * PROGRESS_BAR_WIDTH);
       const bar = '[' + '█'.repeat(filled) + '░'.repeat(PROGRESS_BAR_WIDTH - filled) + ']';
       cells = [
         `${bar} ${(fraction * 100).toFixed(1)}%`,
-        `${formatCount(articlesDone)}/${formatCount(totalArticles)}`,
+        `${formatCount(articlesDone)}/${formatCount(scopeTotal)}`,
         formatDuration(etaSeconds),
         ...speedCells,
       ];
@@ -429,15 +522,22 @@ function createProgressDisplay(totalArticles, chunkSlots) {
    * existing rows; they don't insert anything.
    */
   function renderInPlace() {
-    if (isTTY) process.stdout.write(`\x1b[6A\r\x1b[2K${statusText()}\x1b[4B\r`);
+    if (isTTY) {
+      // Up to the first status line, rewrite each status line (ending on the
+      // top border's line), then down to the data row.
+      process.stdout.write(`\x1b[${blockHeight}A\r`);
+      for (const line of statusText()) process.stdout.write(`\x1b[2K${line}\n`);
+      process.stdout.write('\x1b[3B\r');
+    }
     render();
     if (isTTY) process.stdout.write('\x1b[2B\r');
   }
 
   let lastPrintedStatus = '';
   function printHeaderBlock() {
-    lastPrintedStatus = statusText();
-    console.log(lastPrintedStatus);
+    const lines = statusText();
+    lastPrintedStatus = lines.join('\n');
+    for (const line of lines) console.log(line);
     console.log(tableBorder(widths));
     console.log(tableRow(headers, widths, headers.map(() => 'center')));
     console.log(tableBorder(widths));
@@ -491,9 +591,10 @@ function createProgressDisplay(totalArticles, chunkSlots) {
         // Not a terminal (piped/redirected): one row per tick, and the status
         // line again whenever what the slots are doing changes.
         intervalId = setInterval(() => {
-          const status = statusText().replace(/^Session \S+/, '');
+          const lines = statusText();
+          const status = lines.join('\n').replace(/^Session \S+/, '');
           if (status !== lastPrintedStatus.replace(/^Session \S+/, '')) {
-            lastPrintedStatus = statusText();
+            lastPrintedStatus = lines.join('\n');
             process.stdout.write(`\n${lastPrintedStatus}\n`);
           }
           render();
@@ -517,7 +618,7 @@ function createProgressDisplay(totalArticles, chunkSlots) {
         console.log(message); // no cursor tricks to worry about when this isn't a real terminal
         return;
       }
-      process.stdout.write('\x1b[6A\r\x1b[0J');
+      process.stdout.write(`\x1b[${blockHeight}A\r\x1b[0J`);
       console.log(message);
       printHeaderBlock();
       render();
@@ -1303,6 +1404,7 @@ async function main() {
     saveSnapshotMetadata(recordCount, chunks);
   }
 
+  const corpusArticles = recordCount;
   if (CHUNK_SHARD) {
     const all = chunks.length;
     chunks = chunks.filter((_, i) => i % CHUNK_SHARD.count === CHUNK_SHARD.index);
@@ -1325,11 +1427,14 @@ async function main() {
     `Embed/Read/Write = ms per article within one embedding chunk (they add up: Art/s ≈ Busy × 1000 / their sum). ` +
       `Busy = chunks embedding / chunk slots — below full means slots are waiting on a download or extraction. ` +
       `Elapsed = active build time over all runs so far (pauses over ${STALL_EXCLUDE_MS / 1000}s are not counted); ` +
-      `the line above the table is this session: its elapsed time, what the chunk slots are doing, and the embedding model's state.`
+      `the line above the table is this session: its elapsed time, what the chunk slots are doing, and the embedding model's state.` +
+      (CHUNK_SHARD
+        ? ` Sharded run: Progress, Articles and ETA cover the whole corpus across all ${CHUNK_SHARD.count} shards (shared through ${PROGRESS_DIR}; ETA = when the slowest shard finishes); the second line above the table is this shard.`
+        : '')
   );
   logDebug(`=== run started: ${chunks.length} chunks, ${formatGB(totalBytes)} GB total ===`);
 
-  const tracker = createProgressDisplay(recordCount, EMBED_CONCURRENCY);
+  const tracker = createProgressDisplay(recordCount, EMBED_CONCURRENCY, CHUNK_SHARD ? { ...CHUNK_SHARD, corpusArticles } : null);
   activeTracker = tracker;
   const avgArticlesPerChunk = recordCount > 0 ? recordCount / chunks.length : 0;
   const totals = { chunksDone: 0, articles: 0, spans: 0, unembedded: 0, alreadyCurrent: 0, failedBatches: 0, failedChunks: [] };
