@@ -137,7 +137,17 @@ const CHUNK_SHARD = (() => {
 // memory per chunk in flight (100 articles' HTML ≈ 10 MB) and makes the
 // per-chunk checkpoint coarser; safe to change between runs.
 const ARTICLE_CONCURRENCY = Number(process.env.ARTICLES_PER_BATCH) || 100;
-process.env.DB_POOL_MAX ??= String(EMBED_CONCURRENCY + 2); // one connection per chunk in flight (see ARTICLE_CONCURRENCY above) + 2 headroom for other occasional queries (refresh-daily.js, etc. sharing the same Postgres); only takes effect if the user hasn't already set this themselves
+process.env.DB_POOL_MAX ??= String(EMBED_CONCURRENCY + 2);
+// A batch of hundreds of articles over a slow tunnel can legitimately take
+// longer than db.js's 30 s default statement timeout; a cancelled statement
+// would just be retried, wasting the work. 10 minutes, unless set already.
+process.env.DB_STATEMENT_TIMEOUT_MS ??= '600000';
+// A chunk that keeps failing (download, extraction, or a batch that gave up)
+// is retried this many times with growing pauses, then set aside and
+// reported at the end; the run goes on with the others.
+const CHUNK_MAX_ATTEMPTS = 6;
+const CHUNK_RETRY_BASE_DELAY_MS = 30_000;
+const CHUNK_RETRY_MAX_DELAY_MS = 10 * 60_000; // one connection per chunk in flight (see ARTICLE_CONCURRENCY above) + 2 headroom for other occasional queries (refresh-daily.js, etc. sharing the same Postgres); only takes effect if the user hasn't already set this themselves
 const METADATA_TIMEOUT_MS = 15_000; // HEAD/info calls should be fast; don't hang forever if one stalls
 const STALL_TIMEOUT_MS = 30_000; // abort a chunk download if no bytes arrive for this long
 const CONSOLE_WARN_THROTTLE_MS = 10_000; // cap how often a retrying download repaints the live console (debug.log still gets every attempt)
@@ -941,7 +951,7 @@ function saveLineCheckpoint(chunkId, lineNumber) {
 async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
   const resumeFromLine = loadLineCheckpoint(chunkId);
   const rl = readline.createInterface({ input: fs.createReadStream(ndjsonPath), crlfDelay: Infinity });
-  const stats = { articles: 0, spans: 0, unembedded: 0, alreadyCurrent: 0, totalLines: 0 };
+  const stats = { articles: 0, spans: 0, unembedded: 0, alreadyCurrent: 0, totalLines: 0, failedBatches: 0 };
   let lastLoggedAt = 0;
   let lineNumber = 0;
 
@@ -961,20 +971,42 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
     const embeddable = batch.filter(({ article }) => article?.article_body?.html);
     const timings = { readMs: 0, embedMs: 0, writeMs: 0 };
     if (embeddable.length > 0) {
-      const results = await upsertSpansBatch(
-        embeddable.map(({ article }) => ({
-          title: article.name,
-          html: article.article_body.html,
-          versionIdentifier: article.version?.identifier,
-          pageId: article.identifier,
-        })),
-        timings
-      );
-      for (const result of results) {
-        stats.articles++;
-        stats.spans += result.spanCount;
-        stats.unembedded += result.unembeddedCount ?? 0;
-        if (result.skipped) stats.alreadyCurrent++;
+      try {
+        const results = await upsertSpansBatch(
+          embeddable.map(({ article }) => ({
+            title: article.name,
+            html: article.article_body.html,
+            versionIdentifier: article.version?.identifier,
+            pageId: article.identifier,
+          })),
+          timings
+        );
+        for (const result of results) {
+          stats.articles++;
+          stats.spans += result.spanCount;
+          stats.unembedded += result.unembeddedCount ?? 0;
+          if (result.skipped) stats.alreadyCurrent++;
+        }
+      } catch (error) {
+        // upsertSpansBatch already retried (connection errors forever, anything
+        // else a few times). Record the batch and move on; the chunk is left
+        // re-runnable (no .done marker, see below) so a re-run redoes it.
+        stats.failedBatches++;
+        const record = {
+          at: new Date().toISOString(),
+          chunkId,
+          lines: [batch[0].lineNumber, batch[batch.length - 1].lineNumber],
+          titles: embeddable.map(({ article }) => article.name),
+          error: error.message,
+        };
+        try {
+          fs.appendFileSync(path.join(destDir, 'failed-batches.ndjson'), JSON.stringify(record) + '\n');
+        } catch {
+          // disk trouble: debug.log below still has it
+        }
+        const message = `⚠ ${chunkId}: batch at lines ${record.lines[0]}–${record.lines[1]} (${embeddable.length} articles) failed and was skipped — ${error.message}`;
+        logDebug(message);
+        tracker.logWarning(message);
       }
     }
 
@@ -1031,7 +1063,14 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
   stats.totalLines = lineNumber; // the chunk's TRUE record count, known for free now that the stream has reached EOF — see processChunk's use of this for exact (not averaged) done-chunk crediting
 
   fs.rmSync(progressCheckpointPath(chunkId), { force: true }); // chunk fully embedded — checkpoint no longer needed, .done supersedes it
-  fs.rmSync(ndjsonPath, { force: true }); // already embedded — don't keep the raw extracted copy around
+  if (stats.failedBatches > 0) {
+    // Keep the extracted file and leave the chunk without a .done marker: a
+    // re-run picks it straight up from disk and redoes it; articles already
+    // stored are skipped by the version check, the failed ones get written.
+    logDebug(`${chunkId}: ${stats.failedBatches} batch(es) failed — not marking done; re-run to redo this chunk from its extracted file`);
+  } else {
+    fs.rmSync(ndjsonPath, { force: true }); // already embedded — don't keep the raw extracted copy around
+  }
   return stats;
 }
 
@@ -1118,7 +1157,7 @@ async function prepareChunk(chunk, tracker) {
  * contain. avgArticlesPerChunk is only the fallback for a chunk finished
  * before this existed.
  */
-async function processChunk(chunk, prepare, tracker, totals, avgArticlesPerChunk) {
+async function processChunk(chunk, prepare, unprepare, tracker, totals, avgArticlesPerChunk) {
   const donePath = donePathFor(chunk);
   if (fs.existsSync(donePath)) {
     tracker.addBytesBurst(chunk.contentLength); // already fully processed in a prior run
@@ -1126,6 +1165,36 @@ async function processChunk(chunk, prepare, tracker, totals, avgArticlesPerChunk
     return;
   }
 
+  // Anything that escapes a chunk (a download that gave up, a broken archive,
+  // a batch that failed after its own retries, a bug) is retried at the
+  // chunk level with a growing pause, and finally set aside — never allowed
+  // to take the whole run down. The chunk's own checkpoint means a retry
+  // resumes rather than restarts.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await processChunkOnce(chunk, prepare, tracker, totals);
+      return;
+    } catch (error) {
+      unprepare(chunk); // a retry re-runs the download/extraction (resuming the partial file) instead of reusing a failed promise
+      tracker.setChunkEmbedding(chunk.chunkId, false);
+      const detail = `${error.message}${error.detail ? ` (${error.detail})` : ''}`;
+      if (attempt >= CHUNK_MAX_ATTEMPTS) {
+        totals.failedChunks.push({ chunkId: chunk.chunkId, error: detail });
+        const message = `✗ ${chunk.chunkId}: giving up after ${attempt} attempts — ${detail}. Set aside; re-run the script later to retry it.`;
+        logDebug(message);
+        tracker.logWarning(message);
+        return;
+      }
+      const delayMs = Math.min(CHUNK_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), CHUNK_RETRY_MAX_DELAY_MS);
+      const message = `⚠ ${chunk.chunkId}: attempt ${attempt}/${CHUNK_MAX_ATTEMPTS} failed — ${detail}; retrying in ${Math.round(delayMs / 1000)}s`;
+      logDebug(message);
+      tracker.logWarning(message);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
+async function processChunkOnce(chunk, prepare, tracker, totals) {
   const ndjsonPath = await prepare(chunk);
   logDebug(`${chunk.chunkId}: starting embed`);
   tracker.setChunkEmbedding(chunk.chunkId, true);
@@ -1140,14 +1209,18 @@ async function processChunk(chunk, prepare, tracker, totals, avgArticlesPerChunk
   totals.spans += stats.spans;
   totals.unembedded += stats.unembedded;
   totals.alreadyCurrent += stats.alreadyCurrent;
+  totals.failedBatches += stats.failedBatches;
 
   const overallDone = tracker.articlesDone();
   const overallPct = tracker.totalArticles > 0 ? ((overallDone / tracker.totalArticles) * 100).toFixed(1) : '?';
   logDebug(
     `${chunk.chunkId}: done — ${stats.articles} articles, ${stats.spans} spans embedded, ${stats.unembedded} stored unembedded, ${stats.alreadyCurrent} already current` +
+      (stats.failedBatches ? `, ${stats.failedBatches} batch(es) FAILED` : '') +
       ` | overall: ${formatCount(overallDone)}/${formatCount(tracker.totalArticles)} articles (${overallPct}%)`
   );
-  fs.writeFileSync(donePath, JSON.stringify({ completedAt: new Date().toISOString(), totalLines: stats.totalLines }));
+  if (stats.failedBatches === 0) {
+    fs.writeFileSync(donePathFor(chunk), JSON.stringify({ completedAt: new Date().toISOString(), totalLines: stats.totalLines }));
+  }
 }
 
 /**
@@ -1259,7 +1332,7 @@ async function main() {
   const tracker = createProgressDisplay(recordCount, EMBED_CONCURRENCY);
   activeTracker = tracker;
   const avgArticlesPerChunk = recordCount > 0 ? recordCount / chunks.length : 0;
-  const totals = { chunksDone: 0, articles: 0, spans: 0, unembedded: 0, alreadyCurrent: 0 };
+  const totals = { chunksDone: 0, articles: 0, spans: 0, unembedded: 0, alreadyCurrent: 0, failedBatches: 0, failedChunks: [] };
 
   // Routes DB connection-drop warnings through the table (full redraw, not a
   // bare console.error mid-row) as well as into debug.log for later tailing.
@@ -1285,6 +1358,9 @@ async function main() {
     }
     return preparations.get(chunk.chunkId);
   }
+  function unprepare(chunk) {
+    preparations.delete(chunk.chunkId);
+  }
 
   tracker.start();
   await runWithConcurrency(
@@ -1292,7 +1368,7 @@ async function main() {
     (chunk, index) => {
       const upcoming = chunks[index + EMBED_CONCURRENCY];
       if (upcoming && !fs.existsSync(donePathFor(upcoming))) prepare(upcoming);
-      return processChunk(chunk, prepare, tracker, totals, avgArticlesPerChunk);
+      return processChunk(chunk, prepare, unprepare, tracker, totals, avgArticlesPerChunk);
     },
     EMBED_CONCURRENCY
   );
@@ -1303,7 +1379,47 @@ async function main() {
       `${totals.articles} articles seen, ${totals.spans} spans embedded, ${totals.unembedded} stored unembedded, ${totals.alreadyCurrent} already current.`
   );
   console.log(`Embedded spans are in ${SPANS_TABLE}; cited spans without an online citation (or too short) in ${UNEMBEDDED_TABLE}. Next: build the compact search index (see README).`);
+  if (totals.failedChunks.length > 0 || totals.failedBatches > 0) {
+    console.log('');
+    if (totals.failedChunks.length > 0) {
+      console.log(`${totals.failedChunks.length} chunk(s) were set aside after repeated failures:`);
+      for (const { chunkId, error } of totals.failedChunks) console.log(`  - ${chunkId}: ${error}`);
+    }
+    if (totals.failedBatches > 0) {
+      console.log(`${totals.failedBatches} batch(es) failed and were skipped (details in ${destDir}/failed-batches.ndjson); their chunks were not marked done.`);
+    }
+    console.log('Re-run this script to retry them — everything already stored is skipped.');
+    process.exitCode = 2;
+  }
 }
+
+// A long run should survive anything that isn't fatal to the process itself:
+// a stray rejection or exception is logged (debug.log + the table) and the
+// run continues — each chunk has its own checkpoint and every DB write is
+// one transaction, so there's no half-written state to protect by dying.
+// SIGTERM (e.g. a port sweep from another tool) is logged so a silent exit
+// has an explanation in debug.log.
+function survive(kind, reason) {
+  const message = `${kind}: ${reason?.stack || reason?.message || reason}`;
+  try {
+    logDebug(message);
+  } catch {
+    // no state dir yet
+  }
+  const oneLine = `⚠ ${message.split('\n')[0]} — continuing`;
+  if (activeTracker) activeTracker.logWarning(oneLine);
+  else console.error(oneLine);
+}
+process.on('unhandledRejection', (reason) => survive('unhandled rejection', reason));
+process.on('uncaughtException', (error) => survive('uncaught exception', error));
+process.on('SIGTERM', () => {
+  try {
+    logDebug('=== received SIGTERM — exiting; re-run to resume ===');
+  } catch {
+    // nothing to log to
+  }
+  process.exit(143);
+});
 
 /**
  * A Postgres "disk full" error ("could not extend file ...: No space left on

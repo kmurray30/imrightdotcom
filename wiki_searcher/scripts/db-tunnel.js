@@ -45,6 +45,21 @@ const RESTART_BACKOFF_MS = 2_000; // brief pause before respawning, so a crash l
 const FORCE_KILL_GRACE_MS = 3_000; // how long SIGTERM gets before SIGKILL
 const PORT_FREE_CHECK_INTERVAL_MS = 300;
 const PORT_FREE_TIMEOUT_MS = 10_000; // give up waiting and attempt the start anyway -- railway's own error is at least visible then, instead of hanging forever
+// A tunnel that is alive but SLOW is restarted too: observed live, write
+// latency through `railway connect` creeps up over hours and a restart
+// brings it back. Baseline = median round trip of the first few healthy
+// checks after a (re)start; when LATENCY_SLOW_CHECKS consecutive checks
+// exceed max(baseline × LATENCY_SLOW_FACTOR, baseline + LATENCY_SLOW_MIN_EXTRA_MS)
+// the tunnel is restarted, at most once per LATENCY_RESTART_MIN_GAP_MS.
+// Independently, TUNNEL_RESTART_EVERY_MIN (env, default 120; 0 = off)
+// restarts it on a schedule as a preventive measure. Each restart costs the
+// build a few seconds: its in-flight batches fail and are retried.
+const LATENCY_BASELINE_SAMPLES = 5;
+const LATENCY_SLOW_CHECKS = 4; // × HEALTH_CHECK_INTERVAL_MS = one minute of sustained slowness
+const LATENCY_SLOW_FACTOR = 2.5;
+const LATENCY_SLOW_MIN_EXTRA_MS = 300;
+const LATENCY_RESTART_MIN_GAP_MS = 10 * 60_000;
+const SCHEDULED_RESTART_MS = (process.env.TUNNEL_RESTART_EVERY_MIN !== undefined ? Number(process.env.TUNNEL_RESTART_EVERY_MIN) : 120) * 60_000;
 
 if (!process.env.DATABASE_URL) {
   console.error(
@@ -74,6 +89,16 @@ function log(message) {
 let child = null;
 let stopping = false;
 let consecutiveFailures = 0;
+let baselineSamples = []; // healthy round trips since the last (re)start, up to LATENCY_BASELINE_SAMPLES
+let consecutiveSlow = 0;
+let lastLatencyRestartAt = 0;
+let tunnelStartedAt = 0;
+
+function latencyBaselineMs() {
+  if (baselineSamples.length < LATENCY_BASELINE_SAMPLES) return null;
+  const sorted = [...baselineSamples].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
 
 /**
  * Kills whatever is actually LISTENING on `targetPort` right now, whether or
@@ -230,8 +255,11 @@ function killChild(proc) {
 async function restartTunnel() {
   const dying = child;
   child = null; // treat as "no tunnel" immediately so a concurrent health-check tick doesn't race this restart
+  baselineSamples = [];
+  consecutiveSlow = 0;
   if (dying) await killChild(dying);
   startTunnel();
+  tunnelStartedAt = Date.now();
 }
 
 /**
@@ -268,7 +296,25 @@ async function healthLoop() {
   if (healthy) {
     if (consecutiveFailures > 0) log('✓ tunnel healthy again');
     consecutiveFailures = 0;
-    log(`  tunnel round trip: ${latencyMs}ms`);
+    const baseline = latencyBaselineMs();
+    if (baseline === null) {
+      baselineSamples.push(latencyMs);
+      log(`  tunnel round trip: ${latencyMs}ms${latencyBaselineMs() !== null ? ` (baseline ${latencyBaselineMs()}ms)` : ''}`);
+      return;
+    }
+    const slowAbove = Math.max(baseline * LATENCY_SLOW_FACTOR, baseline + LATENCY_SLOW_MIN_EXTRA_MS);
+    if (latencyMs > slowAbove) {
+      consecutiveSlow++;
+      log(`  tunnel round trip: ${latencyMs}ms — slow (${consecutiveSlow}/${LATENCY_SLOW_CHECKS}; baseline ${baseline}ms, restart above ${Math.round(slowAbove)}ms)`);
+      if (consecutiveSlow >= LATENCY_SLOW_CHECKS && Date.now() - lastLatencyRestartAt >= LATENCY_RESTART_MIN_GAP_MS) {
+        lastLatencyRestartAt = Date.now();
+        log('✗ tunnel has been slow for a minute — restarting it (the build retries its in-flight batches)');
+        restartTunnel();
+      }
+    } else {
+      consecutiveSlow = 0;
+      log(`  tunnel round trip: ${latencyMs}ms`);
+    }
     return;
   }
 
@@ -291,4 +337,13 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 startTunnel();
+tunnelStartedAt = Date.now();
 setInterval(healthLoop, HEALTH_CHECK_INTERVAL_MS);
+if (SCHEDULED_RESTART_MS > 0) {
+  log(`scheduled restart every ${SCHEDULED_RESTART_MS / 60_000} min (TUNNEL_RESTART_EVERY_MIN=0 disables)`);
+  setInterval(() => {
+    if (stopping || !child || Date.now() - tunnelStartedAt < SCHEDULED_RESTART_MS - HEALTH_CHECK_INTERVAL_MS) return;
+    log('↻ scheduled restart (preventive; the build retries its in-flight batches)');
+    restartTunnel();
+  }, HEALTH_CHECK_INTERVAL_MS);
+}

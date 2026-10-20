@@ -200,6 +200,11 @@ function lockKeysFor(targets) {
 
 const DB_RETRY_BASE_DELAY_MS = 2000;
 const DB_RETRY_MAX_DELAY_MS = 60_000; // cap backoff so "retry forever" doesn't mean waiting an hour between attempts
+// Errors that are NOT a dead connection (a bad row, a transient server
+// error, a worker crash, an embedding failure) are retried too, but not
+// forever: after this many attempts the batch is given up on and the caller
+// records it (build-index-from-wikimedia.js keeps the chunk re-runnable).
+const OTHER_ERROR_MAX_ATTEMPTS = 4;
 
 // Error signatures that mean "the connection itself is the problem" (a flaky
 // tunnel dropping/reconnecting) as opposed to a real bug in the query or
@@ -821,14 +826,26 @@ export async function upsertSpansBatch(articles, timings = { readMs: 0, embedMs:
   if (!pool) throw new Error('DATABASE_URL is not set; cannot write to the wiki citation span index.');
 
   let attempt = 0;
+  let otherAttempts = 0;
   while (true) {
     attempt++;
     try {
       return await attemptUpsertSpans(pool, articles, timings);
     } catch (error) {
-      if (!isRetryableConnectionError(error) && error.code !== '40P01' /* deadlock_detected: retry the attempt */) throw error;
+      const connectionProblem = isRetryableConnectionError(error) || error.code === '40P01'; // deadlock_detected: just retry
+      if (!connectionProblem) {
+        otherAttempts++;
+        if (otherAttempts >= OTHER_ERROR_MAX_ATTEMPTS) {
+          error.message = `${error.message} (gave up after ${otherAttempts} attempts)`;
+          throw error;
+        }
+      }
       const delayMs = Math.min(DB_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), DB_RETRY_MAX_DELAY_MS);
-      logConnectionWarning(`⚠ connection lost (attempt ${attempt}) — ${error.message}, retrying in ${(delayMs / 1000).toFixed(0)}s`);
+      logConnectionWarning(
+        connectionProblem
+          ? `⚠ connection lost (attempt ${attempt}) — ${error.message}, retrying in ${(delayMs / 1000).toFixed(0)}s`
+          : `⚠ batch failed (attempt ${otherAttempts}/${OTHER_ERROR_MAX_ATTEMPTS}) — ${error.message}, retrying in ${(delayMs / 1000).toFixed(0)}s`
+      );
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
