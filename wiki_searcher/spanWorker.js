@@ -11,6 +11,6 @@ parentPort.on('message', ({ id, title, html, options }) => {
     const { spans, unembedded } = extractSpans({ name: title, article_body: { html } }, options);
     parentPort.postMessage({ id, spans, unembedded });
   } catch (error) {
-    parentPort.postMessage({ id, error: error?.stack || String(error) });
+    parentPort.postMessage({ id, articleError: error?.message || String(error) });
   }
 });

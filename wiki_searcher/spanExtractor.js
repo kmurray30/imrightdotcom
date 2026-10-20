@@ -82,6 +82,15 @@ export function isExcludedUrl(url) {
   return EXCLUDED_URL_PATTERNS.some((pattern) => lower.includes(pattern));
 }
 
+/** decodeURIComponent that returns the input unchanged on a malformed escape (real articles have them). */
+function safeDecode(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 function parseDataMw(el) {
   const raw = el.attribs?.['data-mw'];
   if (!raw) return null;
@@ -217,7 +226,7 @@ function citationsFromReferenceEntry($, li, findById) {
   //    entry's; the footnote text (with the page) is kept in front of it.
   scope.find('a[href*="#CITEREF"]').each((_, a) => {
     const href = $(a).attr('href') ?? '';
-    const id = decodeURIComponent(href.slice(href.indexOf('#') + 1));
+    const id = safeDecode(href.slice(href.indexOf('#') + 1));
     const target = findById(id);
     if (target) {
       raw.push({ ...(citationFromElement($, target) ?? { type: 'citation' }), text: `${entryText} — ${cleanText($, target)}` });
@@ -308,7 +317,7 @@ function markerInfo($, sup) {
   if (!refId) {
     const href = $(sup).find('a[href*="#cite_note"]').first().attr('href') ?? '';
     const hash = href.indexOf('#');
-    if (hash !== -1) refId = decodeURIComponent(href.slice(hash + 1));
+    if (hash !== -1) refId = safeDecode(href.slice(hash + 1));
   }
   const group = dataMw?.attrs?.group ?? null;
   // Notes render as "[note 1]", "[a]", "[nb 2]" … citations as "[12]".

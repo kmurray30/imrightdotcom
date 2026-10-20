@@ -209,3 +209,19 @@ describe('real Enterprise records (optional fixture)', () => {
     assert.ok(total > 0, 'expected at least one span across the sampled records');
   });
 });
+
+describe('malformed percent-escapes in links (seen in real articles)', () => {
+  const bad = `<html><body><section data-mw-section-id="0">
+<p>This paragraph has a citation whose marker link carries a broken percent escape in it.<sup class="mw-ref reference" typeof="mw:Extension/ref"><a href="./X#cite_note-%E0%A4%A"><span class="mw-reflink-text">[1]</span></a></sup> And this sentence is cited by a short footnote whose link is broken too.<sup class="mw-ref reference" typeof="mw:Extension/ref"><a href="./X#cite_note-sfn-2"><span class="mw-reflink-text">[2]</span></a></sup></p>
+</section><section data-mw-section-id="1"><h2>References</h2><ol class="mw-references references">
+<li id="cite_note-%E0%A4%A"><span class="mw-reference-text reference-text"><a rel="mw:ExtLink" class="external free" href="https://example.org/a">https://example.org/a</a></span></li>
+<li id="cite_note-sfn-2"><span class="mw-reference-text reference-text"><a href="#CITEREF%ZZbroken">Someone 1999</a>, p. 3.</span></li>
+</ol></section></body></html>`;
+
+  test('extraction does not throw and still keeps what it can', () => {
+    const { spans, unembedded } = extractSpans(bad, { includeListItems: true, includeTableRows: true });
+    assert.deepStrictEqual(spans.map((s) => s.citations[0].url), ['https://example.org/a']);
+    assert.strictEqual(unembedded.length, 1); // the footnote's target can't be resolved: stored as an offline citation
+    assert.strictEqual(unembedded[0].citations[0].url, null);
+  });
+});

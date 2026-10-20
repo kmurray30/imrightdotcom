@@ -74,6 +74,8 @@ import path from 'path';
 import readline from 'readline';
 import { Readable } from 'stream';
 import { execFile } from 'child_process';
+import { createHash } from 'crypto';
+import { fileURLToPath } from 'url';
 import { promisify } from 'util';
 import { loadEnv } from '../../imright/load-env.js';
 import { getAccessToken } from '../../utils/wikimediaAuth.js';
@@ -81,7 +83,7 @@ import { callExternalApi, HttpStatusError, timeoutSignal } from '../../utils/ext
 import { upsertSpansBatch, ensureSpansTable, SPANS_TABLE, UNEMBEDDED_TABLE, SPAN_OPTIONS, setConnectionWarningLogger } from '../embeddingIndex.js';
 import {
   ensureQueueTable, registerChunks, importLocalState, claimNext, heartbeat, markDone, release, queueSnapshot,
-  runQueue, pendingCount, setQueueWarningLogger, recordProgressSample, seedActiveMs, doneChunkIds, QUEUE_TABLE, MAX_CHUNK_ATTEMPTS,
+  runQueue, pendingCount, setQueueWarningLogger, recordProgressSample, seedActiveMs, doneChunkIds, setCodeVersion, QUEUE_TABLE, MAX_CHUNK_ATTEMPTS,
 } from '../chunkQueue.js';
 import { setLogger as setEmbedLogger, embedConfig } from '../textEmbeddings.js';
 import { formatDuration, fitToTerminal, tableBorder, tableRow } from './terminalTable.js';
@@ -153,7 +155,68 @@ const CHUNK_RETRY_BASE_DELAY_MS = 30_000;
 const CHUNK_RETRY_MAX_DELAY_MS = 10 * 60_000; // one connection per chunk in flight (see ARTICLE_CONCURRENCY above) + 2 headroom for other occasional queries (refresh-daily.js, etc. sharing the same Postgres); only takes effect if the user hasn't already set this themselves
 const METADATA_TIMEOUT_MS = 15_000; // HEAD/info calls should be fast; don't hang forever if one stalls
 const STALL_TIMEOUT_MS = 30_000; // abort a chunk download if no bytes arrive for this long
-const CONSOLE_WARN_THROTTLE_MS = 10_000; // cap how often a retrying download repaints the live console (debug.log still gets every attempt)
+// Wikimedia answers too many parallel snapshot downloads with 429. On a 429
+// every download in this process pauses (Retry-After, else 30 s doubling per
+// consecutive 429, up to 10 min); a successful response resets the backoff.
+// DOWNLOAD_CONCURRENCY caps downloads in flight per process (default 2).
+const DOWNLOAD_CONCURRENCY = Number(process.env.DOWNLOAD_CONCURRENCY) || 2;
+const RATE_LIMIT_BASE_MS = 30_000;
+const RATE_LIMIT_MAX_MS = 10 * 60_000;
+let rateLimitedUntil = 0;
+let consecutiveRateLimits = 0;
+
+async function waitForRateLimit() {
+  while (Date.now() < rateLimitedUntil) await new Promise((resolve) => setTimeout(resolve, Math.min(rateLimitedUntil - Date.now(), 5_000)));
+}
+
+/** Call with every Wikimedia response: a 429 starts or extends the shared pause; anything else clears the backoff. */
+function noteWikimediaResponse(response) {
+  if (response.status !== 429) {
+    consecutiveRateLimits = 0;
+    return;
+  }
+  consecutiveRateLimits++;
+  const retryAfter = Number(response.headers.get('retry-after'));
+  const pauseMs = Number.isFinite(retryAfter) && retryAfter > 0
+    ? Math.min(retryAfter * 1000, RATE_LIMIT_MAX_MS)
+    : Math.min(RATE_LIMIT_BASE_MS * 2 ** (consecutiveRateLimits - 1), RATE_LIMIT_MAX_MS);
+  const until = Date.now() + pauseMs;
+  if (until > rateLimitedUntil) {
+    rateLimitedUntil = until;
+    logDebug(`Wikimedia rate limit (429): pausing all downloads for ${Math.round(pauseMs / 1000)}s`);
+    activeTracker?.noteIssue('ratelimit', 'Wikimedia rate limit');
+  }
+}
+
+function createSemaphore(limit) {
+  let active = 0;
+  const waiting = [];
+  return async (fn) => {
+    if (active >= limit) await new Promise((resolve) => waiting.push(resolve));
+    active++;
+    try {
+      return await fn();
+    } finally {
+      active--;
+      waiting.shift()?.();
+    }
+  };
+}
+const downloadSlot = createSemaphore(DOWNLOAD_CONCURRENCY);
+
+/** Fingerprint of the code that extracts and writes spans: a chunk given up on by a different version gets retried (chunkQueue.js). */
+function buildCodeVersion() {
+  const here = fileURLToPath(import.meta.url);
+  const hash = createHash('sha1');
+  for (const file of [here, path.join(path.dirname(here), '..', 'spanExtractor.js'), path.join(path.dirname(here), '..', 'embeddingIndex.js')]) {
+    try {
+      hash.update(fs.readFileSync(file));
+    } catch {
+      hash.update(file);
+    }
+  }
+  return hash.digest('hex').slice(0, 12);
+}
 
 const PROGRESS_BAR_WIDTH = 30; // fitToTerminal() truncates safely on a narrow terminal, so there's no need to keep this cramped for width's sake
 const PROGRESS_RENDER_INTERVAL_MS = 200;
@@ -322,7 +385,9 @@ function createProgressDisplay(totalArticles, chunkSlots, queue = null) {
   // machines): lines done, plus the combined rate and active build time from
   // the shared progress history (chunkQueue.js progressStats) — the same
   // numbers in every process.
-  const statusLineCount = queue ? 2 : 1;
+  const statusLineCount = queue ? 3 : 2; // session line, (workers line,) issues line
+  const ISSUE_SHOW_MS = 2 * 60_000;
+  const issues = new Map(); // kind → { label, times: [] }
   const blockHeight = statusLineCount + 5; // status line(s) + top border + header + separator + row + bottom border
   function queueProgress() {
     const snap = queue?.snapshot();
@@ -375,6 +440,7 @@ function createProgressDisplay(totalArticles, chunkSlots, queue = null) {
       slotParts.push(`downloading ${downloading.length}${total ? ` (${Math.min(100, (done / total) * 100).toFixed(0)}%)` : ''}`);
     }
     if (byStage('extracting').length) slotParts.push(`extracting ${byStage('extracting').length}`);
+    if (byStage('waiting').length) slotParts.push(`${byStage('waiting').length} waiting to download`);
     if (byStage('embedding').length) slotParts.push(`embedding ${byStage('embedding').length}`);
     parts.push(`chunks: ${slotParts.length ? slotParts.join(', ') : 'none in flight'}`);
     parts.push(`model: ${modelStatus ?? 'loads on the first batch'}`);
@@ -400,7 +466,22 @@ function createProgressDisplay(totalArticles, chunkSlots, queue = null) {
         lines.push(fitToTerminal(workerParts.join(' · ')));
       }
     }
+    lines.push(fitToTerminal(issuesText()));
     return lines;
+  }
+
+  /** Transient problems of the last ISSUE_SHOW_MS, one compact line (details are in debug.log). */
+  function issuesText() {
+    const now = Date.now();
+    const parts = [];
+    for (const issue of issues.values()) {
+      issue.times = issue.times.filter((t) => now - t <= ISSUE_SHOW_MS);
+      if (issue.times.length === 0) continue;
+      const ago = formatDuration((now - issue.times[issue.times.length - 1]) / 1000);
+      parts.push(`${issue.label} ×${issue.times.length} (last ${ago} ago)`);
+    }
+    if (rateLimitedUntil > now) parts.unshift(`downloads paused by Wikimedia rate limit, resuming in ${formatDuration((rateLimitedUntil - now) / 1000)}`);
+    return parts.length ? `Issues (last 2 min, details in debug.log): ${parts.join(' · ')}` : 'Issues: none in the last 2 min';
   }
 
   // Embed / Read / Write: milliseconds per article within one chunk, reported
@@ -535,6 +616,13 @@ function createProgressDisplay(totalArticles, chunkSlots, queue = null) {
     setChunkEmbedding(chunkId, isEmbedding) {
       this.setChunkStage(chunkId, isEmbedding ? 'embedding' : null);
     },
+    /** Records a transient problem for the issues line (nothing printed above the table). */
+    noteIssue(kind, label) {
+      const issue = issues.get(kind) ?? { label, times: [] };
+      issue.label = label;
+      issue.times.push(Date.now());
+      issues.set(kind, issue);
+    },
     setModelStatus(status) {
       modelStatus = status;
     },
@@ -574,7 +662,9 @@ function createProgressDisplay(totalArticles, chunkSlots, queue = null) {
      * and rebuilding it the same way start() originally laid it out restores
      * that same invariant for every renderInPlace tick afterward.
      */
-    logWarning(message) {
+    logWarning(fullMessage) {
+      const firstLine = String(fullMessage).split('\n')[0];
+      const message = firstLine.length > 200 ? `${firstLine.slice(0, 199)}…` : firstLine;
       if (!isTTY) {
         console.log(message); // no cursor tricks to worry about when this isn't a real terminal
         return;
@@ -624,11 +714,13 @@ async function authHeader() {
 
 async function fetchJson(url, method = 'GET') {
   return withRetry('snapshot_info', async () => {
+    await waitForRateLimit();
     const response = await fetch(url, {
       method,
       headers: await authHeader(),
       signal: timeoutSignal(METADATA_TIMEOUT_MS),
     });
+    noteWikimediaResponse(response);
     if (!response.ok) throwForBadResponse(response, `${method} ${url} failed: ${response.status} ${response.statusText}`);
     return response.json();
   });
@@ -636,11 +728,13 @@ async function fetchJson(url, method = 'GET') {
 
 async function headDownload(url) {
   return withRetry('snapshot_head', async () => {
+    await waitForRateLimit();
     const response = await fetch(url, {
       method: 'HEAD',
       headers: await authHeader(),
       signal: timeoutSignal(METADATA_TIMEOUT_MS),
     });
+    noteWikimediaResponse(response);
     if (!response.ok) throwForBadResponse(response, `HEAD ${url} failed: ${response.status} ${response.statusText}`);
     return {
       contentLength: Number(response.headers.get('content-length')),
@@ -724,11 +818,11 @@ async function downloadOne(url, filePath, tracker, metadata) {
   // "retry forever, but tell me when it happens" principle already used for
   // DB connection retries).
   let attemptNumber = 0;
-  let lastConsoleWarnAt = 0;
   await withRetry(
     'snapshot_chunk_download',
     async () => {
       attemptNumber++;
+      await waitForRateLimit(); // before the stall timer starts: a rate-limit pause is not a stall
       // Re-check on every retry attempt — a prior attempt may have written
       // some bytes before failing, so this needs to reflect what's on disk
       // right now, not what it was when downloadOne started.
@@ -750,6 +844,7 @@ async function downloadOne(url, filePath, tracker, metadata) {
       let bytesThisAttempt = 0;
       try {
         const response = await fetch(url, { headers: attemptHeaders, signal: controller.signal });
+        noteWikimediaResponse(response);
         if (response.status === 416) {
           alreadyComplete = true;
           return;
@@ -876,11 +971,7 @@ async function downloadOne(url, filePath, tracker, metadata) {
         // separately from debug.log -- every attempt is always logged to
         // disk, but a chunk retrying rapidly shouldn't repaint the console
         // on every single one of them.
-        const now = Date.now();
-        if (now - lastConsoleWarnAt >= CONSOLE_WARN_THROTTLE_MS) {
-          tracker.logWarning(`⚠ ${message} — retrying`);
-          lastConsoleWarnAt = now;
-        }
+        if (failure.status !== 429) activeTracker?.noteIssue('download', 'download retries'); // a 429 is reported once per pause (noteWikimediaResponse)
         throw failure;
       } finally {
         clearTimeout(stallTimer);
@@ -1016,7 +1107,7 @@ function saveLineCheckpoint(chunkId, lineNumber) {
 async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
   const resumeFromLine = loadLineCheckpoint(chunkId);
   const rl = readline.createInterface({ input: fs.createReadStream(ndjsonPath), crlfDelay: Infinity });
-  const stats = { articles: 0, spans: 0, unembedded: 0, alreadyCurrent: 0, totalLines: 0, failedBatches: 0 };
+  const stats = { articles: 0, spans: 0, unembedded: 0, alreadyCurrent: 0, totalLines: 0, failedBatches: 0, failedArticles: 0 };
   let lastLoggedAt = 0;
   let lineNumber = 0;
 
@@ -1051,7 +1142,16 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
           stats.articles++;
           stats.spans += result.spanCount;
           stats.unembedded += result.unembeddedCount ?? 0;
-          if (result.skipped) stats.alreadyCurrent++;
+          if (result.failed) {
+            stats.failedArticles++;
+            try {
+              fs.appendFileSync(path.join(destDir, 'failed-articles.ndjson'), JSON.stringify({ at: new Date().toISOString(), chunkId, title: result.title, error: result.error }) + '\n');
+            } catch {
+              // disk trouble: debug.log still has it
+            }
+            logDebug(`${chunkId}: article "${result.title}" skipped — span extraction failed: ${result.error}`);
+            tracker.noteIssue('article', 'articles skipped (failed-articles.ndjson)');
+          } else if (result.skipped) stats.alreadyCurrent++;
         }
       } catch (error) {
         // upsertSpansBatch already retried (connection errors forever, anything
@@ -1070,7 +1170,7 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
         } catch {
           // disk trouble: debug.log below still has it
         }
-        const message = `⚠ ${chunkId}: batch at lines ${record.lines[0]}–${record.lines[1]} (${embeddable.length} articles) failed and was skipped — ${error.message}`;
+        const message = `⚠ ${chunkId}: batch at lines ${record.lines[0]}–${record.lines[1]} (${embeddable.length} articles) failed and was skipped — ${String(error.message).split('\n')[0]}`;
         logDebug(message);
         tracker.logWarning(message);
       }
@@ -1198,10 +1298,14 @@ async function prepareChunk(chunk, tracker) {
     },
   };
   try {
-    await downloadOne(chunk.url, chunk.filePath, chunkTracker, {
-      contentLength: chunk.contentLength,
-      etag: chunk.etag,
-      acceptsRanges: chunk.acceptsRanges,
+    tracker.setChunkStage(chunk.chunkId, 'waiting');
+    await downloadSlot(async () => {
+      tracker.setChunkStage(chunk.chunkId, 'downloading', chunk.contentLength);
+      await downloadOne(chunk.url, chunk.filePath, chunkTracker, {
+        contentLength: chunk.contentLength,
+        etag: chunk.etag,
+        acceptsRanges: chunk.acceptsRanges,
+      });
     });
     logDebug(`${chunk.chunkId}: download complete, extracting`);
     tracker.setChunkStage(chunk.chunkId, 'extracting');
@@ -1462,7 +1566,12 @@ async function main() {
   const embedSettings = embedConfig();
   const workerPrefix = `${os.hostname()}:${path.basename(path.resolve(destDir))}`;
   const workerId = `${workerPrefix}:${embedSettings.device}`;
-  setQueueWarningLogger((message) => (activeTracker ? activeTracker.logWarning(message) : console.error(message)));
+  setQueueWarningLogger((message) => {
+    logDebug(message);
+    if (activeTracker) activeTracker.noteIssue('db', 'DB reconnecting');
+    else console.error(message);
+  });
+  setCodeVersion(buildCodeVersion());
   await ensureQueueTable();
   await registerChunks(chunks.map((c) => c.chunkId));
   await adoptPreviousClaims(workerPrefix, workerId);
@@ -1528,7 +1637,8 @@ async function main() {
   // bare console.error mid-row) as well as into debug.log for later tailing.
   setConnectionWarningLogger((message) => {
     logDebug(message);
-    tracker.logWarning(message);
+    if (/batch failed/.test(message)) tracker.noteIssue('batchretry', 'batch retries');
+    else tracker.noteIssue('db', 'DB reconnecting');
   });
 
   // Prefetch: each chunk's download + extraction is started one "round" ahead

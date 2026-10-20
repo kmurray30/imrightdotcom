@@ -15,7 +15,7 @@
  */
 import os from 'node:os';
 import { getPool } from '../imright/scripts/db.js';
-import { isRetryableConnectionError, withSchemaLock } from './embeddingIndex.js';
+import { isRetryableConnectionError, withSchemaLock, describeError } from './embeddingIndex.js';
 
 export const QUEUE_TABLE = 'wiki_build_chunks';
 /** One row about every minute (whichever worker gets there first): the queue's total lines done. Shared rate, ETA and elapsed come from this. */
@@ -28,6 +28,13 @@ const LEASE_SEC = Number(process.env.CHUNK_LEASE_SEC) || 300;
 /** A chunk released this many times (each release = the build gave up on it after its own retries) is no longer handed out. */
 export const MAX_CHUNK_ATTEMPTS = 6;
 const RETRY_BASE_MS = 2000;
+// Identifies the code that decided to give up on a chunk: a chunk given up
+// on by older code (possibly a bug since fixed) is handed out again to
+// newer code, however many attempts it already has.
+let codeVersion = 'unknown';
+export function setCodeVersion(version) {
+  codeVersion = version;
+}
 const RETRY_MAX_MS = 60_000;
 
 let warn = console.error;
@@ -49,7 +56,7 @@ async function query(sql, params = []) {
     } catch (error) {
       if (!isRetryableConnectionError(error)) throw error;
       const delayMs = Math.min(RETRY_BASE_MS * 2 ** (attempt - 1), RETRY_MAX_MS);
-      warn(`⚠ chunk queue: connection lost (attempt ${attempt}) — ${error.message}, retrying in ${Math.round(delayMs / 1000)}s`);
+      warn(`⚠ chunk queue: connection lost (attempt ${attempt}) — ${describeError(error)}, retrying in ${Math.round(delayMs / 1000)}s`);
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
@@ -70,6 +77,7 @@ export async function ensureQueueTable() {
         attempts     INT NOT NULL DEFAULT 0,
         last_error   TEXT
       )`);
+    await client.query(`ALTER TABLE ${QUEUE_TABLE} ADD COLUMN IF NOT EXISTS failed_version TEXT`);
     await client.query(`CREATE TABLE IF NOT EXISTS ${PROGRESS_TABLE} (taken_at TIMESTAMPTZ PRIMARY KEY DEFAULT clock_timestamp(), lines_done BIGINT NOT NULL)`);
     await client.query(`CREATE TABLE IF NOT EXISTS ${META_TABLE} (key TEXT PRIMARY KEY, value JSONB NOT NULL)`);
   });
@@ -205,12 +213,12 @@ export async function claimNext(workerId, exclude = []) {
     `UPDATE ${QUEUE_TABLE} SET claimed_by = $1, claimed_at = now(), heartbeat_at = now()
      WHERE chunk_id = (
        SELECT chunk_id FROM ${QUEUE_TABLE}
-       WHERE done_at IS NULL AND attempts < $3 AND NOT (chunk_id = ANY($2::text[]))
+       WHERE done_at IS NULL AND (attempts < $3 OR failed_version IS DISTINCT FROM $5) AND NOT (chunk_id = ANY($2::text[]))
          AND (claimed_by IS NULL OR claimed_by = $1 OR heartbeat_at < now() - make_interval(secs => $4))
        ORDER BY (claimed_by IS NOT DISTINCT FROM $1) DESC, ord
        LIMIT 1 FOR UPDATE SKIP LOCKED)
      RETURNING chunk_id`,
-    [workerId, exclude, MAX_CHUNK_ATTEMPTS, LEASE_SEC]
+    [workerId, exclude, MAX_CHUNK_ATTEMPTS, LEASE_SEC, codeVersion]
   );
   return rows[0]?.chunk_id ?? null;
 }
@@ -238,8 +246,10 @@ export async function markDone(chunkId, totalLines) {
 /** Gives a chunk back after the build gave up on it: anyone may retry it later, up to MAX_CHUNK_ATTEMPTS releases. */
 export async function release(chunkId, error) {
   await query(
-    `UPDATE ${QUEUE_TABLE} SET claimed_by = NULL, heartbeat_at = NULL, attempts = attempts + 1, last_error = $2 WHERE chunk_id = $1`,
-    [chunkId, String(error ?? '').slice(0, 2000)]
+    `UPDATE ${QUEUE_TABLE} SET claimed_by = NULL, heartbeat_at = NULL,
+       attempts = CASE WHEN failed_version IS DISTINCT FROM $3 THEN 1 ELSE attempts + 1 END, failed_version = $3, last_error = $2
+     WHERE chunk_id = $1`,
+    [chunkId, String(error ?? '').slice(0, 2000), codeVersion]
   );
 }
 
@@ -262,8 +272,8 @@ export async function queueSnapshot() {
     `SELECT DISTINCT claimed_by FROM ${QUEUE_TABLE} WHERE claimed_by IS NOT NULL AND done_at IS NULL AND heartbeat_at > now() - interval '90 seconds'`
   );
   const { rows: stuck } = await query(
-    `SELECT chunk_id, attempts, last_error FROM ${QUEUE_TABLE} WHERE done_at IS NULL AND attempts >= $1 ORDER BY ord`,
-    [MAX_CHUNK_ATTEMPTS]
+    `SELECT chunk_id, attempts, last_error FROM ${QUEUE_TABLE} WHERE done_at IS NULL AND attempts >= $1 AND failed_version IS NOT DISTINCT FROM $2 ORDER BY ord`,
+    [MAX_CHUNK_ATTEMPTS, codeVersion]
   );
   const stats = await progressStats();
   return {
@@ -282,8 +292,8 @@ export async function queueSnapshot() {
  */
 export async function pendingCount(exclude = []) {
   const { rows } = await query(
-    `SELECT count(*)::int AS n FROM ${QUEUE_TABLE} WHERE done_at IS NULL AND attempts < $2 AND NOT (chunk_id = ANY($1::text[]))`,
-    [exclude, MAX_CHUNK_ATTEMPTS]
+    `SELECT count(*)::int AS n FROM ${QUEUE_TABLE} WHERE done_at IS NULL AND (attempts < $2 OR failed_version IS DISTINCT FROM $3) AND NOT (chunk_id = ANY($1::text[]))`,
+    [exclude, MAX_CHUNK_ATTEMPTS, codeVersion]
   );
   return rows[0].n;
 }

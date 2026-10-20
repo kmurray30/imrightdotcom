@@ -26,7 +26,7 @@ function startPool() {
       pendingById.delete(message.id);
       worker.busy--;
       if (worker.busy === 0) worker.unref(); // idle again: must not keep the process alive
-      if (message.error) pending.reject(new Error(`span extraction failed in worker: ${message.error}`));
+      if (message.articleError) pending.resolve({ error: message.articleError }); // this article only: the rest of the batch goes on
       else pending.resolve({ spans: message.spans, unembedded: message.unembedded });
     });
     worker.on('error', (error) => {
@@ -60,11 +60,19 @@ function extractInWorker(article, options) {
 /**
  * extractSpans for many articles, in parallel on the pool. Same order as the input.
  * @param {Array<{title: string, html: string}>} articles
- * @returns {Promise<Array<{spans: Array, unembedded: Array}>>}
+ * @returns {Promise<Array<{spans: Array, unembedded: Array} | {error: string}>>} an article whose extraction threw gets `{ error }`; the others are unaffected
  */
 export function extractSpansParallel(articles, options) {
   if (size <= 0 || articles.length === 0) {
-    return Promise.resolve(articles.map((a) => extractSpans({ name: a.title, article_body: { html: a.html } }, options)));
+    return Promise.resolve(
+      articles.map((a) => {
+        try {
+          return extractSpans({ name: a.title, article_body: { html: a.html } }, options);
+        } catch (error) {
+          return { error: error?.message || String(error) };
+        }
+      })
+    );
   }
   return Promise.all(articles.map((article) => extractInWorker(article, options)));
 }

@@ -222,6 +222,11 @@ const RETRYABLE_ERROR_CODES = new Set([
 ]);
 const RETRYABLE_ERROR_MESSAGES = ['Connection terminated unexpectedly', 'Connection terminated due to connection timeout'];
 
+/** A readable reason for any error: a socket error with several addresses (AggregateError) has an empty message but a code. */
+export function describeError(error) {
+  return error?.message || error?.code || error?.errors?.[0]?.message || error?.errors?.[0]?.code || error?.name || String(error);
+}
+
 export function isRetryableConnectionError(error) {
   if (error?.code && RETRYABLE_ERROR_CODES.has(error.code)) return true;
   return typeof error?.message === 'string' && RETRYABLE_ERROR_MESSAGES.some((msg) => error.message.includes(msg));
@@ -504,7 +509,7 @@ export async function upsertArticlesBatch(articles, timings = { readMs: 0, embed
     } catch (error) {
       if (!isRetryableConnectionError(error)) throw error;
       const delayMs = Math.min(DB_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), DB_RETRY_MAX_DELAY_MS);
-      logConnectionWarning(`⚠ connection lost (attempt ${attempt}) — ${error.message}, retrying in ${(delayMs / 1000).toFixed(0)}s`);
+      logConnectionWarning(`⚠ connection lost (attempt ${attempt}) — ${describeError(error)}, retrying in ${(delayMs / 1000).toFixed(0)}s`);
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
@@ -700,6 +705,11 @@ async function attemptUpsertSpans(pool, articles, timings) {
     timings.extractMs = (timings.extractMs ?? 0) + (performance.now() - extractStart);
     toExtract.forEach((i, j) => {
       const { title, pageId } = articles[i];
+      if (extracted[j].error) {
+        // Leave this article's stored rows alone and report it; the rest of the batch goes on.
+        results[i] = { title, spanCount: 0, unembeddedCount: 0, skipped: true, failed: true, error: extracted[j].error };
+        return;
+      }
       const { spans, unembedded } = extracted[j];
       targets.push({ index: i, title, pageId: pageId ?? null });
       results[i] = { title, spanCount: spans.length, unembeddedCount: unembedded.length, skipped: false };
@@ -864,8 +874,8 @@ export async function upsertSpansBatch(articles, timings = { readMs: 0, embedMs:
       const delayMs = Math.min(DB_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), DB_RETRY_MAX_DELAY_MS);
       logConnectionWarning(
         connectionProblem
-          ? `⚠ connection lost (attempt ${attempt}) — ${error.message}, retrying in ${(delayMs / 1000).toFixed(0)}s`
-          : `⚠ batch failed (attempt ${otherAttempts}/${OTHER_ERROR_MAX_ATTEMPTS}) — ${error.message}, retrying in ${(delayMs / 1000).toFixed(0)}s`
+          ? `⚠ connection lost (attempt ${attempt}) — ${describeError(error)}, retrying in ${(delayMs / 1000).toFixed(0)}s`
+          : `⚠ batch failed (attempt ${otherAttempts}/${OTHER_ERROR_MAX_ATTEMPTS}) — ${describeError(error).split('\n')[0]}, retrying in ${(delayMs / 1000).toFixed(0)}s`
       );
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
