@@ -258,6 +258,19 @@ export async function stagedRows() {
   return rows;
 }
 
+/** For the fetcher's display: staged units waiting for a worker, being embedded now, and units done. */
+export async function embedderOverview() {
+  const { rows: [row] } = await query(
+    `SELECT count(*) FILTER (WHERE done_at IS NOT NULL AND last_error IS DISTINCT FROM 'superseded: its articles come from bundle units')::int AS done,
+            count(*) FILTER (WHERE done_at IS NULL AND staged_path IS NOT NULL AND claimed_by IS NOT NULL AND heartbeat_at > now() - interval '90 seconds')::int AS embedding,
+            count(*) FILTER (WHERE done_at IS NULL AND staged_path IS NOT NULL)::int AS staged,
+            count(*) FILTER (WHERE done_at IS NULL AND (attempts < $1 OR failed_version IS DISTINCT FROM $2))::int AS left
+     FROM ${QUEUE_TABLE}`,
+    [MAX_CHUNK_ATTEMPTS, codeVersion]
+  );
+  return { done: row.done, embedding: row.embedding, waiting: row.staged - row.embedding, left: row.left };
+}
+
 /** Clears staging (the staged file is gone): the fetcher stages these again; workers won't be handed them meanwhile. */
 export async function unstage(chunkIds) {
   if (chunkIds.length === 0) return;

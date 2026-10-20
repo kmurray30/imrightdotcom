@@ -47,6 +47,7 @@ import tar from 'tar-stream';
 import { createHash } from 'crypto';
 import { loadEnv } from '../../imright/load-env.js';
 import { getAccessToken } from '../../utils/wikimediaAuth.js';
+import { createPanel, color, bar, fit, formatBytes, formatCount, formatDuration } from '../fetcherDisplay.js';
 
 loadEnv();
 process.env.DB_IDLE_TIMEOUT_MS ??= '0'; // keep connections open (see build-index-from-wikimedia.js)
@@ -77,11 +78,18 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function log(message) {
   fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${message}\n`);
 }
+/** An event line: printed above the live panel (and to the log). */
 function say(message) {
-  log(message);
-  process.stdout.write(`\r\x1b[K${message}\n`);
+  log(message.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ''));
+  panel.event(message);
 }
+/** "chunk 171" for enwiki_namespace_0_chunk_171; bundle units keep their name. */
+const unitLabel = (unitId) => {
+  const n = /_chunk_(\d+)$/.exec(unitId)?.[1];
+  return n === undefined ? unitId : `chunk ${n}`;
+};
 const formatGB = (bytes) => (bytes / 1e9).toFixed(1);
+const shortPath = (p) => path.relative(process.cwd(), p) || '.';
 
 /** The build's state dirs in the working directory (wiki-snapshots-v2, -v2b, …). */
 function workerDirs() {
@@ -117,7 +125,19 @@ function writeManifest(unitId, details) {
 }
 
 // ---------------------------------------------------------------- parsing
-const stats = { members: 0, converted: 0, archivedDone: 0, convertedArticles: 0, skippedDone: 0, skippedConverted: 0, verified: 0, spansBytes: 0, read: 0 };
+const stats = { members: 0, converted: 0, memberStaged: 0, archivedDone: 0, convertedArticles: 0, skippedConverted: 0, verified: 0, spansBytes: 0 };
+/** What the live panel shows besides `stats` and `download`. */
+const ui = {
+  phase: 'starting', // starting → converting → streaming → done | stopped
+  rawDone: false, // step 1 finished
+  raw: { total: 0, done: 0, converted: 0 }, // step 1
+  current: null, // { verb, label, note, parsing } — the unit being worked on
+  currentArticles: 0,
+  expectedMembers: null, // snapshot chunks in the queue (one bundle member each)
+  embedder: null, // queue.embedderOverview()
+  archiveAtStart: { files: 0, bytes: 0 },
+  retryAt: null, // download dropped: retrying at this time
+};
 
 /**
  * Raw NDJSON lines (one article per line) → spans file: one output line per
@@ -139,6 +159,7 @@ async function convertLines(lineStream, outPath) {
   let lines = 0;
   let articles = 0;
   let batch = [];
+  ui.currentArticles = 0;
   async function flush() {
     if (batch.length === 0) return;
     const records = batch.map((line) => {
@@ -173,6 +194,7 @@ async function convertLines(lineStream, outPath) {
       out += JSON.stringify(result.error ? { ...meta, error: result.error } : { ...meta, spans: result.spans, unembedded: result.unembedded }) + '\n';
     }
     stats.convertedArticles += toParse.length;
+    ui.currentArticles += toParse.length;
     articles += toParse.length;
     await write(out);
     batch = [];
@@ -187,20 +209,23 @@ async function convertLines(lineStream, outPath) {
   await once(file, 'finish');
   if (writeError) throw writeError;
   fs.renameSync(part, outPath);
-  stats.spansBytes += fs.statSync(outPath).size;
-  return { lines, articles };
+  const bytes = fs.statSync(outPath).size;
+  stats.spansBytes += bytes;
+  return { lines, articles, bytes };
 }
 
 /** Converts one complete raw unit file and stages its spans file; the raw file is deleted afterwards. */
 async function convertRawFile(rawPath, unitId, { stage = true } = {}) {
   const out = path.join(spansDir, `${unitId}${SPANS_SUFFIX}`);
-  const { lines, articles } = await convertLines(fs.createReadStream(rawPath), out);
+  const { lines, articles, bytes } = await convertLines(fs.createReadStream(rawPath), out);
   writeManifest(unitId, { source: `raw chunk file ${path.relative(process.cwd(), rawPath)}`, lines, articles });
   if (stage && unitId.startsWith('bundle_')) await queue.addStagedUnit(unitId, out);
   else if (stage) await queue.stageChunk(unitId, out);
   fs.rmSync(rawPath, { force: true });
   stats.converted++;
+  ui.raw.converted++;
   log(`converted ${rawPath} → ${out} (${lines} lines)`);
+  say(`${color.green('✓')} ${color.bold(unitLabel(unitId))} converted from the raw file on disk → ${stage ? color.green('ready for the embedder') : color.blue('saved for later')}${stage ? '' : ' (already embedded)'} · ${formatCount(articles)} articles · ${formatBytes(bytes)} ${color.gray('(raw copy deleted)')}`);
 }
 
 /** Step 1: raw files already on disk → spans files; raw deleted. */
@@ -224,22 +249,27 @@ async function convertLocalRawFiles() {
       if (unitId) raw.push({ full, unitId });
     }
   }
+  ui.raw.total = raw.length;
   for (const { full, unitId } of raw) {
     if (spansFileExists(unitId)) {
       fs.rmSync(full, { force: true });
+      ui.raw.done++;
       continue;
     }
-    say(`converting raw ${path.relative(process.cwd(), full)} (${(fs.statSync(full).size / 1e9).toFixed(2)} GB) to spans…`);
+    ui.current = { verb: 'Converting', label: unitLabel(unitId), note: `raw file in ${path.relative(process.cwd(), path.dirname(full))}/ (${formatBytes(fs.statSync(full).size)})`, parsing: true };
     await convertRawFile(full, unitId, { stage: !done.has(unitId) }); // a done chunk is archived, not re-embedded
+    ui.raw.done++;
   }
+  ui.current = null;
   // Queue rows still pointing at raw files that are gone: stage them again from the bundle.
   const stale = (await queue.stagedRows()).filter((row) => !fs.existsSync(row.staged_path) && !spansFileExists(row.chunk_id)).map((row) => row.chunk_id);
   await queue.unstage(stale);
-  if (raw.length || stale.length) say(`local raw files: ${stats.converted} converted, ${raw.length - stats.converted} already archived and removed; ${stale.length} stale staging(s) cleared`);
+  if (raw.length || stale.length) say(`Step 1 done: ${ui.raw.converted} raw file(s) converted, ${raw.length - ui.raw.converted} already saved (raw copy removed)${stale.length ? `, ${stale.length} stale hand-over(s) cleared` : ''}`);
+  else say('Step 1 done: no raw files on disk to convert');
 }
 
 // ---------------------------------------------------------------- the bundle stream
-const download = { total: null, offset: 0, fromNetwork: 0, startedAt: Date.now(), failed: null };
+const download = { total: null, offset: 0, fromNetwork: 0, seedBytes: 0, startedAt: Date.now() };
 
 function loadRequests() {
   try {
@@ -278,6 +308,7 @@ async function* bundleBytes() {
   fs.writeFileSync(requestsPath, JSON.stringify({ ...requests, etag }, null, 2));
 
   if (fs.existsSync(seedPath)) {
+    download.seedBytes = fs.statSync(seedPath).size;
     const handle = await fsp.open(seedPath, 'r');
     const buffer = Buffer.allocUnsafe(4 << 20);
     try {
@@ -307,6 +338,7 @@ async function* bundleBytes() {
       if (response.status === 429) throw Object.assign(new Error(`Wikimedia refused the bundle download with 429: ${(await response.text()).slice(0, 300)}`), { fatal: true });
       if (response.status !== 200 && response.status !== 206) throw new Error(`GET answered ${response.status} ${response.statusText}`);
       if (download.offset > 0 && response.status !== 206) throw Object.assign(new Error('the server ignored the Range request; stopping rather than restarting the download'), { fatal: true });
+      ui.retryAt = null;
       const reader = response.body.getReader();
       for (;;) {
         // Only time spent waiting on the network counts as a stall, not time the parser takes.
@@ -322,7 +354,8 @@ async function* bundleBytes() {
       clearTimeout(stall);
       if (error.fatal || /request cap/.test(error.message)) throw error;
       const reason = error.name === 'AbortError' ? `no data for ${STALL_MS / 1000}s` : error.message || error.code;
-      say(`⚠ download interrupted at ${formatGB(download.offset)} GB — ${reason}; resuming in ${RETRY_PAUSE_MS / 1000}s`);
+      say(`${color.yellow('!')} ${color.yellow(`Download dropped at ${formatGB(download.offset)} GB`)} (${reason}) — picking it up again in ${RETRY_PAUSE_MS / 1000}s, nothing is lost`);
+      ui.retryAt = Date.now() + RETRY_PAUSE_MS;
       await sleep(RETRY_PAUSE_MS);
     }
   }
@@ -334,7 +367,7 @@ let mapping = 'chunks'; // 'chunks' (member n = chunk n) or 'own' (each member i
 async function abandonMapping(reason) {
   mapping = 'own';
   const retired = await queue.supersedeUnstagedChunks(`${identifier}_chunk_`);
-  say(`⚠ ${reason}: every member from here on is its own unit of work; ${retired} unstarted snapshot chunk(s) retired in the queue (their articles come from the bundle units)`);
+  say(`${color.yellow('!')} ${reason}: every member from here on is its own unit of work; ${retired} unstarted snapshot chunk(s) retired in the queue (their articles come from the bundle units)`);
 }
 
 async function drain(stream) {
@@ -342,14 +375,32 @@ async function drain(stream) {
   await once(stream, 'end');
 }
 
+/** A member whose spans file is already in the archive: its bytes still have to stream past. */
+async function skipMember(stream, unitId) {
+  stats.skippedConverted++;
+  ui.current = { verb: 'Skipping', label: unitLabel(unitId), note: 'already saved (its bytes still stream past)' };
+  await drain(stream);
+  ui.current = null;
+  say(color.gray(`– ${unitLabel(unitId)} already saved earlier, skipped`));
+}
+
 /** Parse a member straight into a spans file in the archive, and stage it for the embedder unless it is already done. */
 async function convertMember(stream, unitId, register, sourceName) {
   const out = path.join(spansDir, `${unitId}${SPANS_SUFFIX}`);
-  const { lines, articles } = await convertLines(Readable.from(stream), out);
-  writeManifest(unitId, { source: `bundle member ${sourceName}`, lines, articles });
-  if (register) await register(unitId, out);
-  stats.converted++;
-  return { out, lines };
+  ui.current = { verb: 'Parsing', label: unitLabel(unitId), note: register ? 'new → for the embedder' : 'already embedded → saving for later', parsing: true };
+  const { lines, articles, bytes } = await convertLines(Readable.from(stream), out);
+  ui.current = null;
+  writeManifest(unitId, { source: `bundle member ${sourceName}`, lines, articles, ...(register ? {} : { embeddedBefore: true }) });
+  if (register) {
+    await register(unitId, out);
+    stats.converted++;
+    stats.memberStaged++;
+    say(`${color.green('✓')} ${color.bold(unitLabel(unitId))} → ${color.green('ready for the embedder')} · ${formatCount(articles)} articles · ${formatBytes(bytes)}`);
+  } else {
+    stats.archivedDone++;
+    say(`${color.blue('✓')} ${color.bold(unitLabel(unitId))} → ${color.blue('saved for later')} (already embedded) · ${formatCount(articles)} articles · ${formatBytes(bytes)}`);
+  }
+  return { out, lines, articles };
 }
 
 async function handleMember(header, stream) {
@@ -365,35 +416,36 @@ async function handleMember(header, stream) {
       await abandonMapping(`${name} maps to ${chunkId}, which the chunk queue doesn't know`);
     } else if (row.done_at) {
       // Already embedded: archived only (for later), not staged.
-      if (spansFileExists(chunkId)) {
-        stats.skippedConverted++;
-        return drain(stream);
-      }
-      const out = path.join(spansDir, `${chunkId}${SPANS_SUFFIX}`);
-      const { lines, articles } = await convertLines(Readable.from(stream), out);
-      if (stats.verified < MAPPING_CHECKS && row.total_lines != null && lines !== row.total_lines) {
-        // Members don't line up with chunks: keep this one under its own name and stage it.
-        const unitId = `bundle_${name.replace(/\.ndjson$/, '')}`;
-        const renamed = path.join(spansDir, `${unitId}${SPANS_SUFFIX}`);
-        fs.renameSync(out, renamed);
-        writeManifest(unitId, { source: `bundle member ${name}`, lines, articles });
-        await abandonMapping(`${name} has ${lines} lines but ${chunkId} had ${row.total_lines}, so members don't map to chunks`);
-        await queue.addStagedUnit(unitId, renamed);
-        stats.converted++;
-        return;
-      }
-      if (row.total_lines != null && stats.verified < MAPPING_CHECKS) {
+      if (spansFileExists(chunkId)) return skipMember(stream, chunkId);
+      if (stats.verified < MAPPING_CHECKS && row.total_lines != null) {
+        // Check that members line up with chunks before trusting the mapping.
+        const out = path.join(spansDir, `${chunkId}${SPANS_SUFFIX}`);
+        ui.current = { verb: 'Parsing', label: unitLabel(chunkId), note: `already embedded → saving for later (mapping check ${stats.verified + 1}/${MAPPING_CHECKS})`, parsing: true };
+        const { lines, articles, bytes } = await convertLines(Readable.from(stream), out);
+        ui.current = null;
+        if (lines !== row.total_lines) {
+          // Members don't line up with chunks: keep this one under its own name and stage it.
+          const unitId = `bundle_${name.replace(/\.ndjson$/, '')}`;
+          const renamed = path.join(spansDir, `${unitId}${SPANS_SUFFIX}`);
+          fs.renameSync(out, renamed);
+          writeManifest(unitId, { source: `bundle member ${name}`, lines, articles });
+          await abandonMapping(`${name} has ${lines} lines but ${chunkId} had ${row.total_lines}, so members don't map to chunks`);
+          await queue.addStagedUnit(unitId, renamed);
+          stats.converted++;
+          stats.memberStaged++;
+          return;
+        }
         stats.verified++;
         log(`mapping check ${stats.verified}/${MAPPING_CHECKS}: ${name} has ${lines} lines = ${chunkId}`);
+        writeManifest(chunkId, { source: `bundle member ${name}`, lines, articles, embeddedBefore: true });
+        stats.archivedDone++;
+        say(`${color.blue('✓')} ${color.bold(unitLabel(chunkId))} → ${color.blue('saved for later')} (already embedded) · ${formatCount(articles)} articles · ${formatBytes(bytes)}`);
+        return;
       }
-      writeManifest(chunkId, { source: `bundle member ${name}`, lines, articles, embeddedBefore: true });
-      stats.archivedDone++;
+      await convertMember(stream, chunkId, null, name);
       return;
     } else {
-      if (spansFileExists(chunkId)) {
-        stats.skippedConverted++;
-        return drain(stream);
-      }
+      if (spansFileExists(chunkId)) return skipMember(stream, chunkId);
       const { lines } = await convertMember(stream, chunkId, queue.stageChunk, name);
       log(`converted bundle member ${name} → ${chunkId} (${lines} lines)`);
       return;
@@ -402,10 +454,7 @@ async function handleMember(header, stream) {
 
   const unitId = `bundle_${name.replace(/\.ndjson$/, '')}`;
   const row = await queue.chunkRow(unitId);
-  if (spansFileExists(unitId)) {
-    stats.skippedConverted++;
-    return drain(stream);
-  }
+  if (spansFileExists(unitId)) return skipMember(stream, unitId);
   const { lines } = await convertMember(stream, unitId, row?.done_at ? null : queue.addStagedUnit, name);
   log(`converted bundle member ${name} → ${unitId} (${lines} lines)`);
 }
@@ -428,46 +477,167 @@ async function streamBundle() {
 }
 
 // ---------------------------------------------------------------- main
+/** One line for the log (and for output that isn't a terminal). */
 function statusLine() {
-  const elapsed = (Date.now() - download.startedAt) / 1000;
-  const rate = elapsed > 0 ? download.fromNetwork / elapsed / 1e6 : 0;
   return (
-    `bundle: ${formatGB(download.offset)}/${download.total ? formatGB(download.total) : '?'} GB streamed (${rate.toFixed(1)} MB/s from network, ${loadRequests().gets}/${MAX_REQUESTS} GETs)` +
-    ` · members ${stats.members}: ${stats.converted} staged for embedding, ${stats.archivedDone} archived (embedded before), ${stats.skippedConverted} already archived` +
-    ` · ${stats.convertedArticles.toLocaleString()} articles parsed · spans on disk ${(stats.spansBytes / 1e6).toFixed(0)} MB`
+    `bundle: ${formatGB(download.offset)}/${download.total ? formatGB(download.total) : '?'} GB streamed (${streamRate().toFixed(1)} MB/s, ${loadRequests().gets}/${MAX_REQUESTS} GETs)` +
+    ` · members ${stats.members}: ${stats.memberStaged} staged for embedding, ${stats.archivedDone} archived (embedded before), ${stats.skippedConverted} already archived` +
+    ` · ${stats.convertedArticles.toLocaleString()} articles parsed · spans written this run ${(stats.spansBytes / 1e6).toFixed(0)} MB`
   );
+}
+
+// Stream speed over the last minute (bundle bytes through the parser, saved or downloaded).
+const rateSamples = [];
+function sampleRate() {
+  const now = Date.now();
+  rateSamples.push({ at: now, offset: download.offset });
+  while (rateSamples.length > 2 && now - rateSamples[0].at > 60_000) rateSamples.shift();
+}
+function streamRate() {
+  if (rateSamples.length < 2) return 0;
+  const first = rateSamples[0];
+  const last = rateSamples[rateSamples.length - 1];
+  return last.at > first.at ? (last.offset - first.offset) / ((last.at - first.at) / 1000) / 1e6 : 0;
+}
+
+function renderPanel(width) {
+  const { bold, gray, green, yellow, red, cyan, blue, magenta } = color;
+  const indent = ' '.repeat(13);
+  const barWidth = Math.max(10, Math.min(40, width - 42));
+  const lines = [''];
+
+  // The two steps
+  const stepLine = (n, state, label, detail) => {
+    const icon = { waiting: gray('○'), active: cyan('▸'), done: green('✓'), failed: red('✗') }[state];
+    return `  ${icon} ${gray(`Step ${n}`)}  ${fit(state === 'waiting' ? gray(label) : state === 'active' ? bold(label) : label, 28)} ${detail}`;
+  };
+  const step1 = ui.rawDone ? 'done' : { starting: 'waiting', converting: 'active', stopped: 'failed' }[ui.phase] ?? 'done';
+  const step1Detail =
+    step1 === 'waiting' ? '' : step1 === 'active' ? `${ui.raw.done} of ${ui.raw.total} files` : ui.raw.total ? `${ui.raw.converted} converted, raw copies deleted` : gray('nothing on disk to convert');
+  const step2 = { starting: 'waiting', converting: 'waiting', streaming: 'active', done: 'done', stopped: ui.rawDone ? 'failed' : 'waiting' }[ui.phase];
+  const step2Detail = { waiting: gray('starts after step 1'), active: 'in progress', done: green('finished'), failed: red('stopped — run it again to continue') }[step2];
+  lines.push(stepLine(1, step1, 'Convert raw files on disk', step1Detail));
+  lines.push(stepLine(2, step2, 'Stream + parse the bundle', step2Detail));
+  lines.push('');
+
+  // Download
+  if (download.total) {
+    const fraction = download.offset / download.total;
+    lines.push(`  ${bold('Download')}   ${bar(barWidth, [{ fraction, paint: cyan }])}  ${formatGB(download.offset)} / ${formatGB(download.total)} GB  ${bold(`${Math.floor(fraction * 100)}%`)}`);
+    const rate = streamRate();
+    let detail;
+    if (ui.retryAt) detail = yellow(`connection dropped — reconnecting in ${Math.max(0, Math.ceil((ui.retryAt - Date.now()) / 1000))}s`);
+    else if (ui.phase !== 'streaming') detail = gray(ui.phase === 'done' ? 'complete' : 'not started yet');
+    else if (download.fromNetwork === 0 && download.seedBytes > 0) detail = `reading the ${formatBytes(download.seedBytes)} saved earlier (no download needed)`;
+    else detail = rate > 0 ? `${rate.toFixed(1)} MB/s · about ${bold(formatDuration(((download.total - download.offset) / (rate * 1e6)) * 1000))} left` : 'measuring speed…';
+    lines.push(`${indent}${detail} ${gray(`· download ${loadRequests().gets} of ${MAX_REQUESTS} allowed`)}`);
+    lines.push('');
+  }
+
+  // Chunks
+  const total = Math.max(ui.expectedMembers || 0, stats.members) || 1;
+  lines.push(
+    `  ${bold('Chunks')}     ${bar(barWidth, [
+      { fraction: stats.memberStaged / total, paint: green },
+      { fraction: stats.archivedDone / total, paint: blue },
+      { fraction: stats.skippedConverted / total, paint: magenta },
+    ])}  ${stats.members} of ${ui.expectedMembers ?? '?'} read`
+  );
+  lines.push(`${indent}${green('■')} ${String(stats.memberStaged).padEnd(4)} new → handed to the embedder`);
+  lines.push(`${indent}${blue('■')} ${String(stats.archivedDone).padEnd(4)} already embedded → saved for later`);
+  lines.push(`${indent}${magenta('■')} ${String(stats.skippedConverted).padEnd(4)} already saved earlier → skipped`);
+  lines.push('');
+
+  // Right now
+  let now;
+  if (ui.current) {
+    now = `${ui.current.verb} ${cyan(bold(ui.current.label))}${ui.current.parsing ? ` · ${formatCount(ui.currentArticles)} articles so far` : ''} ${gray(`· ${ui.current.note}`)}`;
+  } else {
+    now = gray({ starting: 'starting up…', converting: 'looking for raw files…', streaming: 'reading the bundle to the next chunk…', done: 'nothing — all done', stopped: 'nothing — stopped' }[ui.phase]);
+  }
+  lines.push(`  ${bold('Right now')}  ${now}`);
+
+  // Embedder (the queue in Postgres)
+  const e = ui.embedder;
+  let embedder;
+  if (!e) embedder = gray('checking…');
+  else {
+    const counts = `${e.embedding} being embedded · ${e.done} of ${e.done + e.left} done`;
+    if (e.waiting > 0) embedder = `${green(bold(e.waiting))} ${e.waiting === 1 ? 'chunk' : 'chunks'} ready and waiting · ${counts}`;
+    else if (e.left === 0) embedder = green('every chunk is embedded');
+    else if (e.embedding > 0) embedder = `${yellow('nothing waiting')} · ${counts}`;
+    else embedder = `${yellow('idle, waiting for chunks from this fetcher')} · ${e.done} of ${e.done + e.left} done`;
+  }
+  lines.push(`  ${bold('Embedder')}   ${embedder}`);
+
+  // Archive
+  const files = ui.archiveAtStart.files + stats.converted + stats.archivedDone;
+  lines.push(`  ${bold('Saved')}      ${formatCount(files)} chunks · ${formatBytes(ui.archiveAtStart.bytes + stats.spansBytes)} in ${shortPath(spansDir)}/ ${gray(`· ${formatCount(stats.convertedArticles)} articles parsed this run`)}`);
+  lines.push('');
+  const footer = {
+    done: 'All done · the archive is complete',
+    stopped: 'Run it again to continue · it skips everything already saved',
+  }[ui.phase] ?? 'Ctrl-C to stop · running it again skips everything already saved';
+  lines.push(gray(`  ${footer} · log: ${shortPath(logPath)}`));
+
+  const phaseLabel = { starting: cyan('starting'), converting: cyan('step 1 of 2'), streaming: cyan('step 2 of 2'), done: green('done'), stopped: red('stopped') }[ui.phase];
+  return { title: 'Wikipedia fetcher', right: `${phaseLabel} ${gray(`· ${formatDuration(Date.now() - download.startedAt)}`)}`, lines };
+}
+
+const panel = createPanel(renderPanel);
+
+// What's already in the archive (for the panel's running total).
+for (const name of fs.readdirSync(spansDir)) {
+  if (!name.endsWith(SPANS_SUFFIX)) continue;
+  ui.archiveAtStart.files++;
+  ui.archiveAtStart.bytes += fs.statSync(path.join(spansDir, name)).size;
 }
 
 await queue.ensureQueueTable();
 await queue.setBundleFetcherState('running'); // bundle-mode workers stay up while this is running
+ui.expectedMembers = (await queue.queueSnapshot().catch(() => null))?.chunks ?? null;
+const refreshEmbedder = () => queue.embedderOverview().then((overview) => (ui.embedder = overview), () => {});
+await refreshEmbedder();
+let ticks = 0;
 const ticker = setInterval(() => {
-  queue.setBundleFetcherState('running').catch(() => {});
-  const line = statusLine();
-  if (process.stdout.isTTY) process.stdout.write(`\r\x1b[K${line.slice(0, (process.stdout.columns || 200) - 1)}`);
-  else log(line);
-}, 2_000);
+  ticks++;
+  sampleRate();
+  panel.draw();
+  if (ticks % 2 === 0) queue.setBundleFetcherState('running').catch(() => {});
+  if (ticks % 5 === 0) refreshEmbedder();
+  if (ticks % 60 === 0) log(statusLine());
+}, 1_000);
 
 let failure = null;
 try {
-  say(`Parsed articles are archived in ${spansDir}; log: ${logPath}`);
+  say(`Saving parsed articles to ${shortPath(spansDir)}/ (${formatCount(ui.archiveAtStart.files)} chunks there already) · log: ${shortPath(logPath)}`);
   await headBundle();
+  ui.phase = 'converting';
+  panel.draw();
   await convertLocalRawFiles();
-  say(`Streaming ${BUNDLE_URL}${fs.existsSync(seedPath) ? ` (first the ${formatGB(fs.statSync(seedPath).size)} GB already saved in ${path.basename(seedPath)})` : ''}…`);
+  ui.rawDone = true;
+  ui.phase = 'streaming';
+  say(`Step 2: streaming the ${formatGB(download.total)} GB bundle${fs.existsSync(seedPath) ? `, starting with the ${formatGB(fs.statSync(seedPath).size)} GB already saved in ${path.basename(seedPath)}` : ''}…`);
   await streamBundle();
 } catch (error) {
   failure = error;
 }
 clearInterval(ticker);
-process.stdout.write('\n');
-say(statusLine());
+ui.current = null;
+ui.retryAt = null;
+ui.phase = failure ? 'stopped' : 'done';
+await refreshEmbedder();
+log(statusLine());
 await shutdownSpanWorkers();
 
 if (failure) {
   await queue.setBundleFetcherState('stopped').catch(() => {});
-  say(`✗ stopped: ${failure.message}`);
-  say('Run this script again to continue: it streams the bundle from the start, skipping everything done or converted.');
+  say(`${color.red('✗ Stopped:')} ${failure.message}`);
+  say('Run this script again to continue: it streams the bundle from the start, skipping everything already saved.');
+  panel.close();
   process.exit(1);
 }
 await queue.setBundleFetcherState('done');
-say(`Bundle fully read: ${stats.converted} unit(s) staged for embedding, ${stats.archivedDone} archived only. The archive in ${spansDir} is complete; ${bundleDir} only holds logs now.`);
+say(`${color.green('✓ Bundle fully read:')} ${stats.memberStaged} chunk(s) handed to the embedder, ${stats.archivedDone} saved for later. The archive in ${shortPath(spansDir)}/ is complete; ${shortPath(bundleDir)}/ only holds logs now.`);
+panel.close();
 process.exit(0);
