@@ -32,7 +32,7 @@ import copyStreams from 'pg-copy-streams';
 import { getPool } from '../imright/scripts/db.js';
 import { embedTexts } from './textEmbeddings.js';
 import { embedPassages, ARCTIC_DIMS } from './arcticEmbeddings.js';
-import { extractCitedSpans } from './spanExtractor.js';
+import { extractSpans } from './spanExtractor.js';
 import { binaryCopyRows, encodeText, encodeInt4, encodeInt8, encodeJsonb, encodeHalfvec } from './vectorCopy.js';
 import { findAllRefs, stripWikiMarkup } from '../ref_extractor/parser/index.js';
 import { parseAllCiteTemplates } from '../ref_extractor/parser/citeTemplate.js';
@@ -562,6 +562,33 @@ const SPANS_TABLE_SQL = `
 const SPAN_COLUMNS = ['title', 'page_id', 'version_identifier', 'section', 'kind', 'unit_index', 'span_index', 'span_text', 'citations', 'embedding'];
 
 /**
+ * Cited spans that are stored but not embedded: their citations are all
+ * offline (a book with no url, a short footnote, a plain-text reference, an
+ * excluded host) or the span is under the size floor. Same locator and
+ * content columns as the embedded table, so a span can be found by the same
+ * key, plus why it is here. Kept so a later change of rules never needs the
+ * snapshot again.
+ */
+export const UNEMBEDDED_TABLE = 'wiki_citation_spans_unembedded';
+const UNEMBEDDED_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS ${UNEMBEDDED_TABLE} (
+    id                 BIGSERIAL PRIMARY KEY,
+    title              TEXT NOT NULL,
+    page_id            BIGINT,
+    version_identifier BIGINT,
+    section            TEXT NOT NULL,
+    kind               TEXT NOT NULL,
+    unit_index         INT NOT NULL,
+    span_index         INT NOT NULL,
+    span_text          TEXT NOT NULL,
+    citations          JSONB NOT NULL,
+    reason             TEXT NOT NULL,
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (title, kind, unit_index, span_index)
+  )`;
+const UNEMBEDDED_COLUMNS = ['title', 'page_id', 'version_identifier', 'section', 'kind', 'unit_index', 'span_index', 'span_text', 'citations', 'reason'];
+
+/**
  * Creates the spans table if needed and round-trips one known vector through
  * the exact binary COPY path the build uses, so an encoding mismatch fails
  * here — before any real rows — instead of silently storing garbage vectors.
@@ -571,6 +598,8 @@ export async function ensureSpansTable() {
   if (!pool) throw new Error('DATABASE_URL is not set; cannot create the wiki citation span index.');
   await pool.query(SPANS_TABLE_SQL);
   await pool.query(`CREATE INDEX IF NOT EXISTS ${SPANS_TABLE}_page_id ON ${SPANS_TABLE} (page_id)`);
+  await pool.query(UNEMBEDDED_TABLE_SQL);
+  await pool.query(`CREATE INDEX IF NOT EXISTS ${UNEMBEDDED_TABLE}_page_id ON ${UNEMBEDDED_TABLE} (page_id)`);
 
   const probe = Array.from({ length: ARCTIC_DIMS }, (_, i) => Math.sin(i + 1) / 10);
   const client = await pool.connect();
@@ -632,21 +661,21 @@ async function attemptUpsertSpans(pool, articles, timings) {
     articles.forEach((article, i) => {
       const { title, html, versionIdentifier, pageId } = article;
       if (keptIndexByTitle.get(title) !== i) {
-        results[i] = { title, spanCount: 0, skipped: true };
+        results[i] = { title, spanCount: 0, unembeddedCount: 0, skipped: true };
         return;
       }
       if (stored.isCurrent(article)) {
-        results[i] = { title, spanCount: 0, skipped: true };
+        results[i] = { title, spanCount: 0, unembeddedCount: 0, skipped: true };
         return;
       }
-      const spans = extractCitedSpans({ name: title, article_body: { html } }, SPAN_OPTIONS);
+      const { spans, unembedded } = extractSpans({ name: title, article_body: { html } }, SPAN_OPTIONS);
       targets.push({ index: i, title, pageId: pageId ?? null });
-      results[i] = { title, spanCount: spans.length, skipped: false };
-      if (spans.length > 0) pending.push({ index: i, article, spans, vectors: [] });
+      results[i] = { title, spanCount: spans.length, unembeddedCount: unembedded.length, skipped: false };
+      if (spans.length > 0 || unembedded.length > 0) pending.push({ index: i, article, spans, unembedded, vectors: [] });
     });
 
-    if (pending.length > 0) {
-      const texts = pending.flatMap(({ article, spans }) => spans.map((s) => `${article.title} — ${s.section}: ${s.text}`));
+    const texts = pending.flatMap(({ article, spans }) => spans.map((s) => `${article.title} — ${s.section}: ${s.text}`));
+    if (texts.length > 0) {
       const embedStart = performance.now();
       const vectors = await embedPassages(texts);
       timings.embedMs += performance.now() - embedStart;
@@ -675,7 +704,7 @@ async function attemptUpsertSpans(pool, articles, timings) {
       for (let j = targets.length - 1; j >= 0; j--) {
         const target = targets[j];
         if (!locked.isCurrent(articles[target.index])) continue;
-        results[target.index] = { title: target.title, spanCount: 0, skipped: true };
+        results[target.index] = { title: target.title, spanCount: 0, unembeddedCount: 0, skipped: true };
         targets.splice(j, 1);
         const p = pending.findIndex((entry) => entry.index === target.index);
         if (p !== -1) pending.splice(p, 1);
@@ -690,30 +719,32 @@ async function attemptUpsertSpans(pool, articles, timings) {
         targetParams.push(title, pageId);
         return `($${base + 1}::text, $${base + 2}::bigint)`;
       });
-      await client.query(
-        `DELETE FROM ${SPANS_TABLE} e USING (VALUES ${targetPlaceholders.join(', ')}) AS t(title, page_id)
-         WHERE e.title = t.title OR (e.page_id = t.page_id AND e.title != t.title)`,
-        targetParams
-      );
+      for (const table of [SPANS_TABLE, UNEMBEDDED_TABLE]) {
+        await client.query(
+          `DELETE FROM ${table} e USING (VALUES ${targetPlaceholders.join(', ')}) AS t(title, page_id)
+           WHERE e.title = t.title OR (e.page_id = t.page_id AND e.title != t.title)`,
+          targetParams
+        );
+      }
 
-      if (pending.length > 0) {
-        const rowsToCopy = [];
-        for (const { article, spans, vectors } of pending) {
-          spans.forEach((span, index) => {
-            rowsToCopy.push([
-              encodeText(article.title),
-              toInt8OrNull(article.pageId),
-              toInt8OrNull(article.versionIdentifier),
-              encodeText(span.section),
-              encodeText(span.kind),
-              encodeInt4(span.unitIndex),
-              encodeInt4(span.spanIndex),
-              encodeText(span.text),
-              encodeJsonb(span.citations),
-              encodeHalfvec(vectors[index]),
-            ]);
-          });
-        }
+      const rowsToCopy = [];
+      const unembeddedRows = [];
+      for (const { article, spans, unembedded, vectors } of pending) {
+        const locator = (span) => [
+          encodeText(article.title),
+          toInt8OrNull(article.pageId),
+          toInt8OrNull(article.versionIdentifier),
+          encodeText(span.section),
+          encodeText(span.kind),
+          encodeInt4(span.unitIndex),
+          encodeInt4(span.spanIndex),
+          encodeText(span.text),
+          encodeJsonb(span.citations),
+        ];
+        spans.forEach((span, index) => rowsToCopy.push([...locator(span), encodeHalfvec(vectors[index])]));
+        for (const span of unembedded) unembeddedRows.push([...locator(span), encodeText(span.reason)]);
+      }
+      if (rowsToCopy.length > 0) {
         await client.query(
           `CREATE TEMP TABLE spans_in (title text, page_id bigint, version_identifier bigint, section text, kind text,
              unit_index int, span_index int, span_text text, citations jsonb, embedding halfvec(${ARCTIC_DIMS})) ON COMMIT DROP`
@@ -731,6 +762,23 @@ async function attemptUpsertSpans(pool, articles, timings) {
            ON CONFLICT (title, kind, unit_index, span_index) DO UPDATE SET
              page_id = EXCLUDED.page_id, version_identifier = EXCLUDED.version_identifier, section = EXCLUDED.section,
              span_text = EXCLUDED.span_text, citations = EXCLUDED.citations, embedding = EXCLUDED.embedding, updated_at = now()`
+        );
+      }
+      if (unembeddedRows.length > 0) {
+        await client.query(
+          `CREATE TEMP TABLE unembedded_in (title text, page_id bigint, version_identifier bigint, section text, kind text,
+             unit_index int, span_index int, span_text text, citations jsonb, reason text) ON COMMIT DROP`
+        );
+        await streamPipeline(
+          Readable.from([binaryCopyRows(unembeddedRows)]),
+          client.query(copyStreams.from(`COPY unembedded_in (${UNEMBEDDED_COLUMNS.join(', ')}) FROM STDIN (FORMAT binary)`))
+        );
+        await client.query(
+          `INSERT INTO ${UNEMBEDDED_TABLE} (${UNEMBEDDED_COLUMNS.join(', ')})
+           SELECT ${UNEMBEDDED_COLUMNS.join(', ')} FROM unembedded_in
+           ON CONFLICT (title, kind, unit_index, span_index) DO UPDATE SET
+             page_id = EXCLUDED.page_id, version_identifier = EXCLUDED.version_identifier, section = EXCLUDED.section,
+             span_text = EXCLUDED.span_text, citations = EXCLUDED.citations, reason = EXCLUDED.reason, updated_at = now()`
         );
       }
     }
@@ -759,7 +807,7 @@ async function attemptUpsertSpans(pool, articles, timings) {
  *
  * @param {Array<{title: string, html: string, versionIdentifier: *, pageId: *}>} articles - `html` is article_body.html
  * @param {{readMs: number, embedMs: number, writeMs: number}} [timings]
- * @returns {Promise<Array<{title: string, spanCount: number, skipped: boolean}>>} one result per input article, same order
+ * @returns {Promise<Array<{title: string, spanCount: number, unembeddedCount: number, skipped: boolean}>>} one result per input article, same order; spanCount = embedded spans, unembeddedCount = spans stored in UNEMBEDDED_TABLE
  */
 export async function upsertSpansBatch(articles, timings = { readMs: 0, embedMs: 0, writeMs: 0 }) {
   if (articles.length === 0) return [];

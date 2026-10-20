@@ -20,7 +20,7 @@
 import fs from 'fs';
 import readline from 'readline';
 import { loadEnv } from '../../imright/load-env.js';
-import { upsertSpansBatch, ensureSpansTable, SPANS_TABLE } from '../embeddingIndex.js';
+import { upsertSpansBatch, ensureSpansTable, SPANS_TABLE, UNEMBEDDED_TABLE } from '../embeddingIndex.js';
 
 loadEnv();
 
@@ -43,7 +43,7 @@ async function main() {
   console.log(`Writing cited spans from ${ndjsonPath} to ${SPANS_TABLE}`);
   const rl = readline.createInterface({ input: fs.createReadStream(ndjsonPath), crlfDelay: Infinity });
 
-  const totals = { lines: 0, malformed: 0, noBody: 0, articles: 0, alreadyCurrent: 0, spans: 0 };
+  const totals = { lines: 0, malformed: 0, noBody: 0, articles: 0, alreadyCurrent: 0, spans: 0, unembedded: 0 };
   const timings = { readMs: 0, embedMs: 0, writeMs: 0 };
   let nextProgress = PROGRESS_EVERY;
   let batch = [];
@@ -55,11 +55,12 @@ async function main() {
     for (const result of results) {
       totals.articles++;
       totals.spans += result.spanCount;
+      totals.unembedded += result.unembeddedCount ?? 0;
       if (result.skipped) totals.alreadyCurrent++;
     }
     if (totals.articles >= nextProgress) {
       nextProgress += PROGRESS_EVERY;
-      console.log(`  ...${totals.articles} articles processed (${totals.spans} spans, ${totals.alreadyCurrent} already current)`);
+      console.log(`  ...${totals.articles} articles processed (${totals.spans} spans embedded, ${totals.unembedded} stored unembedded, ${totals.alreadyCurrent} already current)`);
     }
   }
 
@@ -91,7 +92,7 @@ async function main() {
   const seconds = (ms) => `${(ms / 1000).toFixed(1)}s`;
   console.log(
     `\nDone. ${totals.lines} lines: ${totals.articles} articles (${totals.alreadyCurrent} already current, skipped), ` +
-      `${totals.noBody} without article_body, ${totals.malformed} malformed. ${totals.spans} cited spans written to ${SPANS_TABLE}. ` +
+      `${totals.noBody} without article_body, ${totals.malformed} malformed. ${totals.spans} spans embedded into ${SPANS_TABLE}, ${totals.unembedded} stored in ${UNEMBEDDED_TABLE}. ` +
       `Time: read ${seconds(timings.readMs)}, embed ${seconds(timings.embedMs)}, write ${seconds(timings.writeMs)}.`
   );
 }

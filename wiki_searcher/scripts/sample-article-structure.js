@@ -144,8 +144,8 @@ function report(records, totalInChunk) {
     articles: records.length, withHtml: 0, withWikitext: 0, htmlBytes: 0, wikitextBytes: 0,
     units: { paragraph: 0, list_item: 0, table_row: 0 }, citedUnits: { paragraph: 0, list_item: 0, table_row: 0 },
     unitChars: { paragraph: 0, list_item: 0, table_row: 0 }, spansKept: { paragraph: 0, list_item: 0, table_row: 0 },
-    spanChars: { paragraph: 0, list_item: 0, table_row: 0 }, droppedShort: 0, droppedNoCitation: 0, uncitedTailChars: 0,
-    charsDroppedShort: 0, charsDroppedNoCitation: 0, linklessByReason: {}, linklessExamples: [],
+    spanChars: { paragraph: 0, list_item: 0, table_row: 0 }, unembeddedShort: 0, unembeddedNoOnline: 0, droppedNoCitation: 0, uncitedTailChars: 0,
+    charsUnembeddedShort: 0, charsUnembeddedNoOnline: 0, charsDroppedNoCitation: 0, linklessByReason: {}, linklessExamples: [],
     unsourcedTags: 0, markers: 0, noteMarkers: 0, stacked: 0, references: 0, referencesWithoutUrl: 0, citationTypes: {},
     spanLen: {}, spanSentences: {}, endsAtSentence: 0, totalSpans: 0, articlesNoSpans: 0, articlesNoMarkers: 0, articlesNoHtml: 0,
     citationsPerSpan: {}, exampleParagraphSpans: [], exampleListItems: [], exampleRows: [],
@@ -161,8 +161,8 @@ function report(records, totalInChunk) {
       agg.units[kind] += stats.units[kind]; agg.citedUnits[kind] += stats.citedUnits[kind]; agg.unitChars[kind] += stats.unitChars[kind];
       agg.spansKept[kind] += stats.spansKept[kind]; agg.spanChars[kind] += stats.spanChars[kind];
     }
-    agg.droppedShort += stats.spansDroppedShort; agg.droppedNoCitation += stats.spansDroppedNoUsableCitation; agg.uncitedTailChars += stats.uncitedTailChars;
-    agg.charsDroppedShort += stats.charsDroppedShort; agg.charsDroppedNoCitation += stats.charsDroppedNoUsableCitation;
+    agg.unembeddedShort += stats.spansUnembeddedShort; agg.unembeddedNoOnline += stats.spansUnembeddedNoOnlineCitation; agg.droppedNoCitation += stats.spansDroppedNoCitation;
+    agg.uncitedTailChars += stats.uncitedTailChars; agg.charsUnembeddedShort += stats.charsUnembeddedShort; agg.charsUnembeddedNoOnline += stats.charsUnembeddedNoOnlineCitation; agg.charsDroppedNoCitation += stats.charsDroppedNoCitation;
     for (const [reason, n] of Object.entries(stats.referencesWithoutUrlByReason)) addTo(agg.linklessByReason, reason, n);
     for (const example of stats.linklessExamples) if (agg.linklessExamples.length < 12) agg.linklessExamples.push(`${record.name}: ${example}`);
     agg.unsourcedTags += stats.unsourcedTagBoundaries; agg.markers += stats.markers; agg.noteMarkers += stats.noteMarkers; agg.stacked += stats.stackedGroups;
@@ -197,16 +197,19 @@ function report(records, totalInChunk) {
     ]),
   ]);
 
-  const notKeptChars = agg.uncitedTailChars + agg.charsDroppedNoCitation + agg.charsDroppedShort;
+  const unembeddedChars = agg.charsUnembeddedShort + agg.charsUnembeddedNoOnline;
+  const unembedded = agg.unembeddedShort + agg.unembeddedNoOnline;
+  const notKeptChars = agg.uncitedTailChars + agg.charsDroppedNoCitation + unembeddedChars;
   printTable('Spans:', [
     ['metric', 'value'],
-    ['kept', agg.totalSpans.toLocaleString()],
-    [`dropped: under ${MIN_SPAN_WORDS} words / ${MIN_SPAN_CHARS} chars`, `${agg.droppedShort.toLocaleString()} (${pct(agg.droppedShort, agg.droppedShort + agg.totalSpans)} of candidates)`],
-    ['dropped: no usable citation (notes, sfn, no-link, excluded host)', agg.droppedNoCitation.toLocaleString()],
-    ['text in cited units NOT kept', `${pct(notKeptChars, notKeptChars + totalKeptChars)} of cited-unit text, of which:`],
-    ['    spans whose citations have no usable link', pct(agg.charsDroppedNoCitation, notKeptChars)],
-    [`    spans under ${MIN_SPAN_WORDS} words / ${MIN_SPAN_CHARS} chars`, pct(agg.charsDroppedShort, notKeptChars)],
-    ['    uncited tails after the last citation, {{cn}}-tagged claims', pct(agg.uncitedTailChars, notKeptChars)],
+    ['embedded', agg.totalSpans.toLocaleString()],
+    ['stored unembedded: no online citation (books w/o url, sfn, plain text, excluded hosts)', `${agg.unembeddedNoOnline.toLocaleString()} (${pct(agg.unembeddedNoOnline, agg.totalSpans + unembedded)} of cited spans)`],
+    [`stored unembedded: under ${MIN_SPAN_WORDS} words / ${MIN_SPAN_CHARS} chars`, `${agg.unembeddedShort.toLocaleString()} (${pct(agg.unembeddedShort, agg.totalSpans + unembedded)} of cited spans)`],
+    ['dropped: markers whose reference entries describe nothing', agg.droppedNoCitation.toLocaleString()],
+    ['text in cited units NOT embedded', `${pct(notKeptChars, notKeptChars + totalKeptChars)} of cited-unit text, of which:`],
+    ['    stored unembedded: no online citation', pct(agg.charsUnembeddedNoOnline, notKeptChars)],
+    [`    stored unembedded: under ${MIN_SPAN_WORDS} words / ${MIN_SPAN_CHARS} chars`, pct(agg.charsUnembeddedShort, notKeptChars)],
+    ['    uncited tails after the last citation, {{cn}}-tagged claims (not stored)', pct(agg.uncitedTailChars, notKeptChars)],
     ['{{citation needed}} boundaries', agg.unsourcedTags.toLocaleString()],
     ['stacked citation groups', `${agg.stacked.toLocaleString()} (${pct(agg.stacked, agg.totalSpans)} of spans)`],
     ['spans ending at sentence punctuation', pct(agg.endsAtSentence, agg.totalSpans)],
@@ -219,7 +222,7 @@ function report(records, totalInChunk) {
   printTable('References and markers:', [
     ['metric', 'value'],
     ['reference-list entries', agg.references.toLocaleString()],
-    ['entries with no usable http link', `${agg.referencesWithoutUrl.toLocaleString()} (${pct(agg.referencesWithoutUrl, agg.references)})`],
+    ['entries with no online citation', `${agg.referencesWithoutUrl.toLocaleString()} (${pct(agg.referencesWithoutUrl, agg.references)})`],
     ['    by reason', Object.entries(agg.linklessByReason).sort((a, b) => b[1] - a[1]).map(([r, n]) => `${r}: ${n}`).join(' | ')],
     ['inline markers', agg.markers.toLocaleString()],
     ['of which notes', `${agg.noteMarkers.toLocaleString()} (${pct(agg.noteMarkers, agg.markers)})`],
@@ -233,6 +236,8 @@ function report(records, totalInChunk) {
     ['articles without article_body.html', agg.articlesNoHtml],
     ['projected kept spans, all of enwiki', Math.round(agg.totalSpans * scale).toLocaleString()],
     ['projected span text, all of enwiki', `${(totalKeptChars * scale / 1e9).toFixed(1)} GB`],
+    ['projected unembedded spans, all of enwiki', Math.round(unembedded * scale).toLocaleString()],
+    ['projected unembedded span text, all of enwiki', `${(unembeddedChars * scale / 1e9).toFixed(1)} GB`],
   ]);
 
   const examples = (title, list) => { console.log(`\n${title}`); if (!list.length) console.log('  (none)'); for (const e of list) console.log(`  - ${e}`); };

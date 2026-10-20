@@ -64,3 +64,27 @@ CREATE TABLE IF NOT EXISTS wiki_citation_spans (
 );
 
 CREATE INDEX IF NOT EXISTS wiki_citation_spans_page_id ON wiki_citation_spans (page_id);
+
+-- Cited spans that are stored but NOT embedded: every citation is offline
+-- (a book with no url, an {{sfn}} footnote resolved to its bibliography
+-- entry, a plain-text reference, an excluded host) or the span is under the
+-- size floor. Same locator/content columns and key as wiki_citation_spans,
+-- so span_index numbering is shared and unique across both tables. Kept so a
+-- later change of rules never needs the snapshot again.
+CREATE TABLE IF NOT EXISTS wiki_citation_spans_unembedded (
+  id                 BIGSERIAL PRIMARY KEY,
+  title              TEXT NOT NULL,
+  page_id            BIGINT,
+  version_identifier BIGINT,
+  section            TEXT NOT NULL,
+  kind               TEXT NOT NULL,
+  unit_index         INT NOT NULL,
+  span_index         INT NOT NULL,
+  span_text          TEXT NOT NULL,
+  citations          JSONB NOT NULL,       -- same shape; offline citations have url null and a `text` with the rendered reference
+  reason             TEXT NOT NULL,        -- 'no_online_citation' | 'short'
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (title, kind, unit_index, span_index)
+);
+
+CREATE INDEX IF NOT EXISTS wiki_citation_spans_unembedded_page_id ON wiki_citation_spans_unembedded (page_id);

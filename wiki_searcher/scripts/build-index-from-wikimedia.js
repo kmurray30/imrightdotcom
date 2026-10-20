@@ -77,7 +77,7 @@ import { promisify } from 'util';
 import { loadEnv } from '../../imright/load-env.js';
 import { getAccessToken } from '../../utils/wikimediaAuth.js';
 import { callExternalApi, HttpStatusError, timeoutSignal } from '../../utils/external-api.js';
-import { upsertSpansBatch, ensureSpansTable, SPANS_TABLE, SPAN_OPTIONS, setConnectionWarningLogger } from '../embeddingIndex.js';
+import { upsertSpansBatch, ensureSpansTable, SPANS_TABLE, UNEMBEDDED_TABLE, SPAN_OPTIONS, setConnectionWarningLogger } from '../embeddingIndex.js';
 import { setLogger as setEmbedLogger, embedConfig } from '../textEmbeddings.js';
 import { formatDuration, fitToTerminal, tableBorder, tableRow } from './terminalTable.js';
 
@@ -807,7 +807,7 @@ function saveLineCheckpoint(chunkId, lineNumber) {
 async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
   const resumeFromLine = loadLineCheckpoint(chunkId);
   const rl = readline.createInterface({ input: fs.createReadStream(ndjsonPath), crlfDelay: Infinity });
-  const stats = { articles: 0, spans: 0, alreadyCurrent: 0, totalLines: 0 };
+  const stats = { articles: 0, spans: 0, unembedded: 0, alreadyCurrent: 0, totalLines: 0 };
   let lastLoggedAt = 0;
   let lineNumber = 0;
 
@@ -839,6 +839,7 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
       for (const result of results) {
         stats.articles++;
         stats.spans += result.spanCount;
+        stats.unembedded += result.unembeddedCount ?? 0;
         if (result.skipped) stats.alreadyCurrent++;
       }
     }
@@ -867,7 +868,7 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
       const overallDone = tracker.articlesDone();
       const overallPct = tracker.totalArticles > 0 ? ((overallDone / tracker.totalArticles) * 100).toFixed(1) : '?';
       logDebug(
-        `${chunkId}: embedding in progress — ${stats.articles} articles, ${stats.spans} cited spans this chunk` +
+        `${chunkId}: embedding in progress — ${stats.articles} articles, ${stats.spans} spans embedded, ${stats.unembedded} stored unembedded this chunk` +
           ` | overall: ${formatCount(overallDone)}/${formatCount(tracker.totalArticles)} articles (${overallPct}%)`
       );
       saveLineCheckpoint(chunkId, lastLineInBatch); // only ever advances past a batch that Promise.all above has already fully completed
@@ -984,12 +985,13 @@ async function processChunk(chunk, prepare, tracker, totals, avgArticlesPerChunk
   totals.chunksDone++;
   totals.articles += stats.articles;
   totals.spans += stats.spans;
+  totals.unembedded += stats.unembedded;
   totals.alreadyCurrent += stats.alreadyCurrent;
 
   const overallDone = tracker.articlesDone();
   const overallPct = tracker.totalArticles > 0 ? ((overallDone / tracker.totalArticles) * 100).toFixed(1) : '?';
   logDebug(
-    `${chunk.chunkId}: done — ${stats.articles} articles, ${stats.spans} cited spans, ${stats.alreadyCurrent} already current` +
+    `${chunk.chunkId}: done — ${stats.articles} articles, ${stats.spans} spans embedded, ${stats.unembedded} stored unembedded, ${stats.alreadyCurrent} already current` +
       ` | overall: ${formatCount(overallDone)}/${formatCount(tracker.totalArticles)} articles (${overallPct}%)`
   );
   fs.writeFileSync(donePath, JSON.stringify({ completedAt: new Date().toISOString(), totalLines: stats.totalLines }));
@@ -1095,7 +1097,7 @@ async function main() {
 
   const tracker = createProgressDisplay(recordCount, EMBED_CONCURRENCY);
   const avgArticlesPerChunk = recordCount > 0 ? recordCount / chunks.length : 0;
-  const totals = { chunksDone: 0, articles: 0, spans: 0, alreadyCurrent: 0 };
+  const totals = { chunksDone: 0, articles: 0, spans: 0, unembedded: 0, alreadyCurrent: 0 };
 
   // Routes DB connection-drop warnings through the table (full redraw, not a
   // bare console.error mid-row) as well as into debug.log for later tailing.
@@ -1136,9 +1138,9 @@ async function main() {
 
   console.log(
     `\nDone. ${chunks.length} chunks total (${totals.chunksDone} newly processed this run): ` +
-      `${totals.articles} articles seen, ${totals.spans} cited spans embedded, ${totals.alreadyCurrent} already current.`
+      `${totals.articles} articles seen, ${totals.spans} spans embedded, ${totals.unembedded} stored unembedded, ${totals.alreadyCurrent} already current.`
   );
-  console.log(`Spans are in ${SPANS_TABLE}. Next: build the compact search index from them (see README).`);
+  console.log(`Embedded spans are in ${SPANS_TABLE}; cited spans without an online citation (or too short) in ${UNEMBEDDED_TABLE}. Next: build the compact search index (see README).`);
 }
 
 /**
