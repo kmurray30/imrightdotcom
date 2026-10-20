@@ -94,6 +94,7 @@ const execFileAsync = promisify(execFile);
 // embedding-model-download detail (see textEmbeddings.js) goes to debug.log
 // instead, same as every other per-chunk stage transition below.
 let activeTracker = null; // the live progress display, once main() has created it
+let restoreConsole = () => {}; // undoes main()'s console routing (see there)
 setEmbedLogger((message) => {
   logDebug(message);
   const status = modelStatusFrom(message);
@@ -184,6 +185,13 @@ function noteWikimediaResponse(response) {
   if (until > rateLimitedUntil) {
     rateLimitedUntil = until;
     logDebug(`Wikimedia rate limit (429): pausing all downloads for ${Math.round(pauseMs / 1000)}s`);
+    // What Wikimedia says about it (quota vs. burst limit), for debug.log.
+    const headers = [...response.headers].filter(([name]) => /retry|limit|quota|remaining|reset/i.test(name)).map(([n, v]) => `${n}: ${v}`);
+    response
+      .clone()
+      .text()
+      .then((body) => logDebug(`  429 details — headers: ${headers.join('; ') || '(none relevant)'} — body: ${body.slice(0, 500).replace(/\s+/g, ' ')}`))
+      .catch(() => {});
     activeTracker?.noteIssue('ratelimit', 'Wikimedia rate limit');
   }
 }
@@ -1662,6 +1670,25 @@ async function main() {
     preparations.delete(chunk.chunkId);
   }
 
+  // Anything else that prints straight to the terminal while the table is
+  // live (library warnings) would shift it down a line and break every
+  // in-place redraw after it. Route it through the table instead; the
+  // rate-limit warning is already on the Issues line.
+  const originalConsoleError = console.error;
+  const originalConsoleWarn = console.warn;
+  const routeToTable = (...args) => {
+    const text = args.map((a) => (a instanceof Error ? a.message : String(a))).join(' ');
+    logDebug(text);
+    if (/external dependency rate-limited/.test(text)) return;
+    tracker.logWarning(text);
+  };
+  console.error = routeToTable;
+  console.warn = routeToTable;
+  restoreConsole = () => {
+    console.error = originalConsoleError;
+    console.warn = originalConsoleWarn;
+  };
+
   tracker.start();
   await runQueue({
     slots: EMBED_CONCURRENCY,
@@ -1705,6 +1732,7 @@ async function main() {
   });
   clearInterval(refreshTimer);
   clearInterval(heartbeatTimer);
+  restoreConsole();
   tracker.finish();
 
   console.log(
@@ -1775,6 +1803,7 @@ function isRemoteDiskFullError(error) {
 }
 
 main().catch((error) => {
+  restoreConsole();
   console.error(`\nFatal error at ${new Date().toLocaleString()}:`, error.message);
   if (error.detail) console.error(`  ${error.detail}`); // Postgres errors name the offending row/key here
   if (isRemoteDiskFullError(error)) {
