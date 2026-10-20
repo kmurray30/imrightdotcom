@@ -86,7 +86,23 @@ const execFileAsync = promisify(execFile);
 // Keeps the terminal to just the aggregate progress bar — the one-time
 // embedding-model-download detail (see textEmbeddings.js) goes to debug.log
 // instead, same as every other per-chunk stage transition below.
-setEmbedLogger(logDebug);
+let activeTracker = null; // the live progress display, once main() has created it
+setEmbedLogger((message) => {
+  logDebug(message);
+  const status = modelStatusFrom(message);
+  if (status && activeTracker) activeTracker.setModelStatus(status);
+});
+
+/** The model-loading lines textEmbeddings.js logs, reduced to a few words for the status line. */
+function modelStatusFrom(message) {
+  let m;
+  if ((m = /^\[embed\] Loading /.exec(message))) return 'loading';
+  if ((m = /^\[embed\] Downloading (\S+)/.exec(message))) return `downloading ${m[1]}`;
+  if ((m = /^\[embed\]\s+(\S+): (\d+)%/.exec(message))) return `downloading ${m[1]} ${m[2]}%`;
+  if (/^\[embed\]\s+\S+: done/.test(message)) return 'downloaded, loading';
+  if (/^\[embed\] Model ready/.test(message)) return 'ready';
+  return null;
+}
 
 const API_BASE = 'https://api.enterprise.wikimedia.com';
 const identifier = process.argv[2] || 'enwiki_namespace_0';
@@ -99,13 +115,16 @@ const CONCURRENCY = 6; // sizing pass only — pure network, raise if you're on 
 // flight holds its archive + extracted NDJSON) and one DB connection each.
 // Safe to change between runs: every chunk resumes from its own checkpoint.
 const EMBED_CONCURRENCY = Number(process.env.CHUNK_CONCURRENCY) || 4;
-// Articles embedded concurrently WITHIN each chunk, and how many go into one
-// upsertSpansBatch call (embeddingIndex.js) — the DB side of that call is
-// now batched into (at most) two round trips for the whole group rather than
-// per article, so each chunk only ever holds ONE DB connection at a time
-// regardless of this number; DB_POOL_MAX below just needs EMBED_CONCURRENCY
-// (+ headroom) connections, not EMBED_CONCURRENCY * ARTICLE_CONCURRENCY.
-const ARTICLE_CONCURRENCY = 8;
+// Articles per upsertSpansBatch call (ARTICLES_PER_BATCH env, default 100):
+// one embedding call and ONE transaction of a dozen or so statements per
+// batch. Over the tunnel every statement is a ~100–250 ms round trip, so the
+// batch size is what sets the per-article write cost: at 8 articles a batch
+// the write phase measured 435 ms per article against 17 ms of embedding; at
+// 100 it is ~12x less. Each chunk still holds ONE DB connection regardless,
+// so DB_POOL_MAX below only needs EMBED_CONCURRENCY (+ headroom). Costs
+// memory per chunk in flight (100 articles' HTML ≈ 10 MB) and makes the
+// per-chunk checkpoint coarser; safe to change between runs.
+const ARTICLE_CONCURRENCY = Number(process.env.ARTICLES_PER_BATCH) || 100;
 process.env.DB_POOL_MAX ??= String(EMBED_CONCURRENCY + 2); // one connection per chunk in flight (see ARTICLE_CONCURRENCY above) + 2 headroom for other occasional queries (refresh-daily.js, etc. sharing the same Postgres); only takes effect if the user hasn't already set this themselves
 const METADATA_TIMEOUT_MS = 15_000; // HEAD/info calls should be fast; don't hang forever if one stalls
 const STALL_TIMEOUT_MS = 30_000; // abort a chunk download if no bytes arrive for this long
@@ -113,6 +132,14 @@ const CONSOLE_WARN_THROTTLE_MS = 10_000; // cap how often a retrying download re
 
 const PROGRESS_BAR_WIDTH = 30; // fitToTerminal() truncates safely on a narrow terminal, so there's no need to keep this cramped for width's sake
 const PROGRESS_RENDER_INTERVAL_MS = 200;
+// Elapsed (the table column) is active build time over ALL runs, persisted
+// in destDir/elapsed.json. A pause longer than this with no observable
+// progress (a dropped tunnel, a sleeping laptop, the process not running) is
+// not counted; shorter gaps are. 30 s rather than 10 because one embedding
+// batch of large articles on a CPU can legitimately take that long between
+// counter updates.
+const STALL_EXCLUDE_MS = 30_000;
+const ELAPSED_SAVE_INTERVAL_MS = 5_000;
 // Long enough to span several ARTICLE_CONCURRENCY batch-flush cycles (so
 // Art/s doesn't swing between "a batch just landed" and "nothing yet," the
 // problem with the old 5s window), short enough to actually reflect a real
@@ -240,8 +267,72 @@ function createProgressDisplay(totalArticles, chunkSlots) {
   const bytes = createCounter();
   const stageNames = ['embed', 'read', 'write'];
   const stageTimers = Object.fromEntries(stageNames.map((name) => [name, createStageTimer()]));
-  const embeddingChunks = new Set();
+  const stages = new Map(); // chunkId → { stage: 'downloading' | 'extracting' | 'embedding', done, total } (bytes, for downloads)
+  let modelStatus = null;
   let intervalId = null;
+
+  // Elapsed: this session's wall clock for the status line; active time over
+  // all runs for the table column (see STALL_EXCLUDE_MS).
+  const elapsedPath = path.join(destDir, 'elapsed.json');
+  const sessionStart = Date.now();
+  let activeMs = 0;
+  try {
+    activeMs = Number(JSON.parse(fs.readFileSync(elapsedPath, 'utf8')).activeMs) || 0;
+  } catch {
+    activeMs = 0; // first run, or unreadable: start from zero
+  }
+  let lastTick = sessionStart;
+  let lastProgressAt = sessionStart;
+  let lastSignature = '';
+  let stallExcluded = false;
+  let lastSavedAt = sessionStart;
+
+  function saveActive() {
+    try {
+      fs.writeFileSync(elapsedPath, JSON.stringify({ activeMs: Math.round(activeMs), savedAt: new Date().toISOString() }));
+    } catch {
+      // the state dir vanished mid-run; the column keeps counting in memory
+    }
+    lastSavedAt = Date.now();
+  }
+
+  /** Advances active time: called every render tick. Progress = any counter or stage changed; extraction and model loading count as progress (they have no counters). */
+  function tickElapsed() {
+    const now = Date.now();
+    const signature = `${articles.done}|${bytes.done}|${[...stages].map(([id, st]) => `${id}:${st.stage}:${st.done}`).join(',')}|${modelStatus}`;
+    const inherentlyBusy = [...stages.values()].some((st) => st.stage === 'extracting') || /^(loading|downloading|downloaded)/.test(modelStatus ?? '');
+    if (signature !== lastSignature || inherentlyBusy) {
+      lastSignature = signature;
+      lastProgressAt = now;
+      stallExcluded = false;
+    }
+    const delta = now - lastTick;
+    lastTick = now;
+    if (now - lastProgressAt <= STALL_EXCLUDE_MS) {
+      activeMs += delta;
+    } else if (!stallExcluded) {
+      activeMs = Math.max(0, activeMs - STALL_EXCLUDE_MS); // the stall turned out long: take back the part already counted
+      stallExcluded = true;
+    }
+    if (now - lastSavedAt >= ELAPSED_SAVE_INTERVAL_MS) saveActive();
+  }
+
+  function statusText() {
+    const parts = [`Session ${formatDuration((Date.now() - sessionStart) / 1000)}`];
+    const byStage = (stage) => [...stages.values()].filter((st) => st.stage === stage);
+    const downloading = byStage('downloading');
+    const slotParts = [];
+    if (downloading.length) {
+      const total = downloading.reduce((sum, st) => sum + (st.total || 0), 0);
+      const done = downloading.reduce((sum, st) => sum + st.done, 0);
+      slotParts.push(`downloading ${downloading.length}${total ? ` (${Math.min(100, (done / total) * 100).toFixed(0)}%)` : ''}`);
+    }
+    if (byStage('extracting').length) slotParts.push(`extracting ${byStage('extracting').length}`);
+    if (byStage('embedding').length) slotParts.push(`embedding ${byStage('embedding').length}`);
+    parts.push(`chunks: ${slotParts.length ? slotParts.join(', ') : 'none in flight'}`);
+    parts.push(`model: ${modelStatus ?? 'loads on the first batch'}`);
+    return fitToTerminal(parts.join(' | '));
+  }
 
   // Embed / Read / Write: milliseconds per article within one chunk, reported
   // once per batch (see embedChunkArticles' flushBatch). They add up to an
@@ -250,29 +341,33 @@ function createProgressDisplay(totalArticles, chunkSlots) {
   // upload — comparing them separates tunnel latency from tunnel bandwidth.
   // Busy: chunks embedding right now / chunk slots. Below full means slots
   // are waiting on a download or extraction (see main's prefetch).
-  const headers = ['Progress', 'Articles', 'ETA', 'Art/s', 'DL MB/s', 'Embed', 'Read', 'Write', 'Busy'];
+  const headers = ['Progress', 'Articles', 'ETA', 'Elapsed', 'Art/s', 'DL MB/s', 'Embed', 'Read', 'Write', 'Busy'];
   const widths = [
     Math.max(headers[0].length, PROGRESS_BAR_WIDTH + 2 + 1 + 6), // "[" + bar + "]" + " " + "100.0%"
     Math.max(headers[1].length, formatCount(totalArticles).length * 2 + 1), // "done/total", sized to the known total on both sides
     Math.max(headers[2].length, 7), // "999d23h"-ish worst case
-    Math.max(headers[3].length, 6), // rate, e.g. "9999.9"
-    Math.max(headers[4].length, 7), // rate, e.g. "9999.9"
-    ...stageNames.map((_, i) => Math.max(headers[5 + i].length, 5)), // whole ms, e.g. "99999"
-    Math.max(headers[8].length, String(chunkSlots).length * 2 + 1), // "4/4"
+    Math.max(headers[3].length, 7), // active time over all runs, same format
+    Math.max(headers[4].length, 6), // rate, e.g. "9999.9"
+    Math.max(headers[5].length, 7), // rate, e.g. "9999.9"
+    ...stageNames.map((_, i) => Math.max(headers[6 + i].length, 5)), // whole ms, e.g. "99999"
+    Math.max(headers[9].length, String(chunkSlots).length * 2 + 1), // "4/4"
   ];
   const aligns = headers.map((_, i) => (i === 0 ? 'left' : 'right'));
 
   function render() {
+    tickElapsed();
     // rate (lifetime average) drives the ETA; recentRate (short rolling
     // window) drives the displayed Art/s — see createCounter's comment for
     // why these are deliberately different numbers.
     const { done: articlesDone, rate: lifetimeRate, recentRate: articleRate } = articles.stats();
     const { recentRate: bytesRate } = bytes.stats();
+    const embeddingCount = [...stages.values()].filter((st) => st.stage === 'embedding').length;
     const speedCells = [
+      formatDuration(activeMs / 1000),
       articleRate.toFixed(1),
       (bytesRate / 1e6).toFixed(1),
       ...stageNames.map((name) => stageTimers[name].recentAvgMs().toFixed(0)),
-      `${embeddingChunks.size}/${chunkSlots}`,
+      `${embeddingCount}/${chunkSlots}`,
     ];
 
     let cells;
@@ -312,12 +407,15 @@ function createProgressDisplay(totalArticles, chunkSlots) {
    * existing rows; they don't insert anything.
    */
   function renderInPlace() {
-    if (isTTY) process.stdout.write('\x1b[2A');
+    if (isTTY) process.stdout.write(`\x1b[6A\r\x1b[2K${statusText()}\x1b[4B\r`);
     render();
-    if (isTTY) process.stdout.write('\x1b[2B');
+    if (isTTY) process.stdout.write('\x1b[2B\r');
   }
 
+  let lastPrintedStatus = '';
   function printHeaderBlock() {
+    lastPrintedStatus = statusText();
+    console.log(lastPrintedStatus);
     console.log(tableBorder(widths));
     console.log(tableRow(headers, widths, headers.map(() => 'center')));
     console.log(tableBorder(widths));
@@ -341,9 +439,21 @@ function createProgressDisplay(totalArticles, chunkSlots) {
     recordBatchTimings(perArticleMs) {
       for (const name of stageNames) stageTimers[name].record(perArticleMs[name]);
     },
+    /** What a chunk slot is doing right now, for the status line and Busy; `null` clears it. `total` = bytes to download. */
+    setChunkStage(chunkId, stage, total = 0) {
+      if (!stage) stages.delete(chunkId);
+      else stages.set(chunkId, { stage, done: stages.get(chunkId)?.stage === stage ? stages.get(chunkId).done : 0, total });
+    },
+    /** Bytes landed for one downloading chunk (negative on a retried attempt), for the download percentage. */
+    addChunkBytes(chunkId, n) {
+      const st = stages.get(chunkId);
+      if (st) st.done = Math.max(0, st.done + n);
+    },
     setChunkEmbedding(chunkId, isEmbedding) {
-      if (isEmbedding) embeddingChunks.add(chunkId);
-      else embeddingChunks.delete(chunkId);
+      this.setChunkStage(chunkId, isEmbedding ? 'embedding' : null);
+    },
+    setModelStatus(status) {
+      modelStatus = status;
     },
     articlesDone() {
       return articles.done; // for callers (e.g. debug-log lines) that want the corpus-wide running total, not just their own local count
@@ -356,7 +466,17 @@ function createProgressDisplay(totalArticles, chunkSlots) {
         process.stdout.write(`\n${tableBorder(widths)}\n`); // closes the row's line, prints the bottom border, lands on a fresh line below it
         intervalId = setInterval(renderInPlace, PROGRESS_RENDER_INTERVAL_MS);
       } else {
-        intervalId = setInterval(render, PROGRESS_RENDER_INTERVAL_MS);
+        // Not a terminal (piped/redirected): one row per tick, and the status
+        // line again whenever what the slots are doing changes.
+        intervalId = setInterval(() => {
+          const status = statusText().replace(/^Session \S+/, '');
+          if (status !== lastPrintedStatus.replace(/^Session \S+/, '')) {
+            lastPrintedStatus = statusText();
+            process.stdout.write(`\n${lastPrintedStatus}\n`);
+          }
+          render();
+          process.stdout.write('\n');
+        }, PROGRESS_RENDER_INTERVAL_MS);
       }
       intervalId.unref(); // don't let this timer alone keep the process alive if something else goes wrong before finish() runs
     },
@@ -375,7 +495,7 @@ function createProgressDisplay(totalArticles, chunkSlots) {
         console.log(message); // no cursor tricks to worry about when this isn't a real terminal
         return;
       }
-      process.stdout.write('\x1b[5A\r\x1b[0J');
+      process.stdout.write('\x1b[6A\r\x1b[0J');
       console.log(message);
       printHeaderBlock();
       render();
@@ -383,6 +503,8 @@ function createProgressDisplay(totalArticles, chunkSlots) {
     },
     finish() {
       if (intervalId) clearInterval(intervalId);
+      tickElapsed();
+      saveActive();
       if (isTTY) {
         renderInPlace(); // one final in-place update with the true final numbers; the bottom border is already in place from start()
       } else {
@@ -943,15 +1065,34 @@ async function prepareChunk(chunk, tracker) {
     return alreadyExtractedPath;
   }
   logDebug(`${chunk.chunkId}: starting download`);
-  await downloadOne(chunk.url, chunk.filePath, tracker, {
-    contentLength: chunk.contentLength,
-    etag: chunk.etag,
-    acceptsRanges: chunk.acceptsRanges,
-  });
-  logDebug(`${chunk.chunkId}: download complete, extracting`);
-  const ndjsonPath = await extractChunk(chunk);
-  logDebug(`${chunk.chunkId}: extraction complete, ready to embed`);
-  return ndjsonPath;
+  tracker.setChunkStage(chunk.chunkId, 'downloading', chunk.contentLength);
+  // The download reports bytes to the shared counters; this also attributes
+  // them to the chunk so the status line can show how far its download is.
+  const chunkTracker = {
+    ...tracker,
+    addBytes(n) {
+      tracker.addBytes(n);
+      tracker.addChunkBytes(chunk.chunkId, n);
+    },
+    addBytesBurst(n) {
+      tracker.addBytesBurst(n);
+      tracker.addChunkBytes(chunk.chunkId, n);
+    },
+  };
+  try {
+    await downloadOne(chunk.url, chunk.filePath, chunkTracker, {
+      contentLength: chunk.contentLength,
+      etag: chunk.etag,
+      acceptsRanges: chunk.acceptsRanges,
+    });
+    logDebug(`${chunk.chunkId}: download complete, extracting`);
+    tracker.setChunkStage(chunk.chunkId, 'extracting');
+    const ndjsonPath = await extractChunk(chunk);
+    logDebug(`${chunk.chunkId}: extraction complete, ready to embed`);
+    return ndjsonPath;
+  } finally {
+    tracker.setChunkStage(chunk.chunkId, null);
+  }
 }
 
 /**
@@ -1091,11 +1232,14 @@ async function main() {
   );
   console.log(
     `Embed/Read/Write = ms per article within one embedding chunk (they add up: Art/s ≈ Busy × 1000 / their sum). ` +
-      `Busy = chunks embedding / chunk slots — below full means slots are waiting on a download or extraction.`
+      `Busy = chunks embedding / chunk slots — below full means slots are waiting on a download or extraction. ` +
+      `Elapsed = active build time over all runs so far (pauses over ${STALL_EXCLUDE_MS / 1000}s are not counted); ` +
+      `the line above the table is this session: its elapsed time, what the chunk slots are doing, and the embedding model's state.`
   );
   logDebug(`=== run started: ${chunks.length} chunks, ${formatGB(totalBytes)} GB total ===`);
 
   const tracker = createProgressDisplay(recordCount, EMBED_CONCURRENCY);
+  activeTracker = tracker;
   const avgArticlesPerChunk = recordCount > 0 ? recordCount / chunks.length : 0;
   const totals = { chunksDone: 0, articles: 0, spans: 0, unembedded: 0, alreadyCurrent: 0 };
 

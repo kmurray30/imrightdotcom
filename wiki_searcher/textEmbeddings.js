@@ -71,6 +71,7 @@ export function setLogger(fn) {
  */
 export function loadExtractor(device, dtype, modelName = MODEL_NAME) {
   const lastLoggedPct = {}; // per-file, so multi-file downloads (model + tokenizer) don't spam past each other
+  log(`[embed] Loading ${modelName} on ${device} (${dtype})...`);
   return pipeline('feature-extraction', modelName, {
     device,
     // Always passed explicitly rather than left to transformers.js's
