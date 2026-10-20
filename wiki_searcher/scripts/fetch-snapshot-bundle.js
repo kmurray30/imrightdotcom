@@ -31,8 +31,10 @@
  *    are also staged for it; members of chunks already embedded are only
  *    archived (the stream is one pass, so they come in snapshot order, at no
  *    extra download). Members already in the archive are skipped.
- *    If this process dies, a re-run streams the bundle from the start again
- *    (one more GET), skipping everything done or converted.
+ *    Stopping is safe at any time (Ctrl-C, a crash, a reboot): as each member
+ *    begins, <bundleDir>/resume.json records a decompressor access point
+ *    (resumableGunzip.js) at or before it, so a re-run downloads from there
+ *    (one more GET) and repeats at most the member it was in.
  *
  * Usage: node wiki_searcher/scripts/fetch-snapshot-bundle.js [bundleDir]   (default ./wiki-bundle)
  */
@@ -43,11 +45,12 @@ import readline from 'readline';
 import zlib from 'zlib';
 import { once } from 'events';
 import { Readable } from 'stream';
-import tar from 'tar-stream';
 import { createHash } from 'crypto';
 import { loadEnv } from '../../imright/load-env.js';
 import { getAccessToken } from '../../utils/wikimediaAuth.js';
 import { createPanel, color, bar, fit, formatBytes, formatCount, formatDuration } from '../fetcherDisplay.js';
+import { ResumableGunzip, serializePoint, deserializePoint } from '../resumableGunzip.js';
+import { TarWalker } from '../tarWalker.js';
 
 loadEnv();
 process.env.DB_IDLE_TIMEOUT_MS ??= '0'; // keep connections open (see build-index-from-wikimedia.js)
@@ -64,6 +67,7 @@ const seedPath = path.join(bundleDir, `${identifier}.tar.gz`); // raw bytes save
 const oldMembersDir = path.join(bundleDir, 'members'); // raw members staged by the previous version
 const spansDir = path.resolve(process.env.SPANS_ARCHIVE_DIR || './wiki-spans'); // permanent archive of parsed articles
 const requestsPath = path.join(bundleDir, 'requests.json');
+const resumePath = path.join(bundleDir, 'resume.json'); // where to pick the stream up again after a stop
 const logPath = path.join(bundleDir, 'fetch.log');
 const MAX_REQUESTS = Number(process.env.BUNDLE_MAX_REQUESTS) || 12;
 const STALL_MS = 120_000;
@@ -99,9 +103,9 @@ function workerDirs() {
     .map((name) => path.join(process.cwd(), name))
     .filter((dir) => fs.statSync(dir).isDirectory());
 }
-/** This unit is already in the archive. */
+/** This unit is already in the archive (its manifest is written last, so a unit cut off by a stop doesn't count). */
 function spansFileExists(unitId) {
-  return fs.existsSync(path.join(spansDir, `${unitId}${SPANS_SUFFIX}`));
+  return fs.existsSync(path.join(spansDir, `${unitId}${SPANS_SUFFIX}`)) && fs.existsSync(path.join(spansDir, `${unitId}.manifest.json`));
 }
 
 /** Where the archived articles came from: written beside each spans file, for re-embedding and delta refreshes later. */
@@ -264,6 +268,21 @@ async function convertLocalRawFiles() {
   // Queue rows still pointing at raw files that are gone: stage them again from the bundle.
   const stale = (await queue.stagedRows()).filter((row) => !fs.existsSync(row.staged_path) && !spansFileExists(row.chunk_id)).map((row) => row.chunk_id);
   await queue.unstage(stale);
+  // Archived units that are neither done nor staged (a stop between saving and staging): hand them over.
+  const staged = new Set((await queue.stagedRows()).map((row) => row.chunk_id));
+  const doneNow = await queue.doneChunkIds();
+  let handed = 0;
+  for (const name of fs.readdirSync(spansDir)) {
+    if (!name.endsWith(SPANS_SUFFIX)) continue;
+    const unitId = name.slice(0, -SPANS_SUFFIX.length);
+    if (doneNow.has(unitId) || staged.has(unitId) || !spansFileExists(unitId)) continue;
+    const file = path.join(spansDir, name);
+    if (unitId.startsWith('bundle_')) await queue.addStagedUnit(unitId, file);
+    else if ((await queue.chunkRow(unitId)) == null) continue;
+    else await queue.stageChunk(unitId, file);
+    handed++;
+  }
+  if (handed) say(`${handed} saved chunk(s) handed to the embedder that a stop had cut off before the hand-over`);
   if (raw.length || stale.length) say(`Step 1 done: ${ui.raw.converted} raw file(s) converted, ${raw.length - ui.raw.converted} already saved (raw copy removed)${stale.length ? `, ${stale.length} stale hand-over(s) cleared` : ''}`);
   else say('Step 1 done: no raw files on disk to convert');
 }
@@ -328,7 +347,10 @@ async function* bundleBytes() {
   while (download.offset < download.total) {
     countGet(download.offset);
     const headers = { Authorization: `Bearer ${await getAccessToken()}` };
-    if (download.offset > 0) headers.Range = `bytes=${download.offset}-`;
+    if (download.offset > 0) {
+      headers.Range = `bytes=${download.offset}-`;
+      if (snapshotInfo.etag) headers['If-Range'] = snapshotInfo.etag; // a changed snapshot answers 200 (whole file) instead of the wrong bytes
+    }
     const controller = new AbortController();
     let stall = null;
     try {
@@ -459,21 +481,52 @@ async function handleMember(header, stream) {
   log(`converted bundle member ${name} → ${unitId} (${lines} lines)`);
 }
 
-async function streamBundle() {
-  const source = Readable.from(bundleBytes());
-  const gunzip = zlib.createGunzip();
-  const extract = tar.extract();
-  extract.on('entry', (header, stream, next) => {
-    handleMember(header, stream).then(
-      () => next(),
-      (error) => next(error)
-    );
+// ---------------------------------------------------------------- stop and resume
+/**
+ * Where to resume: saved as each bundle member begins (every earlier member
+ * is then fully archived). It holds a decompressor access point at or before
+ * the member's first byte, so a re-run downloads from there instead of from
+ * the start of the bundle and repeats at most the member it was in.
+ */
+function loadResumePoint() {
+  let saved;
+  try {
+    saved = JSON.parse(fs.readFileSync(resumePath, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (saved.etag !== snapshotInfo.etag) {
+    say(`${color.yellow('!')} The snapshot changed since the last run (ETag ${saved.etag} → ${snapshotInfo.etag}), so it can't resume mid-file; streaming the new one from the start (chunks already saved are still skipped)`);
+    return null;
+  }
+  return saved;
+}
+function saveResumePoint(fields) {
+  const tmp = `${resumePath}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ etag: snapshotInfo.etag, savedAt: new Date().toISOString(), ...fields }));
+  fs.renameSync(tmp, resumePath);
+}
+function countsToSave() {
+  return { members: stats.members, memberStaged: stats.memberStaged, archivedDone: stats.archivedDone, skippedConverted: stats.skippedConverted, verified: stats.verified, mapping };
+}
+
+async function streamBundle(resume) {
+  const gunzip = new ResumableGunzip(resume ? deserializePoint(resume.point) : null);
+  download.offset = gunzip.startOffset;
+  const walker = new TarWalker({
+    offset: resume ? resume.point.out : 0,
+    skipTo: resume ? resume.entryOffset : 0,
+    onEntryStart: (entryOffset) => {
+      if (gunzip.point) saveResumePoint({ point: serializePoint(gunzip.point), entryOffset, compressedOffset: gunzip.point.in, ...countsToSave() });
+    },
+    onEntry: handleMember,
   });
-  await new Promise((resolve, reject) => {
-    extract.on('finish', resolve);
-    for (const s of [source, gunzip, extract]) s.on('error', reject);
-    source.pipe(gunzip).pipe(extract);
-  });
+  for await (const chunk of bundleBytes()) {
+    for (const piece of gunzip.push(chunk)) await walker.write(piece);
+    if (walker.ended) break;
+  }
+  if (!walker.complete) throw new Error(`the bundle ended in the middle of a member (at uncompressed byte ${walker.offset})`);
+  saveResumePoint({ complete: true, ...countsToSave() });
 }
 
 // ---------------------------------------------------------------- main
@@ -576,8 +629,8 @@ function renderPanel(width) {
   lines.push('');
   const footer = {
     done: 'All done · the archive is complete',
-    stopped: 'Run it again to continue · it skips everything already saved',
-  }[ui.phase] ?? 'Ctrl-C to stop · running it again skips everything already saved';
+    stopped: 'Run it again to continue from the chunk it was on',
+  }[ui.phase] ?? 'Ctrl-C to stop any time · running it again continues from the chunk it was on';
   lines.push(gray(`  ${footer} · log: ${shortPath(logPath)}`));
 
   const phaseLabel = { starting: cyan('starting'), converting: cyan('step 1 of 2'), streaming: cyan('step 2 of 2'), done: green('done'), stopped: red('stopped') }[ui.phase];
@@ -617,8 +670,23 @@ try {
   await convertLocalRawFiles();
   ui.rawDone = true;
   ui.phase = 'streaming';
-  say(`Step 2: streaming the ${formatGB(download.total)} GB bundle${fs.existsSync(seedPath) ? `, starting with the ${formatGB(fs.statSync(seedPath).size)} GB already saved in ${path.basename(seedPath)}` : ''}…`);
-  await streamBundle();
+  const resume = loadResumePoint();
+  if (resume) {
+    Object.assign(stats, { members: resume.members, memberStaged: resume.memberStaged, archivedDone: resume.archivedDone, skippedConverted: resume.skippedConverted, verified: resume.verified });
+    mapping = resume.mapping;
+  }
+  if (resume?.complete) {
+    download.offset = download.total;
+    say('Step 2: this snapshot was already read to the end on an earlier run; nothing left to stream');
+  } else {
+    if (resume) {
+      say(`Step 2: ${color.green('resuming')} at ${formatGB(resume.compressedOffset)} of ${formatGB(download.total)} GB, at the start of the chunk it was in when it stopped (${stats.members} bundle members already done)`);
+      if (fs.existsSync(seedPath) && fs.statSync(seedPath).size <= resume.compressedOffset) fs.rmSync(seedPath, { force: true }); // already past it
+    } else {
+      say(`Step 2: streaming the ${formatGB(download.total)} GB bundle${fs.existsSync(seedPath) ? `, starting with the ${formatGB(fs.statSync(seedPath).size)} GB already saved in ${path.basename(seedPath)}` : ''}…`);
+    }
+    await streamBundle(resume);
+  }
 } catch (error) {
   failure = error;
 }
@@ -633,7 +701,7 @@ await shutdownSpanWorkers();
 if (failure) {
   await queue.setBundleFetcherState('stopped').catch(() => {});
   say(`${color.red('✗ Stopped:')} ${failure.message}`);
-  say('Run this script again to continue: it streams the bundle from the start, skipping everything already saved.');
+  say('Run this script again to continue: it picks up at the start of the chunk it was on.');
   panel.close();
   process.exit(1);
 }
