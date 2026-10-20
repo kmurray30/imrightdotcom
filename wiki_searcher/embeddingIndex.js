@@ -598,13 +598,34 @@ const UNEMBEDDED_COLUMNS = ['title', 'page_id', 'version_identifier', 'section',
  * the exact binary COPY path the build uses, so an encoding mismatch fails
  * here — before any real rows — instead of silently storing garbage vectors.
  */
+/**
+ * Runs `fn(client)` holding a database-wide advisory lock, so build processes
+ * starting at the same moment don't race on CREATE … IF NOT EXISTS (which
+ * Postgres does not make safe under concurrency: both see "missing", one
+ * fails with a duplicate-key error on the system catalog).
+ */
+export async function withSchemaLock(fn) {
+  const pool = getPool();
+  if (!pool) throw new Error('DATABASE_URL is not set.');
+  const client = await pool.connect();
+  try {
+    await client.query("SELECT pg_advisory_lock(hashtext('imright_build_schema'))");
+    return await fn(client);
+  } finally {
+    await client.query("SELECT pg_advisory_unlock(hashtext('imright_build_schema'))").catch(() => {});
+    client.release();
+  }
+}
+
 export async function ensureSpansTable() {
   const pool = getPool();
   if (!pool) throw new Error('DATABASE_URL is not set; cannot create the wiki citation span index.');
-  await pool.query(SPANS_TABLE_SQL);
-  await pool.query(`CREATE INDEX IF NOT EXISTS ${SPANS_TABLE}_page_id ON ${SPANS_TABLE} (page_id)`);
-  await pool.query(UNEMBEDDED_TABLE_SQL);
-  await pool.query(`CREATE INDEX IF NOT EXISTS ${UNEMBEDDED_TABLE}_page_id ON ${UNEMBEDDED_TABLE} (page_id)`);
+  await withSchemaLock(async (client) => {
+    await client.query(SPANS_TABLE_SQL);
+    await client.query(`CREATE INDEX IF NOT EXISTS ${SPANS_TABLE}_page_id ON ${SPANS_TABLE} (page_id)`);
+    await client.query(UNEMBEDDED_TABLE_SQL);
+    await client.query(`CREATE INDEX IF NOT EXISTS ${UNEMBEDDED_TABLE}_page_id ON ${UNEMBEDDED_TABLE} (page_id)`);
+  });
 
   const probe = Array.from({ length: ARCTIC_DIMS }, (_, i) => Math.sin(i + 1) / 10);
   const client = await pool.connect();

@@ -15,9 +15,15 @@
  */
 import os from 'node:os';
 import { getPool } from '../imright/scripts/db.js';
-import { isRetryableConnectionError } from './embeddingIndex.js';
+import { isRetryableConnectionError, withSchemaLock } from './embeddingIndex.js';
 
 export const QUEUE_TABLE = 'wiki_build_chunks';
+/** One row about every minute (whichever worker gets there first): the queue's total lines done. Shared rate, ETA and elapsed come from this. */
+export const PROGRESS_TABLE = 'wiki_build_progress';
+const META_TABLE = 'wiki_build_meta';
+const RATE_WINDOW_SEC = 180; // Art/s: recent combined rate
+const ETA_WINDOW_SEC = 20 * 60; // ETA: steadier combined rate
+const ACTIVE_GAP_MAX_SEC = 180; // a longer gap between samples (nobody running, or no progress) is not counted as build time
 const LEASE_SEC = Number(process.env.CHUNK_LEASE_SEC) || 300;
 /** A chunk released this many times (each release = the build gave up on it after its own retries) is no longer handed out. */
 export const MAX_CHUNK_ATTEMPTS = 6;
@@ -50,19 +56,83 @@ async function query(sql, params = []) {
 }
 
 export async function ensureQueueTable() {
-  await query(`
-    CREATE TABLE IF NOT EXISTS ${QUEUE_TABLE} (
-      chunk_id     TEXT PRIMARY KEY,
-      ord          INT NOT NULL,
-      claimed_by   TEXT,
-      claimed_at   TIMESTAMPTZ,
-      heartbeat_at TIMESTAMPTZ,
-      lines_done   INT NOT NULL DEFAULT 0,
-      total_lines  INT,
-      done_at      TIMESTAMPTZ,
-      attempts     INT NOT NULL DEFAULT 0,
-      last_error   TEXT
-    )`);
+  await withSchemaLock(async (client) => {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${QUEUE_TABLE} (
+        chunk_id     TEXT PRIMARY KEY,
+        ord          INT NOT NULL,
+        claimed_by   TEXT,
+        claimed_at   TIMESTAMPTZ,
+        heartbeat_at TIMESTAMPTZ,
+        lines_done   INT NOT NULL DEFAULT 0,
+        total_lines  INT,
+        done_at      TIMESTAMPTZ,
+        attempts     INT NOT NULL DEFAULT 0,
+        last_error   TEXT
+      )`);
+    await client.query(`CREATE TABLE IF NOT EXISTS ${PROGRESS_TABLE} (taken_at TIMESTAMPTZ PRIMARY KEY DEFAULT clock_timestamp(), lines_done BIGINT NOT NULL)`);
+    await client.query(`CREATE TABLE IF NOT EXISTS ${META_TABLE} (key TEXT PRIMARY KEY, value JSONB NOT NULL)`);
+  });
+}
+
+const LINES_DONE_SQL = `SELECT COALESCE(sum(CASE WHEN done_at IS NOT NULL THEN COALESCE(total_lines, lines_done) ELSE lines_done END), 0) FROM ${QUEUE_TABLE}`;
+
+/** Adds a progress sample unless one was taken in the last 55 s. Cheap; every worker calls it on its refresh tick. */
+export async function recordProgressSample() {
+  await query(
+    `INSERT INTO ${PROGRESS_TABLE} (taken_at, lines_done)
+     SELECT clock_timestamp(), (${LINES_DONE_SQL})
+     WHERE NOT EXISTS (SELECT 1 FROM ${PROGRESS_TABLE} WHERE taken_at > clock_timestamp() - interval '55 seconds')
+     ON CONFLICT (taken_at) DO NOTHING`
+  );
+}
+
+/** Sets the build time accumulated before the shared history existed. First caller wins. */
+export async function seedActiveMs(ms) {
+  if (!(ms > 0)) return;
+  await query(`INSERT INTO ${META_TABLE} (key, value) VALUES ('active_ms_seed', to_jsonb($1::bigint)) ON CONFLICT (key) DO NOTHING`, [Math.round(ms)]);
+}
+
+/**
+ * Whole-build rate and elapsed time from the shared history, computed with
+ * the database's clock so every worker on every machine gets the same
+ * numbers. rate/etaRate are null until the history spans a minute.
+ * @returns {Promise<{ rate: number|null, etaRate: number|null, activeMs: number }>}
+ */
+export async function progressStats() {
+  const { rows: [row] } = await query(
+    `WITH s AS (
+       SELECT taken_at, lines_done,
+              lag(taken_at) OVER (ORDER BY taken_at) AS prev_at,
+              lag(lines_done) OVER (ORDER BY taken_at) AS prev_lines
+       FROM ${PROGRESS_TABLE}
+     ),
+     latest AS (SELECT taken_at, lines_done, prev_at, prev_lines FROM s ORDER BY taken_at DESC LIMIT 1),
+     win AS (
+       SELECT
+         (SELECT min(taken_at) FROM s WHERE taken_at >= (SELECT taken_at FROM latest) - make_interval(secs => $1)) AS r_from,
+         (SELECT min(taken_at) FROM s WHERE taken_at >= (SELECT taken_at FROM latest) - make_interval(secs => $2)) AS e_from
+     )
+     SELECT
+       (SELECT taken_at FROM latest) AS latest_at,
+       (SELECT lines_done FROM latest) AS latest_lines,
+       (SELECT lines_done FROM s WHERE taken_at = (SELECT r_from FROM win)) AS r_lines,
+       extract(epoch FROM (SELECT taken_at FROM latest) - (SELECT r_from FROM win)) AS r_span,
+       (SELECT lines_done FROM s WHERE taken_at = (SELECT e_from FROM win)) AS e_lines,
+       extract(epoch FROM (SELECT taken_at FROM latest) - (SELECT e_from FROM win)) AS e_span,
+       COALESCE((SELECT sum(extract(epoch FROM taken_at - prev_at)) FROM s
+                 WHERE prev_at IS NOT NULL AND lines_done > prev_lines AND taken_at - prev_at <= make_interval(secs => $3)), 0) AS active_sec,
+       (SELECT CASE WHEN l.prev_at IS NOT NULL AND l.lines_done > l.prev_lines AND clock_timestamp() - l.taken_at <= make_interval(secs => $3)
+                    THEN extract(epoch FROM clock_timestamp() - l.taken_at) ELSE 0 END FROM latest l) AS tail_sec,
+       COALESCE((SELECT (value #>> '{}')::bigint FROM ${META_TABLE} WHERE key = 'active_ms_seed'), 0) AS seed_ms`,
+    [RATE_WINDOW_SEC, ETA_WINDOW_SEC, ACTIVE_GAP_MAX_SEC]
+  );
+  const rateOf = (lines, span) => (span >= 60 ? (Number(row.latest_lines) - Number(lines)) / span : null);
+  return {
+    rate: row.latest_at ? rateOf(row.r_lines, Number(row.r_span)) : null,
+    etaRate: row.latest_at ? rateOf(row.e_lines, Number(row.e_span)) : null,
+    activeMs: Number(row.seed_ms) + (Number(row.active_sec) + Number(row.tail_sec || 0)) * 1000,
+  };
 }
 
 /** Adds every snapshot chunk (in snapshot order); existing rows are left alone. */
@@ -80,10 +150,15 @@ export async function registerChunks(chunkIds) {
  * for everyone; chunks with work in progress on local disk (a checkpoint or an
  * extracted file) are claimed for this worker, so it resumes them instead of
  * another worker re-downloading them.
+ * Chunks in progress in a SIBLING state dir (another local worker's) are
+ * reserved under that worker's prefix (`host:dir:reserved`): when that worker
+ * starts it adopts them (see the build's adoptPreviousClaims); if it never
+ * does, the lease runs out and anyone takes them.
  * @param {Array<{chunkId: string, totalLines: number|null}>} doneChunks
  * @param {Array<{chunkId: string, linesDone: number}>} inProgressChunks
+ * @param {Array<{chunkId: string, linesDone: number, owner: string}>} [reservedChunks]
  */
-export async function importLocalState(workerId, doneChunks, inProgressChunks) {
+export async function importLocalState(workerId, doneChunks, inProgressChunks, reservedChunks = []) {
   if (doneChunks.length > 0) {
     await query(
       `UPDATE ${QUEUE_TABLE} q SET done_at = COALESCE(q.done_at, now()), total_lines = COALESCE(t.total, q.total_lines),
@@ -102,6 +177,21 @@ export async function importLocalState(workerId, doneChunks, inProgressChunks) {
       [workerId, inProgressChunks.map((c) => c.chunkId), inProgressChunks.map((c) => c.linesDone), LEASE_SEC]
     );
   }
+  if (reservedChunks.length > 0) {
+    await query(
+      `UPDATE ${QUEUE_TABLE} q SET claimed_by = t.owner, claimed_at = now(), heartbeat_at = now(), lines_done = GREATEST(q.lines_done, t.lines)
+       FROM unnest($1::text[], $2::int[], $3::text[]) AS t(id, lines, owner)
+       WHERE q.chunk_id = t.id AND q.done_at IS NULL
+         AND (q.claimed_by IS NULL OR q.heartbeat_at < now() - make_interval(secs => $4))`,
+      [reservedChunks.map((c) => c.chunkId), reservedChunks.map((c) => c.linesDone), reservedChunks.map((c) => c.owner), LEASE_SEC]
+    );
+  }
+}
+
+/** Ids of chunks the queue marks done (for cleaning up local leftovers). */
+export async function doneChunkIds() {
+  const { rows } = await query(`SELECT chunk_id FROM ${QUEUE_TABLE} WHERE done_at IS NOT NULL`);
+  return new Set(rows.map((r) => r.chunk_id));
 }
 
 /**
@@ -160,7 +250,7 @@ export async function unclaim(workerId, chunkId) {
 
 /**
  * Corpus-wide progress for the display, the same for every worker.
- * @returns {{ chunks: number, doneChunks: number, linesDone: number, liveWorkers: string[], stuck: Array<{chunkId: string, attempts: number, lastError: string}> }}
+ * @returns {{ chunks: number, doneChunks: number, linesDone: number, liveWorkers: string[], stuck: Array<{chunkId: string, attempts: number, lastError: string}>, rate: number|null, etaRate: number|null, activeMs: number }}
  */
 export async function queueSnapshot() {
   const { rows: [totals] } = await query(
@@ -175,12 +265,14 @@ export async function queueSnapshot() {
     `SELECT chunk_id, attempts, last_error FROM ${QUEUE_TABLE} WHERE done_at IS NULL AND attempts >= $1 ORDER BY ord`,
     [MAX_CHUNK_ATTEMPTS]
   );
+  const stats = await progressStats();
   return {
     chunks: totals.chunks,
     doneChunks: totals.done_chunks,
     linesDone: Number(totals.lines_done),
-    liveWorkers: workers.map((w) => w.claimed_by),
+    liveWorkers: workers.map((w) => w.claimed_by).filter((w) => !w.endsWith(':reserved')),
     stuck: stuck.map((s) => ({ chunkId: s.chunk_id, attempts: s.attempts, lastError: s.last_error })),
+    ...stats,
   };
 }
 
