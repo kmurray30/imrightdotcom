@@ -83,7 +83,8 @@ import { callExternalApi, HttpStatusError, timeoutSignal } from '../../utils/ext
 import { upsertSpansBatch, ensureSpansTable, SPANS_TABLE, UNEMBEDDED_TABLE, SPAN_OPTIONS, setConnectionWarningLogger } from '../embeddingIndex.js';
 import {
   ensureQueueTable, registerChunks, importLocalState, claimNext, heartbeat, markDone, release, queueSnapshot,
-  runQueue, pendingCount, setQueueWarningLogger, recordProgressSample, seedActiveMs, doneChunkIds, setCodeVersion, QUEUE_TABLE, MAX_CHUNK_ATTEMPTS,
+  runQueue, pendingCount, setQueueWarningLogger, recordProgressSample, seedActiveMs, doneChunkIds, setCodeVersion, chunkRow, unclaimMine, bundleFetcherActive,
+  QUEUE_TABLE, MAX_CHUNK_ATTEMPTS,
 } from '../chunkQueue.js';
 import { setLogger as setEmbedLogger, embedConfig } from '../textEmbeddings.js';
 import { formatDuration, fitToTerminal, tableBorder, tableRow } from './terminalTable.js';
@@ -131,6 +132,11 @@ const EMBED_CONCURRENCY = Number(process.env.CHUNK_CONCURRENCY) || 4;
 if (process.env.CHUNK_SHARD) {
   console.log('CHUNK_SHARD is no longer needed and is ignored: build processes now share a chunk queue in Postgres.');
 }
+// CHUNK_SOURCE=bundle: chunks come from fetch-snapshot-bundle.js (one download
+// of the whole snapshot, split into per-chunk files on local disk) instead of
+// per-chunk downloads — for when the monthly chunk-download allowance is used
+// up. Workers then only take chunks the fetcher has staged.
+const BUNDLE_MODE = process.env.CHUNK_SOURCE === 'bundle';
 const QUEUE_REFRESH_MS = 10_000; // how often the display re-reads corpus-wide progress from the queue
 const HEARTBEAT_MS = 15_000; // lease renewal + lines done, for every chunk this process holds
 // Articles per upsertSpansBatch call (ARTICLES_PER_BATCH env, default 100):
@@ -450,7 +456,7 @@ function createProgressDisplay(totalArticles, chunkSlots, queue = null) {
     if (byStage('extracting').length) slotParts.push(`extracting ${byStage('extracting').length}`);
     if (byStage('waiting').length) slotParts.push(`${byStage('waiting').length} waiting to download`);
     if (byStage('embedding').length) slotParts.push(`embedding ${byStage('embedding').length}`);
-    parts.push(`chunks: ${slotParts.length ? slotParts.join(', ') : 'none in flight'}`);
+    parts.push(`chunks: ${slotParts.length ? slotParts.join(', ') : BUNDLE_MODE ? 'waiting for the bundle fetcher to stage chunks' : 'none in flight'}`);
     parts.push(`model: ${modelStatus ?? 'loads on the first batch'}`);
     if (queue) parts.push(`this process ${articles.stats().recentRate.toFixed(1)} art/s`);
     const lines = [fitToTerminal(parts.join(' | '))];
@@ -1290,6 +1296,7 @@ async function prepareChunk(chunk, tracker) {
     tracker.addBytesBurst(chunk.contentLength);
     return alreadyExtractedPath;
   }
+  if (BUNDLE_MODE) return takeStagedChunk(chunk);
   logDebug(`${chunk.chunkId}: starting download`);
   tracker.setChunkStage(chunk.chunkId, 'downloading', chunk.contentLength);
   // The download reports bytes to the shared counters; this also attributes
@@ -1326,6 +1333,55 @@ async function prepareChunk(chunk, tracker) {
 }
 
 /**
+ * Bundle mode: moves the chunk's NDJSON (staged by fetch-snapshot-bundle.js,
+ * or left in another local worker's dir by a worker that stopped, with its
+ * checkpoint) into this worker's dir. Throws an error marked `notStaged`
+ * when the file is nowhere to be found.
+ */
+async function takeStagedChunk(chunk) {
+  const target = path.join(destDir, `${chunk.chunkId}.ndjson`);
+  const row = await chunkRow(chunk.chunkId);
+  const siblings = siblingStateDirs();
+  const candidates = [row?.staged_path, ...siblings.map((dir) => path.join(dir, `${chunk.chunkId}.ndjson`))].filter(Boolean);
+  for (const source of candidates) {
+    if (!fs.existsSync(source)) continue;
+    moveFile(source, target);
+    const checkpoint = path.join(path.dirname(source), `${chunk.chunkId}.progress`);
+    if (siblings.includes(path.dirname(source)) && fs.existsSync(checkpoint)) moveFile(checkpoint, progressCheckpointPath(chunk.chunkId));
+    logDebug(`${chunk.chunkId}: took the staged file from ${source}`);
+    return target;
+  }
+  const error = new Error('its staged file is not on disk (re-run fetch-snapshot-bundle.js to stage it again)');
+  error.notStaged = true;
+  throw error;
+}
+
+function moveFile(source, target) {
+  try {
+    fs.renameSync(source, target);
+  } catch (error) {
+    if (error.code !== 'EXDEV') throw error;
+    fs.copyFileSync(source, target); // different disk: copy, then remove
+    fs.rmSync(source, { force: true });
+  }
+}
+
+/** Other local build state dirs (wiki-snapshots-v2, -v2b, -v2c …), this one excluded. */
+function siblingStateDirs() {
+  const resolved = path.resolve(destDir);
+  const stem = path.basename(resolved).replace(/[a-z]$/, '');
+  const parent = path.dirname(resolved);
+  try {
+    return fs
+      .readdirSync(parent)
+      .map((name) => path.join(parent, name))
+      .filter((full) => full !== resolved && path.basename(full).startsWith(stem) && /^[a-z]?$/.test(path.basename(full).slice(stem.length)) && fs.statSync(full).isDirectory());
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Runs one claimed chunk through embed -> cleanup -> mark done, after
  * awaiting its preparation (`prepare(chunk)` — usually already started when
  * the chunk was claimed as a slot's next one, see main). Returns what the
@@ -1350,6 +1406,10 @@ async function processChunk(chunk, prepare, unprepare, tracker, totals) {
     } catch (error) {
       unprepare(chunk); // a retry re-runs the download/extraction (resuming the partial file) instead of reusing a failed promise
       tracker.setChunkEmbedding(chunk.chunkId, false);
+      if (error.notStaged) {
+        logDebug(`${chunk.chunkId}: ${error.message}`);
+        return { status: 'not_staged', detail: error.message };
+      }
       const detail = `${error.message}${error.detail ? ` (${error.detail})` : ''}`;
       if (attempt >= CHUNK_MAX_ATTEMPTS) {
         totals.failedChunks.push({ chunkId: chunk.chunkId, error: detail });
@@ -1410,7 +1470,20 @@ async function processChunkOnce(chunk, prepare, tracker, totals) {
  * correctness dependency.
  */
 function loadCachedSnapshotMetadata() {
-  const cachePath = path.join(destDir, 'snapshot-metadata.json');
+  let cachePath = path.join(destDir, 'snapshot-metadata.json');
+  if (!fs.existsSync(cachePath)) {
+    // A sibling build dir's listing is the same snapshot: reuse it rather than
+    // sending one HEAD request per chunk (which may count against the quota).
+    const sibling = siblingStateDirs().map((dir) => path.join(dir, 'snapshot-metadata.json')).find((file) => fs.existsSync(file));
+    if (!sibling) return null;
+    try {
+      const parsed = JSON.parse(fs.readFileSync(sibling, 'utf8'));
+      parsed.chunks = (parsed.chunks ?? []).map((c) => ({ ...c, filePath: path.join(destDir, `${c.chunkId}.tar.gz`) }));
+      fs.writeFileSync(cachePath, JSON.stringify(parsed, null, 2));
+    } catch {
+      return null;
+    }
+  }
   if (!fs.existsSync(cachePath)) return null;
   try {
     const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
@@ -1456,7 +1529,7 @@ function scanLocalState(chunks, fallbackLines) {
       done.push({ chunkId, totalLines: loadChunkTotalLines(path.join(doneDir, `${chunkId}.done`)) ?? fallbackLines });
       continue;
     }
-    const hasWorkIn = (dir) => ['.progress', '.ndjson', '.tar.gz'].some((ext) => fs.existsSync(path.join(dir, `${chunkId}${ext}`)));
+    const hasWorkIn = (dir) => (BUNDLE_MODE ? ['.ndjson'] : ['.progress', '.ndjson', '.tar.gz']).some((ext) => fs.existsSync(path.join(dir, `${chunkId}${ext}`)));
     if (hasWorkIn(resolved)) {
       inProgress.push({ chunkId, linesDone: loadLineCheckpoint(chunkId) });
       continue;
@@ -1583,6 +1656,22 @@ async function main() {
   await ensureQueueTable();
   await registerChunks(chunks.map((c) => c.chunkId));
   await adoptPreviousClaims(workerPrefix, workerId);
+  if (BUNDLE_MODE) {
+    // No more per-chunk downloads in bundle mode: drop partial ones (the
+    // fetcher stages those chunks from the bundle) and give back their claims.
+    const dropped = [];
+    for (const { chunkId } of chunks) {
+      const partial = path.join(destDir, `${chunkId}.tar.gz`);
+      if (!fs.existsSync(partial) || fs.existsSync(path.join(destDir, `${chunkId}.ndjson`))) continue;
+      for (const ext of ['.tar.gz', '.tar.gz.etag', '.progress']) fs.rmSync(path.join(destDir, `${chunkId}${ext}`), { force: true });
+      dropped.push(chunkId);
+    }
+    await unclaimMine(workerId, dropped);
+    if (dropped.length) {
+      logDebug(`bundle mode: dropped ${dropped.length} partial chunk download(s): ${dropped.join(', ')}`);
+      console.log(`Bundle mode: dropped ${dropped.length} partial chunk download(s); the bundle fetcher stages those chunks instead.`);
+    }
+  }
   const local = scanLocalState(chunks, recordCount > 0 ? Math.round(recordCount / chunks.length) : null);
   await importLocalState(workerId, local.done, local.inProgress, local.reserved);
   await seedActiveMs(local.elapsedSeedMs);
@@ -1694,8 +1783,11 @@ async function main() {
     slots: EMBED_CONCURRENCY,
     claim: async (exclude) => {
       for (;;) {
-        const id = await claimNext(workerId, [...exclude, ...givenUp]);
+        const id = await claimNext(workerId, [...exclude, ...givenUp], { stagedOnly: BUNDLE_MODE });
         if (id === null) return null;
+        if (BUNDLE_MODE && !chunksById.has(id) && id.startsWith('bundle_')) {
+          chunksById.set(id, { chunkId: id, filePath: path.join(destDir, `${id}.tar.gz`), contentLength: 0 }); // a bundle member that is its own unit
+        }
         if (chunksById.has(id)) {
           held.add(id);
           return id;
@@ -1710,12 +1802,17 @@ async function main() {
     },
     // Stay up while other workers hold unfinished chunks: if one of them
     // dies, its chunks come back after the lease and this worker takes them.
-    remaining: (exclude) => pendingCount([...exclude, ...givenUp]),
+    // In bundle mode, also while the bundle fetcher is still reading: it may add more units.
+    remaining: async (exclude) => (await pendingCount([...exclude, ...givenUp])) || (BUNDLE_MODE && (await bundleFetcherActive()) ? 1 : 0),
     processChunk: async (id) => {
       const chunk = chunksById.get(id);
       const outcome = await processChunk(chunk, prepare, unprepare, tracker, totals);
       if (outcome.status === 'done') {
         await markDone(id, outcome.totalLines);
+      } else if (outcome.status === 'not_staged') {
+        givenUp.add(id); // not for this session; the fetcher can stage it again
+        await unclaimMine(workerId, [id]);
+        tracker.noteIssue('notstaged', 'chunks whose staged file was missing');
       } else {
         givenUp.add(id);
         await release(id, outcome.detail);

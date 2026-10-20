@@ -78,6 +78,9 @@ export async function ensureQueueTable() {
         last_error   TEXT
       )`);
     await client.query(`ALTER TABLE ${QUEUE_TABLE} ADD COLUMN IF NOT EXISTS failed_version TEXT`);
+    // Bundle mode (fetch-snapshot-bundle.js): where the chunk's NDJSON was staged on local disk.
+    await client.query(`ALTER TABLE ${QUEUE_TABLE} ADD COLUMN IF NOT EXISTS staged_path TEXT`);
+    await client.query(`ALTER TABLE ${QUEUE_TABLE} ADD COLUMN IF NOT EXISTS staged_at TIMESTAMPTZ`);
     await client.query(`CREATE TABLE IF NOT EXISTS ${PROGRESS_TABLE} (taken_at TIMESTAMPTZ PRIMARY KEY DEFAULT clock_timestamp(), lines_done BIGINT NOT NULL)`);
     await client.query(`CREATE TABLE IF NOT EXISTS ${META_TABLE} (key TEXT PRIMARY KEY, value JSONB NOT NULL)`);
   });
@@ -196,6 +199,66 @@ export async function importLocalState(workerId, doneChunks, inProgressChunks, r
   }
 }
 
+/** Bundle mode: the NDJSON for a chunk is on disk at `stagedPath`, ready for any worker to take. */
+export async function stageChunk(chunkId, stagedPath) {
+  await query(`UPDATE ${QUEUE_TABLE} SET staged_path = $2, staged_at = now() WHERE chunk_id = $1 AND done_at IS NULL`, [chunkId, stagedPath]);
+}
+
+/** Bundle mode, when bundle members can't be mapped to snapshot chunks: adds a member as its own unit of work, staged. */
+export async function addStagedUnit(chunkId, stagedPath) {
+  await query(
+    `INSERT INTO ${QUEUE_TABLE} (chunk_id, ord, staged_path, staged_at)
+     VALUES ($1, (SELECT COALESCE(max(ord), 0) + 1 FROM ${QUEUE_TABLE}), $2, now())
+     ON CONFLICT (chunk_id) DO UPDATE SET staged_path = EXCLUDED.staged_path, staged_at = now() WHERE ${QUEUE_TABLE}.done_at IS NULL`,
+    [chunkId, stagedPath]
+  );
+}
+
+/**
+ * Bundle mode, when members don't map to snapshot chunks: the snapshot's
+ * own chunk rows that nobody holds and nothing staged are retired (their
+ * articles arrive as bundle units instead), so workers don't wait on them.
+ * Their lines are zeroed so progress isn't counted twice. Returns how many.
+ */
+export async function supersedeUnstagedChunks(prefix) {
+  const { rowCount } = await query(
+    `UPDATE ${QUEUE_TABLE} SET done_at = now(), lines_done = 0, total_lines = 0, last_error = 'superseded: its articles come from bundle units'
+     WHERE chunk_id LIKE $1 AND done_at IS NULL AND staged_path IS NULL
+       AND (claimed_by IS NULL OR heartbeat_at < now() - make_interval(secs => $2))`,
+    [`${prefix.replace(/[\\%_]/g, (c) => `\\${c}`)}%`, LEASE_SEC]
+  );
+  return rowCount;
+}
+
+/** The bundle fetcher reports it is still reading ('running') or finished ('done' / 'stopped'). */
+export async function setBundleFetcherState(state) {
+  await query(
+    `INSERT INTO ${META_TABLE} (key, value) VALUES ('bundle_fetcher', jsonb_build_object('state', $1::text, 'at', now()))
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+    [state]
+  );
+}
+
+/** True while a bundle fetcher is reading (heartbeat within 2 minutes): more units may still arrive. */
+export async function bundleFetcherActive() {
+  const { rows } = await query(
+    `SELECT 1 FROM ${META_TABLE} WHERE key = 'bundle_fetcher' AND value->>'state' = 'running' AND (value->>'at')::timestamptz > now() - interval '2 minutes'`
+  );
+  return rows.length > 0;
+}
+
+/** One chunk's queue row (or null). */
+export async function chunkRow(chunkId) {
+  const { rows } = await query(`SELECT chunk_id, done_at, total_lines, staged_path, claimed_by FROM ${QUEUE_TABLE} WHERE chunk_id = $1`, [chunkId]);
+  return rows[0] ?? null;
+}
+
+/** Releases this worker's claim on a chunk it can't work on yet (bundle mode: waiting for the bundle), without counting an attempt. */
+export async function unclaimMine(workerId, chunkIds) {
+  if (chunkIds.length === 0) return;
+  await query(`UPDATE ${QUEUE_TABLE} SET claimed_by = NULL, heartbeat_at = NULL WHERE claimed_by = $1 AND chunk_id = ANY($2::text[]) AND done_at IS NULL`, [workerId, chunkIds]);
+}
+
 /** Ids of chunks the queue marks done (for cleaning up local leftovers). */
 export async function doneChunkIds() {
   const { rows } = await query(`SELECT chunk_id FROM ${QUEUE_TABLE} WHERE done_at IS NOT NULL`);
@@ -208,17 +271,23 @@ export async function doneChunkIds() {
  * lease-expired one in snapshot order. Returns the chunk id, or null when
  * nothing is left to hand out.
  */
-export async function claimNext(workerId, exclude = []) {
+/**
+ * @param {string} workerId
+ * @param {string[]} [exclude]
+ * @param {{ stagedOnly?: boolean }} [options] - bundle mode: only chunks the bundle fetcher has staged on disk (or that this worker already holds)
+ */
+export async function claimNext(workerId, exclude = [], { stagedOnly = false } = {}) {
   const { rows } = await query(
     `UPDATE ${QUEUE_TABLE} SET claimed_by = $1, claimed_at = now(), heartbeat_at = now()
      WHERE chunk_id = (
        SELECT chunk_id FROM ${QUEUE_TABLE}
        WHERE done_at IS NULL AND (attempts < $3 OR failed_version IS DISTINCT FROM $5) AND NOT (chunk_id = ANY($2::text[]))
          AND (claimed_by IS NULL OR claimed_by = $1 OR heartbeat_at < now() - make_interval(secs => $4))
+         AND (NOT $6 OR staged_path IS NOT NULL OR claimed_by = $1)
        ORDER BY (claimed_by IS NOT DISTINCT FROM $1) DESC, ord
        LIMIT 1 FOR UPDATE SKIP LOCKED)
      RETURNING chunk_id`,
-    [workerId, exclude, MAX_CHUNK_ATTEMPTS, LEASE_SEC, codeVersion]
+    [workerId, exclude, MAX_CHUNK_ATTEMPTS, LEASE_SEC, codeVersion, stagedOnly]
   );
   return rows[0]?.chunk_id ?? null;
 }
@@ -237,7 +306,8 @@ export async function heartbeat(workerId, linesByChunk) {
 
 export async function markDone(chunkId, totalLines) {
   await query(
-    `UPDATE ${QUEUE_TABLE} SET done_at = now(), total_lines = $2, lines_done = GREATEST(lines_done, COALESCE($2, lines_done)), claimed_by = NULL, last_error = NULL
+    `UPDATE ${QUEUE_TABLE} SET done_at = now(), total_lines = $2, lines_done = GREATEST(lines_done, COALESCE($2, lines_done)), claimed_by = NULL, last_error = NULL,
+       staged_path = NULL
      WHERE chunk_id = $1`,
     [chunkId, totalLines ?? null]
   );
