@@ -55,6 +55,16 @@ export function getPool() {
       // the process just being slow. Bounding both means a dead tunnel fails
       // loudly within seconds instead of silently stalling a multi-hour job.
       connectionTimeoutMillis: 10_000,
+      // How long an unused connection stays open. pg's default (10 s) means a
+      // process with bursty queries reconnects constantly; over a remote
+      // endpoint each reconnect is a TCP + TLS handshake, and a share of
+      // them time out (seen as ETIMEDOUT from the bulk build). Long-running
+      // jobs set DB_IDLE_TIMEOUT_MS higher (0 = never close idle ones).
+      idleTimeoutMillis: process.env.DB_IDLE_TIMEOUT_MS !== undefined ? Number(process.env.DB_IDLE_TIMEOUT_MS) : 10_000,
+      // TCP keepalive, so routers and proxies don't silently drop idle connections we keep.
+      keepAlive: true,
+      // Idle connections don't keep the process alive (a finished script still exits).
+      allowExitOnIdle: true,
       // DB_STATEMENT_TIMEOUT_MS overrides it per-process (0 = none), e.g. for
       // wiki_searcher/scripts/search.js timing a slow cold search instead of
       // having it cancelled at 30s.

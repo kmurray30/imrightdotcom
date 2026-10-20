@@ -154,6 +154,9 @@ process.env.DB_POOL_MAX ??= String(EMBED_CONCURRENCY + 2);
 // longer than db.js's 30 s default statement timeout; a cancelled statement
 // would just be retried, wasting the work. 10 minutes, unless set already.
 process.env.DB_STATEMENT_TIMEOUT_MS ??= '600000';
+// Keep pooled connections open (no reconnect every 10 s of idleness): over a
+// remote endpoint every new connection is a handshake that can time out.
+process.env.DB_IDLE_TIMEOUT_MS ??= '0';
 // A chunk that keeps failing (download, extraction, or a batch that gave up)
 // is retried this many times with growing pauses, then set aside and
 // reported at the end; the run goes on with the others.
@@ -458,7 +461,6 @@ function createProgressDisplay(totalArticles, chunkSlots, queue = null) {
     if (byStage('embedding').length) slotParts.push(`embedding ${byStage('embedding').length}`);
     parts.push(`chunks: ${slotParts.length ? slotParts.join(', ') : BUNDLE_MODE ? 'waiting for the bundle fetcher to stage chunks' : 'none in flight'}`);
     parts.push(`model: ${modelStatus ?? 'loads on the first batch'}`);
-    if (queue) parts.push(`this process ${articles.stats().recentRate.toFixed(1)} art/s`);
     const lines = [fitToTerminal(parts.join(' | '))];
     if (queue) {
       const q = queueProgress();
@@ -535,7 +537,7 @@ function createProgressDisplay(totalArticles, chunkSlots, queue = null) {
     const embeddingCount = [...stages.values()].filter((st) => st.stage === 'embedding').length;
     const speedCells = [
       formatDuration((scope ? scope.activeMs : activeMs) / 1000),
-      scope ? (scope.combinedRate > 0 ? scope.combinedRate.toFixed(1) : '--') : articleRate.toFixed(1),
+      articleRate.toFixed(1), // this process; the whole build's rate is on the workers line
       (bytesRate / 1e6).toFixed(1),
       ...stageNames.map((name) => stageTimers[name].recentAvgMs().toFixed(0)),
       `${embeddingCount}/${chunkSlots}`,
@@ -1700,9 +1702,9 @@ async function main() {
   console.log(
     `Embed/Read/Write = ms per article within one embedding chunk (they add up: Art/s ≈ Busy × 1000 / their sum). ` +
       `Busy = chunks embedding / chunk slots — below full means slots are waiting on a download or extraction. ` +
-      `Progress, Articles, ETA, Elapsed and Art/s cover the WHOLE build across every worker sharing the chunk queue, and are the same in every table ` +
-      `(Elapsed = active build time over all runs, pauses over 3 min not counted). DL MB/s, Embed, Read, Write and Busy describe THIS process. ` +
-      `Above the table: this session (elapsed, chunk slots, model state, this process's own rate), then live workers and chunks done.`
+      `Progress, Articles, ETA and Elapsed cover the WHOLE build across every worker sharing the chunk queue, and are the same in every table ` +
+      `(Elapsed = active build time over all runs, pauses over 3 min not counted). Art/s, DL MB/s, Embed, Read, Write and Busy describe THIS process. ` +
+      `Above the table: this session (elapsed, chunk slots, model state), then live workers, chunks done and the whole build's combined rate, then recent issues.`
   );
   logDebug(`=== run started: ${chunks.length} chunks, ${formatGB(totalBytes)} GB total ===`);
 

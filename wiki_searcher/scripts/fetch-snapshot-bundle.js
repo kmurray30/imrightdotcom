@@ -41,6 +41,7 @@ import { loadEnv } from '../../imright/load-env.js';
 import { getAccessToken } from '../../utils/wikimediaAuth.js';
 
 loadEnv();
+process.env.DB_IDLE_TIMEOUT_MS ??= '0'; // keep connections open (see build-index-from-wikimedia.js)
 const { ensureQueueTable, chunkRow, stageChunk, addStagedUnit, doneChunkIds, supersedeUnstagedChunks, setBundleFetcherState } = await import('../chunkQueue.js');
 
 const API_BASE = 'https://api.enterprise.wikimedia.com';
