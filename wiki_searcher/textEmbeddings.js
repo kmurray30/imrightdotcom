@@ -25,6 +25,9 @@ export const EMBEDDING_DIMENSIONS = 384;
  *    with). 'fp16' can be faster on a GPU but produces slightly different
  *    vectors: only use it if the benchmark's parity check (cosine against the
  *    vectors already stored in the index) stays above ~0.999.
+ *  - EMBED_THREADS: CPU threads for the model when EMBED_DEVICE=cpu (default:
+ *    ONNX Runtime's own choice, i.e. all cores). Cap it when other processes
+ *    share the machine, e.g. a CPU build worker next to GPU ones.
  *  - EMBED_BATCH_SIZE: max texts per model call (default 8) — see embedSorted.
  *    Benchmarked on real index paragraphs: 8-16 was fastest on both CPU and
  *    WebGPU; 64 was ~3x slower on both (padding waste swamped everything).
@@ -36,6 +39,7 @@ export function embedConfig() {
     device: process.env.EMBED_DEVICE || 'cpu',
     dtype: process.env.EMBED_DTYPE || 'fp32',
     batchSize: Number(process.env.EMBED_BATCH_SIZE) || 8,
+    threads: Number(process.env.EMBED_THREADS) || 0,
   };
 }
 
@@ -71,9 +75,12 @@ export function setLogger(fn) {
  */
 export function loadExtractor(device, dtype, modelName = MODEL_NAME) {
   const lastLoggedPct = {}; // per-file, so multi-file downloads (model + tokenizer) don't spam past each other
-  log(`[embed] Loading ${modelName} on ${device} (${dtype})...`);
+  const { threads } = embedConfig();
+  log(`[embed] Loading ${modelName} on ${device} (${dtype}${device === 'cpu' && threads ? `, ${threads} threads` : ''})...`);
   return pipeline('feature-extraction', modelName, {
     device,
+    // Forwarded by transformers.js to onnxruntime's InferenceSession.create.
+    ...(device === 'cpu' && threads > 0 ? { session_options: { intraOpNumThreads: threads, interOpNumThreads: 1 } } : {}),
     // Always passed explicitly rather than left to transformers.js's
     // per-device default, so a device switch can never silently load a
     // different (e.g. quantized) model file than the index was built with.

@@ -222,7 +222,7 @@ const RETRYABLE_ERROR_CODES = new Set([
 ]);
 const RETRYABLE_ERROR_MESSAGES = ['Connection terminated unexpectedly', 'Connection terminated due to connection timeout'];
 
-function isRetryableConnectionError(error) {
+export function isRetryableConnectionError(error) {
   if (error?.code && RETRYABLE_ERROR_CODES.has(error.code)) return true;
   return typeof error?.message === 'string' && RETRYABLE_ERROR_MESSAGES.some((msg) => error.message.includes(msg));
 }

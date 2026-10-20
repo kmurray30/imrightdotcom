@@ -69,6 +69,7 @@
  *   destDir    - defaults to ./wiki-snapshots
  */
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import readline from 'readline';
 import { Readable } from 'stream';
@@ -78,6 +79,10 @@ import { loadEnv } from '../../imright/load-env.js';
 import { getAccessToken } from '../../utils/wikimediaAuth.js';
 import { callExternalApi, HttpStatusError, timeoutSignal } from '../../utils/external-api.js';
 import { upsertSpansBatch, ensureSpansTable, SPANS_TABLE, UNEMBEDDED_TABLE, SPAN_OPTIONS, setConnectionWarningLogger } from '../embeddingIndex.js';
+import {
+  ensureQueueTable, registerChunks, importLocalState, claimNext, heartbeat, markDone, release, queueSnapshot,
+  runQueue, pendingCount, setQueueWarningLogger, QUEUE_TABLE, MAX_CHUNK_ATTEMPTS,
+} from '../chunkQueue.js';
 import { setLogger as setEmbedLogger, embedConfig } from '../textEmbeddings.js';
 import { formatDuration, fitToTerminal, tableBorder, tableRow } from './terminalTable.js';
 
@@ -115,18 +120,17 @@ const CONCURRENCY = 6; // sizing pass only — pure network, raise if you're on 
 // flight holds its archive + extracted NDJSON) and one DB connection each.
 // Safe to change between runs: every chunk resumes from its own checkpoint.
 const EMBED_CONCURRENCY = Number(process.env.CHUNK_CONCURRENCY) || 4;
-// CHUNK_SHARD=k/n: this process takes every n-th chunk starting at k (0-based),
-// so several processes — a second one on the same machine, or a Railway
-// service writing over the internal network — can build disjoint slices of
-// the snapshot into the same tables at once. Give each its own state dir
-// (3rd argument) when they share a filesystem. Unset = all chunks.
-const CHUNK_SHARD = (() => {
-  const raw = process.env.CHUNK_SHARD;
-  if (!raw) return null;
-  const m = /^(\d+)\/(\d+)$/.exec(raw.trim());
-  if (!m || Number(m[2]) < 1 || Number(m[1]) >= Number(m[2])) throw new Error(`CHUNK_SHARD must look like k/n with 0 ≤ k < n, got "${raw}"`);
-  return { index: Number(m[1]), count: Number(m[2]) };
-})();
+// Several build processes (this machine or others, GPU or CPU) share one
+// chunk queue in Postgres (wiki_searcher/chunkQueue.js): each pulls the next
+// unclaimed chunk when a slot frees up, so faster processes do more. Give
+// each process its own state dir (3rd argument). CHUNK_SHARD, the old static
+// split, is no longer used.
+if (process.env.CHUNK_SHARD) {
+  console.log('CHUNK_SHARD is no longer needed and is ignored: build processes now share a chunk queue in Postgres.');
+}
+const QUEUE_REFRESH_MS = 10_000; // how often the display re-reads corpus-wide progress from the queue
+const HEARTBEAT_MS = 15_000; // lease renewal + lines done, for every chunk this process holds
+const COMBINED_RATE_WINDOW_MS = 5 * 60_000;
 // Articles per upsertSpansBatch call (ARTICLES_PER_BATCH env, default 100):
 // one embedding call and ONE transaction of a dozen or so statements per
 // batch. Over the tunnel every statement is a ~100–250 ms round trip, so the
@@ -162,13 +166,7 @@ const PROGRESS_RENDER_INTERVAL_MS = 200;
 // counter updates.
 const STALL_EXCLUDE_MS = 30_000;
 const ELAPSED_SAVE_INTERVAL_MS = 5_000;
-// Sharded runs (CHUNK_SHARD) share progress through small files in
-// BUILD_PROGRESS_DIR, one per shard, rewritten every PROGRESS_SHARE_INTERVAL_MS,
-// so every process can show the same corpus-wide Progress/Articles/ETA. A
-// shard whose file is older than SHARD_STALE_MS is treated as not running.
-const PROGRESS_DIR = process.env.BUILD_PROGRESS_DIR || './wiki-build-progress';
-const PROGRESS_SHARE_INTERVAL_MS = 2_000;
-const SHARD_STALE_MS = 90_000;
+
 // Long enough to span several ARTICLE_CONCURRENCY batch-flush cycles (so
 // Art/s doesn't swing between "a batch just landed" and "nothing yet," the
 // problem with the old 5s window), short enough to actually reflect a real
@@ -292,11 +290,11 @@ function createStageTimer() {
  * of how bursty either counter's actual updates are.
  */
 /**
- * @param {number} totalArticles - articles this process is responsible for (its shard's share when sharded)
+ * @param {number} totalArticles - articles in the whole snapshot
  * @param {number} chunkSlots
- * @param {{ index: number, count: number, corpusArticles: number } | null} shard - set in a sharded run: Progress/Articles/ETA then cover all shards
+ * @param {{ snapshot: () => object|null, chunksThisSession: () => number } | null} queue - corpus-wide progress from the shared chunk queue (see main); null = this process only
  */
-function createProgressDisplay(totalArticles, chunkSlots, shard = null) {
+function createProgressDisplay(totalArticles, chunkSlots, queue = null) {
   const articles = createCounter();
   const bytes = createCounter();
   const stageNames = ['embed', 'read', 'write'];
@@ -321,63 +319,26 @@ function createProgressDisplay(totalArticles, chunkSlots, shard = null) {
   let stallExcluded = false;
   let lastSavedAt = sessionStart;
 
-  // Sharded run: publish this process's progress and read the other shards'.
-  const statusLineCount = shard ? 2 : 1;
+  // Corpus-wide progress comes from the shared chunk queue (all workers, all
+  // machines). Its combined rate is measured from successive snapshots.
+  const statusLineCount = queue ? 2 : 1;
   const blockHeight = statusLineCount + 5; // status line(s) + top border + header + separator + row + bottom border
-  const shardFile = (k) => path.join(PROGRESS_DIR, `shard-${k}-of-${shard.count}.json`);
-  let lastShareAt = 0;
-  let peers = []; // one entry per shard, this one included; refreshed every PROGRESS_SHARE_INTERVAL_MS
-  function shareAndReadPeers(now, own) {
-    if (!shard || now - lastShareAt < PROGRESS_SHARE_INTERVAL_MS) return;
-    lastShareAt = now;
-    const mine = { shard: shard.index, shards: shard.count, pid: process.pid, articlesDone: own.done, totalArticles, realDone: own.realDone, recentRate: own.recentRate, startedAt: sessionStart, updatedAt: now };
-    try {
-      fs.mkdirSync(PROGRESS_DIR, { recursive: true });
-      fs.writeFileSync(`${shardFile(shard.index)}.tmp`, JSON.stringify(mine));
-      fs.renameSync(`${shardFile(shard.index)}.tmp`, shardFile(shard.index)); // atomic: a reader never sees a half-written file
-    } catch {
-      // unwritable progress dir: the other shards just won't see this one
+  const queueSamples = []; // { time, linesDone }, pruned to COMBINED_RATE_WINDOW_MS
+  let lastSampledLines = null;
+  function queueProgress(now) {
+    const snap = queue?.snapshot();
+    if (!snap) return null;
+    if (snap.linesDone !== lastSampledLines) {
+      lastSampledLines = snap.linesDone;
+      queueSamples.push({ time: snap.takenAt, linesDone: snap.linesDone });
+      while (queueSamples.length > 2 && now - queueSamples[0].time > COMBINED_RATE_WINDOW_MS) queueSamples.shift();
     }
-    peers = [];
-    for (let k = 0; k < shard.count; k++) {
-      if (k === shard.index) {
-        peers.push({ ...mine, stale: false, missing: false });
-        continue;
-      }
-      try {
-        const record = JSON.parse(fs.readFileSync(shardFile(k), 'utf8'));
-        peers.push({ ...record, stale: now - record.updatedAt > SHARD_STALE_MS, missing: false });
-      } catch {
-        // never started (or its file is gone): count its share of the corpus as not done
-        peers.push({ shard: k, articlesDone: 0, totalArticles: Math.round(shard.corpusArticles / shard.count), realDone: 0, recentRate: 0, startedAt: now, updatedAt: 0, stale: false, missing: true });
-      }
-    }
-  }
-  /** Corpus-wide numbers across shards. ETA = when the slowest live shard finishes; unknown while any shard is missing or stale and still has work. */
-  function overallProgress(now) {
-    let done = 0;
-    let total = 0;
-    let etaSeconds = 0;
-    let unknown = false;
-    let combinedRate = 0;
-    let live = 0;
-    for (const peer of peers) {
-      done += peer.articlesDone;
-      total += peer.totalArticles;
-      const remaining = peer.totalArticles - peer.articlesDone;
-      if (peer.missing || peer.stale) {
-        if (remaining > 0) unknown = true;
-        continue;
-      }
-      live++;
-      combinedRate += peer.recentRate || 0;
-      if (remaining <= 0) continue;
-      const elapsed = (now - peer.startedAt) / 1000;
-      const rate = elapsed > 0 ? peer.realDone / elapsed : 0;
-      if (rate <= 0) unknown = true;
-      else etaSeconds = Math.max(etaSeconds, remaining / rate);
-    }
-    return { done, total, etaSeconds: unknown ? NaN : etaSeconds, combinedRate, live };
+    const first = queueSamples[0];
+    const last = queueSamples[queueSamples.length - 1];
+    const span = (last.time - first.time) / 1000;
+    const combinedRate = span >= 60 ? (last.linesDone - first.linesDone) / span : NaN; // needs a minute of history to mean anything
+    const remaining = Math.max(0, totalArticles - snap.linesDone);
+    return { ...snap, combinedRate, etaSeconds: combinedRate > 0 ? remaining / combinedRate : NaN };
   }
 
   function saveActive() {
@@ -425,19 +386,25 @@ function createProgressDisplay(totalArticles, chunkSlots, shard = null) {
     parts.push(`chunks: ${slotParts.length ? slotParts.join(', ') : 'none in flight'}`);
     parts.push(`model: ${modelStatus ?? 'loads on the first batch'}`);
     const lines = [fitToTerminal(parts.join(' | '))];
-    if (shard) {
-      const now = Date.now();
-      const { combinedRate, live } = overallProgress(now);
-      const shardParts = [
-        `Shards: this is ${shard.index}/${shard.count} at ${formatCount(articles.done)}/${formatCount(totalArticles)}`,
-        `${live}/${shard.count} live`,
-        `combined ${combinedRate.toFixed(1)} art/s`,
-      ];
-      for (const peer of peers) {
-        if (peer.missing) shardParts.push(`shard ${peer.shard}: not started`);
-        else if (peer.stale) shardParts.push(`shard ${peer.shard}: stale ${formatDuration((now - peer.updatedAt) / 1000)}`);
+    if (queue) {
+      const q = queueProgress(Date.now());
+      if (!q) {
+        lines.push('Workers: reading the shared chunk queue...');
+      } else {
+        const byDevice = {};
+        for (const w of q.liveWorkers) {
+          const device = w.split(':').pop();
+          byDevice[device] = (byDevice[device] ?? 0) + 1;
+        }
+        const deviceText = Object.entries(byDevice).map(([d, n]) => `${n} ${d}`).join(', ');
+        const workerParts = [
+          `Workers: ${q.liveWorkers.length} live${deviceText ? ` (${deviceText})` : ''}`,
+          `chunks ${q.doneChunks}/${q.chunks} done, this process ${queue.chunksThisSession()} this session`,
+          `combined ${Number.isFinite(q.combinedRate) ? `${q.combinedRate.toFixed(1)} art/s` : 'measuring'}`,
+        ];
+        if (q.stuck.length) workerParts.push(`${q.stuck.length} chunk(s) given up on`);
+        lines.push(fitToTerminal(workerParts.join(' · ')));
       }
-      lines.push(fitToTerminal(shardParts.join(' · ')));
     }
     return lines;
   }
@@ -452,7 +419,7 @@ function createProgressDisplay(totalArticles, chunkSlots, shard = null) {
   const headers = ['Progress', 'Articles', 'ETA', 'Elapsed', 'Art/s', 'DL MB/s', 'Embed', 'Read', 'Write', 'Busy'];
   const widths = [
     Math.max(headers[0].length, PROGRESS_BAR_WIDTH + 2 + 1 + 6), // "[" + bar + "]" + " " + "100.0%"
-    Math.max(headers[1].length, formatCount(shard ? shard.corpusArticles : totalArticles).length * 2 + 1), // "done/total", sized to the known total on both sides
+    Math.max(headers[1].length, formatCount(totalArticles).length * 2 + 1), // "done/total", sized to the known total on both sides
     Math.max(headers[2].length, 7), // "999d23h"-ish worst case
     Math.max(headers[3].length, 7), // active time over all runs, same format
     Math.max(headers[4].length, 6), // rate, e.g. "9999.9"
@@ -470,12 +437,12 @@ function createProgressDisplay(totalArticles, chunkSlots, shard = null) {
     const own = articles.stats();
     const { done: ownDone, rate: lifetimeRate, recentRate: articleRate } = own;
     const { recentRate: bytesRate } = bytes.stats();
-    shareAndReadPeers(Date.now(), own);
-    // Sharded: the bar, count and ETA describe the whole corpus (identical in
-    // every process); the per-process columns describe this one.
-    const scope = shard ? overallProgress(Date.now()) : null;
-    const articlesDone = scope ? scope.done : ownDone;
-    const scopeTotal = scope ? scope.total : totalArticles;
+    // With the queue, the bar, count and ETA describe the whole corpus
+    // (identical in every process, on every machine); the per-process
+    // columns describe this one.
+    const scope = queue ? queueProgress(Date.now()) : null;
+    const articlesDone = scope ? scope.linesDone : ownDone;
+    const scopeTotal = totalArticles;
     const embeddingCount = [...stages.values()].filter((st) => st.stage === 'embedding').length;
     const speedCells = [
       formatDuration(activeMs / 1000),
@@ -582,7 +549,6 @@ function createProgressDisplay(totalArticles, chunkSlots, shard = null) {
     },
     totalArticles,
     start() {
-      shareAndReadPeers(Date.now(), articles.stats()); // so the very first status line already knows the other shards
       printHeaderBlock();
       render(); // first data row — cursor ends up mid-row, no newline yet
       if (isTTY) {
@@ -1013,6 +979,9 @@ function logDebug(message) {
   fs.appendFileSync(path.join(destDir, 'debug.log'), line);
 }
 
+/** Lines done per chunk this process is embedding, for queue heartbeats (the shared progress display). */
+const chunkLinesDone = new Map();
+
 function progressCheckpointPath(chunkId) {
   return path.join(destDir, `${chunkId}.progress`);
 }
@@ -1057,6 +1026,7 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
   let lastLoggedAt = 0;
   let lineNumber = 0;
 
+  chunkLinesDone.set(chunkId, resumeFromLine);
   if (resumeFromLine > 0) {
     tracker.addArticlesBurst(resumeFromLine);
     logDebug(`${chunkId}: resuming embed from line ${resumeFromLine} (checkpoint from a prior run)`);
@@ -1128,6 +1098,7 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
     tracker.addArticles(batch.length);
 
     const lastLineInBatch = batch[batch.length - 1].lineNumber;
+    chunkLinesDone.set(chunkId, lastLineInBatch);
     const now = Date.now();
     if (lastLoggedAt === 0 || now - lastLoggedAt >= 10_000) {
       // Both counts, not just this chunk's own: "this session" alone tells
@@ -1180,8 +1151,8 @@ async function embedChunkArticles(chunkId, ndjsonPath, tracker) {
  * The chunk's TRUE record count if the .done marker was written by this
  * (post-fix) version of the script (a JSON blob, see processChunk), or null
  * for a .done file from before this existed (a plain ISO timestamp string,
- * not JSON) — callers fall back to avgArticlesPerChunk's estimate in that
- * case. Nothing back-fills old .done files with a real count: the archive
+ * not JSON) — the queue import then credits the snapshot's average chunk size
+ * instead (see scanLocalState). Nothing back-fills old .done files with a real count: the archive
  * and extracted NDJSON they'd need to recount from are already deleted by
  * the time a chunk is marked done, so getting an exact count for one
  * retroactively would mean re-downloading it just to count lines. Only
@@ -1249,23 +1220,16 @@ async function prepareChunk(chunk, tracker) {
 }
 
 /**
- * Runs one chunk through embed -> cleanup -> mark done, after awaiting its
- * preparation (`prepare(chunk)` — usually already started ahead of time, see
- * main). For a chunk that's already fully .done from a prior run, credits its
- * TRUE record count (loadChunkTotalLines) when known — Wikimedia's chunks
- * aren't uniformly sized, so this is what keeps a resumed run's progress
- * display from drifting away from reality as chunks of very different real
- * sizes get credited a wrong flat average instead of what they actually
- * contain. avgArticlesPerChunk is only the fallback for a chunk finished
- * before this existed.
+ * Runs one claimed chunk through embed -> cleanup -> mark done, after
+ * awaiting its preparation (`prepare(chunk)` — usually already started when
+ * the chunk was claimed as a slot's next one, see main). Returns what the
+ * queue should record: done (with the chunk's true line count), or released
+ * for a later retry.
  */
-async function processChunk(chunk, prepare, unprepare, tracker, totals, avgArticlesPerChunk) {
+/** @returns {Promise<{ status: 'done', totalLines: number } | { status: 'retry_later' | 'given_up', detail: string }>} */
+async function processChunk(chunk, prepare, unprepare, tracker, totals) {
   const donePath = donePathFor(chunk);
-  if (fs.existsSync(donePath)) {
-    tracker.addBytesBurst(chunk.contentLength); // already fully processed in a prior run
-    tracker.addArticlesBurst(loadChunkTotalLines(donePath) ?? avgArticlesPerChunk);
-    return;
-  }
+  if (fs.existsSync(donePath)) return { status: 'done', totalLines: loadChunkTotalLines(donePath) }; // finished in a prior run of this worker
 
   // Anything that escapes a chunk (a download that gave up, a broken archive,
   // a batch that failed after its own retries, a bug) is retried at the
@@ -1274,18 +1238,19 @@ async function processChunk(chunk, prepare, unprepare, tracker, totals, avgArtic
   // resumes rather than restarts.
   for (let attempt = 1; ; attempt++) {
     try {
-      await processChunkOnce(chunk, prepare, tracker, totals);
-      return;
+      const stats = await processChunkOnce(chunk, prepare, tracker, totals);
+      if (stats.failedBatches > 0) return { status: 'retry_later', detail: `${stats.failedBatches} batch(es) failed` };
+      return { status: 'done', totalLines: stats.totalLines };
     } catch (error) {
       unprepare(chunk); // a retry re-runs the download/extraction (resuming the partial file) instead of reusing a failed promise
       tracker.setChunkEmbedding(chunk.chunkId, false);
       const detail = `${error.message}${error.detail ? ` (${error.detail})` : ''}`;
       if (attempt >= CHUNK_MAX_ATTEMPTS) {
         totals.failedChunks.push({ chunkId: chunk.chunkId, error: detail });
-        const message = `✗ ${chunk.chunkId}: giving up after ${attempt} attempts — ${detail}. Set aside; re-run the script later to retry it.`;
+        const message = `✗ ${chunk.chunkId}: giving up after ${attempt} attempts — ${detail}. Released to the queue for a later retry.`;
         logDebug(message);
         tracker.logWarning(message);
-        return;
+        return { status: 'given_up', detail };
       }
       const delayMs = Math.min(CHUNK_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), CHUNK_RETRY_MAX_DELAY_MS);
       const message = `⚠ ${chunk.chunkId}: attempt ${attempt}/${CHUNK_MAX_ATTEMPTS} failed — ${detail}; retrying in ${Math.round(delayMs / 1000)}s`;
@@ -1323,6 +1288,7 @@ async function processChunkOnce(chunk, prepare, tracker, totals) {
   if (stats.failedBatches === 0) {
     fs.writeFileSync(donePathFor(chunk), JSON.stringify({ completedAt: new Date().toISOString(), totalLines: stats.totalLines }));
   }
+  return stats;
 }
 
 /**
@@ -1352,6 +1318,51 @@ function loadCachedSnapshotMetadata() {
 function saveSnapshotMetadata(recordCount, chunks) {
   const cachePath = path.join(destDir, 'snapshot-metadata.json');
   fs.writeFileSync(cachePath, JSON.stringify({ identifier, recordCount, chunks }, null, 2));
+}
+
+/**
+ * What this worker's disk says about the queue. Done chunks come from this
+ * state dir and its sibling build dirs (same name apart from a trailing
+ * letter: wiki-snapshots-v2, -v2b, -v2c), so a chunk finished by any local
+ * worker is never handed out again. Work in progress (a line checkpoint, an
+ * extracted file, or a partial download) only from this dir.
+ */
+function scanLocalState(chunks, fallbackLines) {
+  const resolved = path.resolve(destDir);
+  const stem = path.basename(resolved).replace(/[a-z]$/, '');
+  const parent = path.dirname(resolved);
+  const dirs = [resolved];
+  try {
+    for (const name of fs.readdirSync(parent)) {
+      const full = path.join(parent, name);
+      if (full !== resolved && name.startsWith(stem) && /^[a-z]?$/.test(name.slice(stem.length)) && fs.statSync(full).isDirectory()) dirs.push(full);
+    }
+  } catch {
+    // unreadable parent: this dir only
+  }
+  const done = [];
+  const inProgress = [];
+  for (const { chunkId } of chunks) {
+    const doneDir = dirs.find((dir) => fs.existsSync(path.join(dir, `${chunkId}.done`)));
+    if (doneDir) {
+      done.push({ chunkId, totalLines: loadChunkTotalLines(path.join(doneDir, `${chunkId}.done`)) ?? fallbackLines });
+      continue;
+    }
+    const hasLocalWork = ['.progress', '.ndjson', '.tar.gz'].some((ext) => fs.existsSync(path.join(resolved, `${chunkId}${ext}`)));
+    if (hasLocalWork) inProgress.push({ chunkId, linesDone: loadLineCheckpoint(chunkId) });
+  }
+  return { done, inProgress };
+}
+
+/** A restart of the same worker (same machine and state dir) takes over its previous run's claims at once instead of waiting for their leases to expire. */
+async function adoptPreviousClaims(workerPrefix, workerId) {
+  const { getPool } = await import('../../imright/scripts/db.js');
+  // Prefix match without LIKE, so no escaping of _ or % in hostnames/dir names.
+  await getPool().query(
+    `UPDATE ${QUEUE_TABLE} SET claimed_by = $1, heartbeat_at = now()
+     WHERE left(claimed_by, length($2) + 1) = $2 || ':' AND claimed_by <> $1 AND done_at IS NULL`,
+    [workerId, workerPrefix]
+  );
 }
 
 async function main() {
@@ -1405,15 +1416,27 @@ async function main() {
     saveSnapshotMetadata(recordCount, chunks);
   }
 
-  const corpusArticles = recordCount;
-  if (CHUNK_SHARD) {
-    const all = chunks.length;
-    chunks = chunks.filter((_, i) => i % CHUNK_SHARD.count === CHUNK_SHARD.index);
-    recordCount = recordCount ? Math.round((recordCount * chunks.length) / all) : recordCount;
-    console.log(`Shard ${CHUNK_SHARD.index}/${CHUNK_SHARD.count}: ${chunks.length} of ${all} chunks (≈${recordCount ?? '?'} articles).`);
-  }
+  // The shared queue: register every chunk, publish what this worker's state
+  // dir knows (done chunks, from this dir and its sibling build dirs; work in
+  // progress, from this dir only), and take over claims a previous run of
+  // this same worker (same machine + state dir) still holds.
+  const embedSettings = embedConfig();
+  const workerPrefix = `${os.hostname()}:${path.basename(path.resolve(destDir))}`;
+  const workerId = `${workerPrefix}:${embedSettings.device}`;
+  setQueueWarningLogger((message) => (activeTracker ? activeTracker.logWarning(message) : console.error(message)));
+  await ensureQueueTable();
+  await registerChunks(chunks.map((c) => c.chunkId));
+  await adoptPreviousClaims(workerPrefix, workerId);
+  const local = scanLocalState(chunks, recordCount > 0 ? Math.round(recordCount / chunks.length) : null);
+  await importLocalState(workerId, local.done, local.inProgress);
+  const startSnapshot = await queueSnapshot();
+  console.log(
+    `Chunk queue (${QUEUE_TABLE}): ${startSnapshot.doneChunks}/${startSnapshot.chunks} chunks done, ${startSnapshot.liveWorkers.length} other worker(s) live. ` +
+      `This worker: ${workerId}${local.inProgress.length ? `, resuming ${local.inProgress.length} chunk(s) from ${destDir}` : ''}.`
+  );
+  const chunksById = new Map(chunks.map((c) => [c.chunkId, c]));
   const totalBytes = chunks.reduce((sum, chunk) => sum + chunk.contentLength, 0);
-  const embed = embedConfig();
+  const embed = embedSettings;
   console.log(
     `Total: ${formatGB(totalBytes)} GB across ${chunks.length} chunks. Downloading, extracting, and embedding ` +
       `(${embed.device}, ${embed.dtype}, batches of ≤${embed.batchSize}) ` +
@@ -1428,17 +1451,33 @@ async function main() {
     `Embed/Read/Write = ms per article within one embedding chunk (they add up: Art/s ≈ Busy × 1000 / their sum). ` +
       `Busy = chunks embedding / chunk slots — below full means slots are waiting on a download or extraction. ` +
       `Elapsed = active build time over all runs so far (pauses over ${STALL_EXCLUDE_MS / 1000}s are not counted); ` +
-      `the line above the table is this session: its elapsed time, what the chunk slots are doing, and the embedding model's state.` +
-      (CHUNK_SHARD
-        ? ` Sharded run: Progress, Articles and ETA cover the whole corpus across all ${CHUNK_SHARD.count} shards (shared through ${PROGRESS_DIR}; ETA = when the slowest shard finishes); the second line above the table is this shard.`
-        : '')
+      `the first line above the table is this session: its elapsed time, what the chunk slots are doing, and the embedding model's state. ` +
+      `Progress, Articles and ETA cover the whole snapshot across every worker sharing the chunk queue (second line: live workers and their combined rate).`
   );
   logDebug(`=== run started: ${chunks.length} chunks, ${formatGB(totalBytes)} GB total ===`);
 
-  const tracker = createProgressDisplay(recordCount, EMBED_CONCURRENCY, CHUNK_SHARD ? { ...CHUNK_SHARD, corpusArticles } : null);
-  activeTracker = tracker;
-  const avgArticlesPerChunk = recordCount > 0 ? recordCount / chunks.length : 0;
+  let latestSnapshot = { ...startSnapshot, takenAt: Date.now() };
   const totals = { chunksDone: 0, articles: 0, spans: 0, unembedded: 0, alreadyCurrent: 0, failedBatches: 0, failedChunks: [] };
+  const tracker = createProgressDisplay(recordCount, EMBED_CONCURRENCY, {
+    snapshot: () => latestSnapshot,
+    chunksThisSession: () => totals.chunksDone,
+  });
+  activeTracker = tracker;
+  const held = new Set(); // chunks this process has claimed and not finished (current + prefetched)
+  const givenUp = new Set(); // chunks this process gave up on this session: left for other workers or a later run
+  const refreshTimer = setInterval(() => {
+    queueSnapshot()
+      .then((snap) => {
+        latestSnapshot = { ...snap, takenAt: Date.now() };
+      })
+      .catch((error) => logDebug(`queue snapshot failed: ${error.message}`));
+  }, QUEUE_REFRESH_MS);
+  refreshTimer.unref();
+  const heartbeatTimer = setInterval(() => {
+    const lines = Object.fromEntries([...held].map((id) => [id, chunkLinesDone.get(id) ?? loadLineCheckpoint(id)]));
+    heartbeat(workerId, lines).catch((error) => logDebug(`queue heartbeat failed: ${error.message}`));
+  }, HEARTBEAT_MS);
+  heartbeatTimer.unref();
 
   // Routes DB connection-drop warnings through the table (full redraw, not a
   // bare console.error mid-row) as well as into debug.log for later tailing.
@@ -1469,15 +1508,48 @@ async function main() {
   }
 
   tracker.start();
-  await runWithConcurrency(
-    chunks,
-    (chunk, index) => {
-      const upcoming = chunks[index + EMBED_CONCURRENCY];
-      if (upcoming && !fs.existsSync(donePathFor(upcoming))) prepare(upcoming);
-      return processChunk(chunk, prepare, unprepare, tracker, totals, avgArticlesPerChunk);
+  await runQueue({
+    slots: EMBED_CONCURRENCY,
+    claim: async (exclude) => {
+      for (;;) {
+        const id = await claimNext(workerId, [...exclude, ...givenUp]);
+        if (id === null) return null;
+        if (chunksById.has(id)) {
+          held.add(id);
+          return id;
+        }
+        // A chunk id this worker's snapshot listing doesn't know (a different
+        // snapshot): never touch it; skip it for the rest of this run.
+        givenUp.add(id);
+      }
     },
-    EMBED_CONCURRENCY
-  );
+    prefetch: (id) => {
+      if (!fs.existsSync(donePathFor(chunksById.get(id)))) prepare(chunksById.get(id));
+    },
+    // Stay up while other workers hold unfinished chunks: if one of them
+    // dies, its chunks come back after the lease and this worker takes them.
+    remaining: (exclude) => pendingCount([...exclude, ...givenUp]),
+    processChunk: async (id) => {
+      const chunk = chunksById.get(id);
+      const outcome = await processChunk(chunk, prepare, unprepare, tracker, totals);
+      if (outcome.status === 'done') {
+        await markDone(id, outcome.totalLines);
+      } else {
+        givenUp.add(id);
+        await release(id, outcome.detail);
+      }
+      held.delete(id);
+      chunkLinesDone.delete(id);
+    },
+    onError: (error, id) => {
+      const message = `⚠ ${id}: unexpected error in the slot loop — ${error.message}`;
+      logDebug(message);
+      tracker.logWarning(message);
+      held.delete(id);
+    },
+  });
+  clearInterval(refreshTimer);
+  clearInterval(heartbeatTimer);
   tracker.finish();
 
   console.log(
@@ -1485,6 +1557,13 @@ async function main() {
       `${totals.articles} articles seen, ${totals.spans} spans embedded, ${totals.unembedded} stored unembedded, ${totals.alreadyCurrent} already current.`
   );
   console.log(`Embedded spans are in ${SPANS_TABLE}; cited spans without an online citation (or too short) in ${UNEMBEDDED_TABLE}. Next: build the compact search index (see README).`);
+  const finalSnapshot = await queueSnapshot();
+  console.log(`Queue: ${finalSnapshot.doneChunks}/${finalSnapshot.chunks} chunks done across all workers.`);
+  if (finalSnapshot.stuck.length > 0) {
+    console.log(`${finalSnapshot.stuck.length} chunk(s) were given up on ${MAX_CHUNK_ATTEMPTS} times and are no longer handed out:`);
+    for (const { chunkId, lastError } of finalSnapshot.stuck) console.log(`  - ${chunkId}: ${lastError}`);
+    console.log(`To retry them: UPDATE ${QUEUE_TABLE} SET attempts = 0 WHERE done_at IS NULL; then re-run.`);
+  }
   if (totals.failedChunks.length > 0 || totals.failedBatches > 0) {
     console.log('');
     if (totals.failedChunks.length > 0) {
@@ -1494,7 +1573,7 @@ async function main() {
     if (totals.failedBatches > 0) {
       console.log(`${totals.failedBatches} batch(es) failed and were skipped (details in ${destDir}/failed-batches.ndjson); their chunks were not marked done.`);
     }
-    console.log('Re-run this script to retry them — everything already stored is skipped.');
+    console.log('They were released to the queue: another worker, or a re-run, retries them — everything already stored is skipped.');
     process.exitCode = 2;
   }
 }
