@@ -8,10 +8,12 @@
  * Commands:
  *   placeholder                   render procedural stand-in sheets into client/public/crappy (no network)
  *   schema [--model <key>]        print a fal endpoint's input field names (log only, never fails)
- *   hub snake [--n 4] [--ref <png>]
+ *   hub snake [--n 1] [--ref <png>] [--prompt <text>]
  *                                 generate snake-pose hub candidates via fal (paid); with --ref, an
- *                                 existing character image is the style reference (edit model)
- *   hub curled [--n 2]            generate curled-pose candidates from hubs/snake.green.png (paid)
+ *                                 existing image is edited instead of generating from text
+ *   hub curled [--n 1] [--ref <png>] [--prompt <text>]
+ *                                 generate curled-pose candidates, edited from hubs/snake.green.png
+ *                                 (or from --ref) (paid)
  *   hub pick <snake|curled> <n>   promote hubs/candidates/<hub>-<n>.png to hubs/<hub>.green.png
  *   clips [--clip a,b] [--takes 3] [--model <key>]
  *                                 generate video takes with the hubs pinned as first/last frame (paid)
@@ -26,8 +28,9 @@
  *   --dry-run             print the request bodies instead of calling fal
  *   --allow-unverified    allow a video model whose field names were not verified against its schema
  *   --safe-words          drop the explicit poop reference from prompts
- *   --ref <png>           reference image "hub snake" is edited from (e.g. assets/bunky.png);
+ *   --ref <png>           image a hub is edited from (e.g. assets/bunky.png or a candidate);
  *                         pair with --model flux-kontext | flux-kontext-max | flux-2-edit
+ *   --prompt <text>       one-off prompt instead of prompts/hub-<hub>[-ref].txt
  *   --skip-schema         don't fetch the OpenAPI schema before generating clips
  *   --rescale             on a partial extract, recompute the global scale instead of reusing it
  *   --out <dir>           write sheets + manifest somewhere other than client/public/crappy
@@ -214,6 +217,8 @@ async function pickHub(hub, index) {
  * both the character style and the background it should produce.
  */
 async function prepareReference(file) {
+  const meta = await sharp(file).metadata();
+  if (meta.width >= 512 && meta.height >= 512 && !meta.hasAlpha) return file; // already a full green-screen frame
   fs.mkdirSync(CANDIDATES_DIR, { recursive: true });
   const dest = path.join(CANDIDATES_DIR, `reference-${path.basename(file, path.extname(file))}.png`);
   const size = 1024;
@@ -231,15 +236,16 @@ async function prepareReference(file) {
 }
 
 async function generateHub(hub, flags) {
-  const n = Number(flags.n ?? (hub === 'snake' ? 4 : 2));
+  const n = Number(flags.n ?? 1);
   if (!Number.isInteger(n) || n < 1 || n > 4) throw new Error('--n must be 1..4');
   const safeWords = flags.safeWords === true;
   const ref = typeof flags.ref === 'string' ? path.resolve(flags.ref) : null;
-  if (ref && hub !== 'snake') throw new Error('--ref only applies to "hub snake" (curled is always edited from the snake hub)');
-  const prompt = composeHubPrompt(hub, { safeWords, withReference: Boolean(ref) });
+
+  const prompt =
+    typeof flags.prompt === 'string' ? flags.prompt : composeHubPrompt(hub, { safeWords, withReference: Boolean(ref) });
   let model;
   let body;
-  if (hub === 'snake' && ref) {
+  if (ref) {
     if (!fs.existsSync(ref)) throw new Error(`reference image not found: ${ref}`);
     model = getImageModel(typeof flags.model === 'string' ? flags.model : DEFAULT_EDIT_MODEL);
     const prepared = await prepareReference(ref);
