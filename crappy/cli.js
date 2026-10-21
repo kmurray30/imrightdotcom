@@ -8,7 +8,9 @@
  * Commands:
  *   placeholder                   render procedural stand-in sheets into client/public/crappy (no network)
  *   schema [--model <key>]        print a fal endpoint's input field names (log only, never fails)
- *   hub snake [--n 4]             generate snake-pose hub candidates via fal (paid)
+ *   hub snake [--n 4] [--ref <png>]
+ *                                 generate snake-pose hub candidates via fal (paid); with --ref, an
+ *                                 existing character image is the style reference (edit model)
  *   hub curled [--n 2]            generate curled-pose candidates from hubs/snake.green.png (paid)
  *   hub pick <snake|curled> <n>   promote hubs/candidates/<hub>-<n>.png to hubs/<hub>.green.png
  *   clips [--clip a,b] [--takes 3] [--model <key>]
@@ -24,6 +26,7 @@
  *   --dry-run             print the request bodies instead of calling fal
  *   --allow-unverified    allow a video model whose field names were not verified against its schema
  *   --safe-words          drop the explicit poop reference from prompts
+ *   --ref <png>           style-reference image for "hub snake" (e.g. assets/bunky.png)
  *   --skip-schema         don't fetch the OpenAPI schema before generating clips
  *   --rescale             on a partial extract, recompute the global scale instead of reusing it
  *   --out <dir>           write sheets + manifest somewhere other than client/public/crappy
@@ -204,14 +207,44 @@ async function pickHub(hub, index) {
   log(`picked ${rel(source)} → ${rel(hubGreenPath(hub))}`);
 }
 
+/**
+ * Small/transparent reference art (assets/bunky.png is 98×90 RGBA) is upscaled
+ * and flattened onto the same chroma green the hubs use, so the edit model sees
+ * both the character style and the background it should produce.
+ */
+async function prepareReference(file) {
+  fs.mkdirSync(CANDIDATES_DIR, { recursive: true });
+  const dest = path.join(CANDIDATES_DIR, `reference-${path.basename(file, path.extname(file))}.png`);
+  const size = 1024;
+  const inner = Math.round(size * 0.6);
+  const art = await sharp(file)
+    .resize(inner, inner, { fit: 'inside', kernel: 'lanczos3', withoutEnlargement: false })
+    .png()
+    .toBuffer();
+  await sharp({ create: { width: size, height: size, channels: 4, background: { r: 0, g: 255, b: 0, alpha: 1 } } })
+    .composite([{ input: art, gravity: 'centre' }])
+    .flatten({ background: { r: 0, g: 255, b: 0 } })
+    .png()
+    .toFile(dest);
+  return dest;
+}
+
 async function generateHub(hub, flags) {
   const n = Number(flags.n ?? (hub === 'snake' ? 4 : 2));
   if (!Number.isInteger(n) || n < 1 || n > 4) throw new Error('--n must be 1..4');
   const safeWords = flags.safeWords === true;
-  const prompt = composeHubPrompt(hub, { safeWords });
+  const ref = typeof flags.ref === 'string' ? path.resolve(flags.ref) : null;
+  if (ref && hub !== 'snake') throw new Error('--ref only applies to "hub snake" (curled is always edited from the snake hub)');
+  const prompt = composeHubPrompt(hub, { safeWords, withReference: Boolean(ref) });
   let model;
   let body;
-  if (hub === 'snake') {
+  if (hub === 'snake' && ref) {
+    if (!fs.existsSync(ref)) throw new Error(`reference image not found: ${ref}`);
+    model = getImageModel(typeof flags.model === 'string' ? flags.model : DEFAULT_EDIT_MODEL);
+    const prepared = await prepareReference(ref);
+    log(`reference: ${rel(ref)} → ${rel(prepared)}`);
+    body = model.buildBody({ prompt, n, images: [flags.dryRun ? `<data-uri of ${rel(prepared)}>` : fileToDataUri(prepared)] });
+  } else if (hub === 'snake') {
     model = getImageModel(typeof flags.model === 'string' ? flags.model : DEFAULT_IMAGE_MODEL);
     body = model.buildBody({ prompt, n });
   } else {
@@ -241,7 +274,7 @@ async function generateHub(hub, flags) {
     await saveAsPng(url, dest);
     fs.writeFileSync(
       `${dest}.json`,
-      JSON.stringify({ hub, prompt, modelKey: model.key, model: model.id, requestId, url }, null, 2)
+      JSON.stringify({ hub, prompt, modelKey: model.key, model: model.id, requestId, url, reference: ref ? rel(ref) : undefined }, null, 2)
     );
     written.push(start + i);
     log(`wrote ${rel(dest)}`);

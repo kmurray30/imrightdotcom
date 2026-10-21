@@ -19,9 +19,15 @@ export function applySafeWords(text) {
   return text.replace(SAFE_WORD_PATTERN, '');
 }
 
-export function composeHubPrompt(hub, { safeWords = false } = {}) {
+/**
+ * @param {object} [opts]
+ * @param {boolean} [opts.safeWords]
+ * @param {boolean} [opts.withReference] use the prompt written for a style-reference image
+ *   (hub-<hub>-ref.txt) instead of the text-only one.
+ */
+export function composeHubPrompt(hub, { safeWords = false, withReference = false } = {}) {
   if (!HUB_NAMES.includes(hub)) throw new Error(`unknown hub "${hub}"`);
-  const text = loadPrompt(`hub-${hub}`);
+  const text = loadPrompt(withReference ? `hub-${hub}-ref` : `hub-${hub}`);
   return safeWords ? applySafeWords(text) : text;
 }
 

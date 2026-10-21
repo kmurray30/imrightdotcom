@@ -94,4 +94,13 @@ describe('prompts', () => {
     assert.ok(!safe.includes('poop'));
     assert.strictEqual(applySafeWords('x (the classic poop-emoji look) y'), 'x y');
   });
+
+  test('the reference-image hub prompt describes the style transfer and stays safe-word clean', () => {
+    const ref = composeHubPrompt('snake', { withReference: true });
+    assert.ok(ref.includes('reference image'));
+    assert.ok(ref.includes('#00FF00'));
+    assert.ok(ref.includes('no drop shadow'));
+    assert.notStrictEqual(ref, composeHubPrompt('snake'));
+    assert.ok(!composeHubPrompt('snake', { withReference: true, safeWords: true }).includes('poop'));
+  });
 });
