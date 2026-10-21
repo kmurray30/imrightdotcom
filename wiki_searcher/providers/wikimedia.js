@@ -2,11 +2,12 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import yaml from 'yaml';
-import { embedText } from '../textEmbeddings.js';
+import { embedTexts } from '../textEmbeddings.js';
 import { searchSimilarArticles } from '../../utils/vectorIndex.js';
 import { fetchArticleByTitle, toWikiPage } from '../../utils/wikimediaOnDemand.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ON_DEMAND_CONCURRENCY = 8; // under Wikimedia Enterprise On-demand's 10 requests/second
 
 /**
  * Wikimedia provider: local vector search (pgvector, no rate limit) finds
@@ -36,11 +37,12 @@ export async function fetchWiki(conspiracyData, options = {}) {
     : {};
   const articlesPerQuery = options.articlesPerQuery ?? config.articles_per_query ?? 10;
 
-  // Step 1: embed + vector-search each query concurrently. No external rate
-  // limit here — this is a local model call plus a Postgres query.
+  // Step 1: embed every query in one batched model call (far cheaper than one
+  // call per query — see embedTexts), then vector-search them concurrently.
+  // No external rate limit here — a local model call plus Postgres queries.
+  const embeddings = await embedTexts(searchQueries);
   const titleLists = await Promise.all(
-    searchQueries.map(async (searchQuery) => {
-      const embedding = await embedText(searchQuery);
+    embeddings.map(async (embedding) => {
       const matches = await searchSimilarArticles(embedding, articlesPerQuery);
       return matches.map((match) => match.title);
     })
@@ -54,14 +56,26 @@ export async function fetchWiki(conspiracyData, options = {}) {
   }
 
   // Step 2: fetch full content for the deduplicated candidate titles via
-  // Wikimedia Enterprise On-demand, one call per title, all concurrent.
+  // Wikimedia Enterprise On-demand, one call per title, at most
+  // ON_DEMAND_CONCURRENCY in flight — a run has up to ~40 candidates, and
+  // firing them all at once would blow through On-demand's 10 req/s limit.
+  // A title that still fails after callExternalApi's retries is skipped (like
+  // a title with no exact match), so one bad fetch doesn't sink the whole run.
   const pagesByTitle = new Map();
-  await Promise.all(
-    Array.from(allTitles).map(async (title) => {
-      const article = await fetchArticleByTitle(title);
-      if (article) pagesByTitle.set(title, toWikiPage(article));
-    })
-  );
+  const titlesToFetch = Array.from(allTitles);
+  let nextIndex = 0;
+  async function fetchWorker() {
+    while (nextIndex < titlesToFetch.length) {
+      const title = titlesToFetch[nextIndex++];
+      try {
+        const article = await fetchArticleByTitle(title);
+        if (article) pagesByTitle.set(title, toWikiPage(article));
+      } catch (error) {
+        console.warn(`[wiki_searcher/wikimedia] skipping "${title}": on-demand fetch failed — ${error.message}`);
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(ON_DEMAND_CONCURRENCY, titlesToFetch.length) }, fetchWorker));
 
   const query = conspiracyData.topic ?? '';
 

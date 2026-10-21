@@ -83,13 +83,26 @@ async function refreshWithToken() {
   });
 }
 
-/** Returns a currently-valid access token, refreshing or logging in as needed. */
+let inflightRefresh = null;
+
+/**
+ * Returns a currently-valid access token, refreshing or logging in as needed.
+ * Cheap to call before every request (it's cached). Concurrent callers share
+ * one in-flight refresh rather than each spending one of the refresh token's
+ * 90 uses.
+ */
 export async function getAccessToken() {
-  const now = Date.now();
-  if (cachedAccessToken && now < cachedExpiresAt - REFRESH_MARGIN_MS) {
+  if (cachedAccessToken && Date.now() < cachedExpiresAt - REFRESH_MARGIN_MS) {
     return cachedAccessToken;
   }
+  inflightRefresh ??= fetchNewAccessToken().finally(() => {
+    inflightRefresh = null;
+  });
+  return inflightRefresh;
+}
 
+async function fetchNewAccessToken() {
+  const now = Date.now();
   const refreshToken = getConfiguredRefreshToken();
   let data;
   if (refreshToken) {

@@ -10,6 +10,7 @@ conspirator/raw_output/
 tabloid_generator/raw_input/
 wiki_searcher/wikis-fetched/
 wiki_searcher/images/
+wiki-snapshots*/
 wiki_filterer/wikis-filtered/
 ref_extractor/extracted/
 ref_extractor/link_stats/
@@ -26,3 +27,6 @@ counterarguer/output/
 test-results/
 playwright-report/
 blob-report/
+wiki-bundle/
+wiki-spans/
+wiki-build-progress/
