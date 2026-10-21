@@ -20,6 +20,7 @@ import { isRetryableConnectionError, withSchemaLock, describeError } from './emb
 export const QUEUE_TABLE = 'wiki_build_chunks';
 /** One row about every minute (whichever worker gets there first): the queue's total lines done. Shared rate, ETA and elapsed come from this. */
 export const PROGRESS_TABLE = 'wiki_build_progress';
+const CHUNK_DONE_CHANNEL = 'wiki_chunk_done';
 const META_TABLE = 'wiki_build_meta';
 const RATE_WINDOW_SEC = 180; // Art/s: recent combined rate
 const ETA_WINDOW_SEC = 3 * 60; // ETA: the same recent combined rate as Art/s (samples are a minute apart, so a shorter window would jump around)
@@ -341,6 +342,36 @@ export async function markDone(chunkId, totalLines) {
      WHERE chunk_id = $1`,
     [chunkId, totalLines ?? null]
   );
+  await query(`SELECT pg_notify('${CHUNK_DONE_CHANNEL}', $1)`, [chunkId]).catch(() => {}); // only a display nudge
+}
+
+/**
+ * Calls `onDone(chunkId)` whenever any worker marks a chunk done. Keeps its own
+ * connection and re-listens after a drop; returns a function that stops it.
+ */
+export function onChunkDone(onDone) {
+  let stopped = false;
+  let client = null;
+  async function listen() {
+    while (!stopped) {
+      try {
+        client = await getPool().connect();
+        client.on('notification', (msg) => onDone(msg.payload));
+        await client.query(`LISTEN ${CHUNK_DONE_CHANNEL}`);
+        await new Promise((resolve) => client.once('error', resolve).once('end', resolve));
+      } catch {
+        // retried below
+      }
+      client?.release(true);
+      client = null;
+      if (!stopped) await new Promise((resolve) => setTimeout(resolve, RETRY_BASE_MS));
+    }
+  }
+  listen();
+  return () => {
+    stopped = true;
+    client?.release(true);
+  };
 }
 
 /** Gives a chunk back after the build gave up on it: anyone may retry it later, up to MAX_CHUNK_ATTEMPTS releases. */

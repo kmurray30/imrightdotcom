@@ -656,6 +656,9 @@ await queue.setBundleFetcherState('running'); // bundle-mode workers stay up whi
 ui.expectedMembers = (await queue.queueSnapshot().catch(() => null))?.chunks ?? null;
 const refreshEmbedder = () => queue.embedderOverview().then((overview) => (ui.embedder = overview), () => {});
 await refreshEmbedder();
+const stopListening = queue.onChunkDone(() => {
+  refreshEmbedder().then(() => panel.draw());
+});
 let ticks = 0;
 const ticker = setInterval(() => {
   ticks++;
@@ -696,6 +699,7 @@ try {
   failure = error;
 }
 clearInterval(ticker);
+stopListening();
 ui.current = null;
 ui.retryAt = null;
 ui.phase = failure ? 'stopped' : 'done';
