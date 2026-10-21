@@ -35,9 +35,10 @@ npm run crappy -- synthetic --out /tmp/syn    # fake green-screen takes → full
 
 npm run crappy -- schema [--model <key>]      # print a fal endpoint's input fields (log only)
 npm run crappy -- hub snake --n 4 --yes       # snake-pose candidates → hubs/candidates/snake-<n>.png
-npm run crappy -- hub snake --ref assets/bunky.png --n 4 --yes
-                                              # same, but styled after an existing character image
-                                              # (nano-banana/edit + prompts/hub-snake-ref.txt)
+npm run crappy -- hub snake --ref assets/bunky.png --model flux-kontext --n 4 --yes
+                                              # same, but edited FROM an existing character image
+                                              # (prompts/hub-snake-ref.txt; models: flux-kontext,
+                                              # flux-kontext-max, flux-2-edit, nano-banana-edit)
 npm run crappy -- hub pick snake 2            # promote one to hubs/snake.green.png
 npm run crappy -- hub curled --n 2 --yes      # curled candidates, edited from the chosen snake
 npm run crappy -- hub pick curled 1

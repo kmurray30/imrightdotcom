@@ -40,6 +40,21 @@ describe('model registry', () => {
 
   test('image models parse urls and unknown keys throw', () => {
     assert.deepStrictEqual(getImageModel('nano-banana').parseResult({ images: [{ url: 'u1' }, { url: 'u2' }] }), ['u1', 'u2']);
+    assert.deepStrictEqual(getImageModel('flux-kontext').buildBody({ prompt: 'p', n: 4, images: ['d'] }), {
+      prompt: 'p',
+      image_url: 'd',
+      num_images: 4,
+      guidance_scale: 3.5,
+      aspect_ratio: '1:1',
+      output_format: 'png',
+      safety_tolerance: '5',
+    });
+    assert.deepStrictEqual(getImageModel('flux-2-edit').buildBody({ prompt: 'p', n: 1, images: ['d'] }), {
+      prompt: 'p',
+      image_urls: ['d'],
+      num_images: 1,
+      output_format: 'png',
+    });
     assert.deepStrictEqual(getImageModel('nano-banana-edit').buildBody({ prompt: 'p', n: 2, images: ['d'] }), {
       prompt: 'p',
       image_urls: ['d'],
@@ -97,7 +112,7 @@ describe('prompts', () => {
 
   test('the reference-image hub prompt describes the style transfer and stays safe-word clean', () => {
     const ref = composeHubPrompt('snake', { withReference: true });
-    assert.ok(ref.includes('reference image'));
+    assert.ok(ref.includes('Turn this character into a snake'));
     assert.ok(ref.includes('#00FF00'));
     assert.ok(ref.includes('no drop shadow'));
     assert.notStrictEqual(ref, composeHubPrompt('snake'));

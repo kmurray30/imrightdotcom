@@ -26,7 +26,8 @@
  *   --dry-run             print the request bodies instead of calling fal
  *   --allow-unverified    allow a video model whose field names were not verified against its schema
  *   --safe-words          drop the explicit poop reference from prompts
- *   --ref <png>           style-reference image for "hub snake" (e.g. assets/bunky.png)
+ *   --ref <png>           reference image "hub snake" is edited from (e.g. assets/bunky.png);
+ *                         pair with --model flux-kontext | flux-kontext-max | flux-2-edit
  *   --skip-schema         don't fetch the OpenAPI schema before generating clips
  *   --rescale             on a partial extract, recompute the global scale instead of reusing it
  *   --out <dir>           write sheets + manifest somewhere other than client/public/crappy

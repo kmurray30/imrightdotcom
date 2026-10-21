@@ -133,6 +133,57 @@ export const IMAGE_MODELS = {
     buildBody: ({ prompt, n = 1, images }) => ({ prompt, image_urls: images, num_images: n, output_format: 'png' }),
     parseResult: (json) => requireImages(json, 'nano-banana-edit'),
   },
+  // FLUX.1 Kontext: instruction-style edits of ONE reference image that keep
+  // the character's identity (shape, texture, face) far better than
+  // nano-banana's restyle. Required fields (prompt, image_url) confirmed from
+  // the endpoint's validation error; the rest are documented optionals.
+  'flux-kontext': {
+    id: 'fal-ai/flux-pro/kontext',
+    verified: true,
+    pricePerImageUsd: 0.04,
+    kind: 'image-edit',
+    buildBody: ({ prompt, n = 1, images }) => ({
+      prompt,
+      image_url: images[0],
+      num_images: n,
+      guidance_scale: 3.5,
+      aspect_ratio: '1:1',
+      output_format: 'png',
+      safety_tolerance: '5',
+    }),
+    parseResult: (json) => requireImages(json, 'flux-kontext'),
+  },
+  'flux-kontext-max': {
+    id: 'fal-ai/flux-pro/kontext/max',
+    verified: true,
+    pricePerImageUsd: 0.08,
+    kind: 'image-edit',
+    buildBody: ({ prompt, n = 1, images }) => ({
+      prompt,
+      image_url: images[0],
+      num_images: n,
+      guidance_scale: 3.5,
+      aspect_ratio: '1:1',
+      output_format: 'png',
+      safety_tolerance: '5',
+    }),
+    parseResult: (json) => requireImages(json, 'flux-kontext-max'),
+  },
+  // FLUX.2 [pro] multi-reference edit (prompt, image_urls confirmed the same
+  // way). Priced per megapixel; ~$0.05 for a 1 MP output with one input.
+  'flux-2-edit': {
+    id: 'fal-ai/flux-2-pro/edit',
+    verified: true,
+    pricePerImageUsd: 0.05,
+    kind: 'image-edit',
+    buildBody: ({ prompt, n = 1, images }) => ({
+      prompt,
+      image_urls: images,
+      num_images: n,
+      output_format: 'png',
+    }),
+    parseResult: (json) => requireImages(json, 'flux-2-edit'),
+  },
 };
 
 export function getVideoModel(key = DEFAULT_VIDEO_MODEL) {
