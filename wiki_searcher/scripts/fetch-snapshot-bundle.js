@@ -39,6 +39,7 @@
  * Usage: node wiki_searcher/scripts/fetch-snapshot-bundle.js [bundleDir]   (default ./wiki-bundle)
  */
 import fs from 'fs';
+import os from 'os';
 import fsp from 'fs/promises';
 import path from 'path';
 import readline from 'readline';
@@ -53,6 +54,11 @@ import { ResumableGunzip, serializePoint, deserializePoint } from '../resumableG
 import { TarWalker } from '../tarWalker.js';
 
 loadEnv();
+// Lowest CPU priority: the embedder (which feeds the GPU) gets the CPU first; parsing uses what's left.
+// Set before the parse threads start, so they inherit it.
+try {
+  os.setPriority(19);
+} catch {}
 process.env.DB_IDLE_TIMEOUT_MS ??= '0'; // keep connections open (see build-index-from-wikimedia.js)
 process.env.EXTRACT_WORKERS ??= process.env.PARSE_WORKERS || '6'; // HTML parsing threads (spanWorkerPool.js)
 const queue = await import('../chunkQueue.js');
