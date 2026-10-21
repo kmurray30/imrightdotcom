@@ -43,6 +43,9 @@ If (1) rejects the file outright, that's the signal to fall back to (2).
 | `03-pipeline-external-apis.json` | Pipeline & External APIs — MediaWiki/Pixabay/link-checker health, latency, rate limits |
 | `04-weird-traffic-anomalies.json` | Weird Traffic & Anomalies — anomaly tag breakdown + all bookmarked log queries |
 | `05-image-cache.json` | Pixabay Image Cache — hit/miss rate per cache tier (embedding/search/metadata/file), embedding similarity score by rank, embedding latency, stage 1 query-vs-image dedup ratio, stage 2/0 size over time, downloaded bytes with a size-warning threshold line, and a cross-check against real Pixabay call/rate-limit volume |
+| `07-user-submissions.json` | User Submissions — a plain feed of every submitted claim, newest first |
+
+`06-rate-limits.json` is intentionally skipped here — it exists on the `claude/new-session-lmvsak` branch ([PR #15](https://github.com/kmurray30/imrightdotcom/pull/15)) but that PR predates the accounts/social-layer rewrite and now conflicts with `main`; the number is reserved for it rather than reused.
 
 ## Bookmarked LogQL queries (Explore-ready)
 
