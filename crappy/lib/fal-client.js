@@ -108,6 +108,16 @@ export async function submitAndWait(modelId, body, { pollMs = 3000, maxWaitMs = 
   throw new Error(`fal request ${requestId} did not complete within ${maxWaitMs} ms`);
 }
 
+/**
+ * fal serves result files from sharded media hosts (v3.fal.media, v3b.fal.media, ...)
+ * that all resolve the same `/files/...` path. Behind an egress allowlist that
+ * only knows `v3.fal.media`, the sharded variants fail at connect time, so the
+ * download falls back to the canonical host once a network error is seen.
+ */
+export function canonicalMediaUrl(url) {
+  return url.replace(/^https:\/\/v3[a-z]\.fal\.media\//, 'https://v3.fal.media/');
+}
+
 /** Download a result URL to disk (fal media URLs expire, so do this promptly). */
 export async function downloadToFile(url, dest, { retries = 3, timeoutMs = 120_000, log } = {}) {
   let attempt = 0;
@@ -122,6 +132,12 @@ export async function downloadToFile(url, dest, { retries = 3, timeoutMs = 120_0
       return { bytes: bytes.length, contentType: response.headers.get('content-type') };
     } catch (error) {
       const retryable = error instanceof FalHttpError ? isRetryableStatus(error.status) : true;
+      const fallback = canonicalMediaUrl(url);
+      if (!(error instanceof FalHttpError) && fallback !== url) {
+        log?.(`download: ${new URL(url).host} unreachable, falling back to ${new URL(fallback).host}`);
+        url = fallback;
+        continue;
+      }
       if (!retryable || attempt >= retries) throw error;
       attempt++;
       log?.(`download retry ${attempt}/${retries}: ${error.message}`);
