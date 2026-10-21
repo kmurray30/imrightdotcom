@@ -12,6 +12,7 @@ import { ProfilePage } from './pages/ProfilePage.jsx';
 import { WorkshopPage } from './pages/WorkshopPage.jsx';
 import { WorkshopRunPage } from './pages/WorkshopRunPage.jsx';
 import { FeedbackPage } from './pages/FeedbackPage.jsx';
+import { CrappyPage } from './pages/CrappyPage.jsx';
 
 export default function App() {
   return (
@@ -31,6 +32,7 @@ export default function App() {
             <Route path="/workshop" element={<WorkshopPage />} />
             <Route path="/workshop/:runId" element={<WorkshopRunPage />} />
             <Route path="/feedback" element={<FeedbackPage />} />
+            <Route path="/crappy" element={<CrappyPage />} />
             <Route path="*" element={<p className="empty-state">Page not found.</p>} />
           </Routes>
         </main>

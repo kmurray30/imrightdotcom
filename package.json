@@ -19,6 +19,8 @@
     "grant-admin": "node imright/scripts/grant-admin.js",
     "db:generate": "drizzle-kit generate",
     "build": "npm --prefix client install && npm --prefix client run build",
+    "crappy": "node crappy/cli.js",
+    "test:unit": "node --test crappy/__tests__/*.test.js utils/__tests__/*.test.js",
     "test:e2e": "playwright test"
   },
   "dependencies": {

@@ -1,0 +1,9 @@
+{
+  "name": "crappy",
+  "private": true,
+  "type": "module",
+  "description": "Offline fal.ai video-to-sprite pipeline for the Crappy mascot demo (see README.md)",
+  "scripts": {
+    "test": "node --test __tests__/*.test.js"
+  }
+}

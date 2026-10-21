@@ -112,6 +112,8 @@ npm run cli -- "<claim>"
 - `npm run start` — run the server with no mode set (falls back to `local`); use `npm run start:prod` for prod mode
 - `npm run debug -- <slug>` — regenerate a pipeline debug page
 - `npm run serve-output -- [port]` — static file server for previously-generated tabloid output
+- `npm run crappy -- <placeholder|hub|clips|extract|synthetic|all>` — offline fal.ai video-to-sprite pipeline for the Crappy mascot demo at `/crappy` (needs `FAL_KEY` for `hub`/`clips`, ffmpeg for `extract`); see `crappy/README.md`
+- `npm run test:unit` — `node --test` unit tests (utils, crappy pipeline)
 
 ## Modules (standalone)
 

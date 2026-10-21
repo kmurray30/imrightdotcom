@@ -1,0 +1,1 @@
+The stretched-out character slithers to the right with one smooth sinusoidal wave traveling down its body from head to tail. The wave completes exactly one full cycle over the clip, so the final pose is identical to the starting pose. The head stays level and faces right the whole time.

@@ -1,0 +1,387 @@
+{
+  "version": 1,
+  "generatedAt": "2026-10-21T15:52:08.962Z",
+  "source": "placeholder",
+  "frame": {
+    "width": 384,
+    "height": 384
+  },
+  "anchor": {
+    "x": 192,
+    "y": 360
+  },
+  "fps": 24,
+  "scale": {
+    "px": 1,
+    "snakeHeightPx": 112
+  },
+  "hubs": {
+    "curled": {
+      "image": "hubs/curled.png",
+      "source": "placeholder"
+    },
+    "snake": {
+      "image": "hubs/snake.png",
+      "source": "placeholder"
+    }
+  },
+  "rest": {
+    "hub": "curled"
+  },
+  "clips": {
+    "uncurl": {
+      "sheet": "uncurl.png",
+      "sheetWidth": 2304,
+      "sheetHeight": 1536,
+      "frameWidth": 384,
+      "frameHeight": 384,
+      "columns": 6,
+      "rows": 4,
+      "frameCount": 24,
+      "fps": 24,
+      "loop": false,
+      "hubFirst": "curled",
+      "hubLast": "snake",
+      "anchor": {
+        "x": 192,
+        "y": 360
+      },
+      "trajectory": [
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        }
+      ],
+      "travelPerCycle": 0,
+      "take": null
+    },
+    "slither": {
+      "sheet": "slither.png",
+      "sheetWidth": 2304,
+      "sheetHeight": 1536,
+      "frameWidth": 384,
+      "frameHeight": 384,
+      "columns": 6,
+      "rows": 4,
+      "frameCount": 24,
+      "fps": 24,
+      "loop": true,
+      "hubFirst": "snake",
+      "hubLast": "snake",
+      "anchor": {
+        "x": 192,
+        "y": 360
+      },
+      "trajectory": [
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        }
+      ],
+      "travelPerCycle": 0,
+      "take": null
+    },
+    "curl": {
+      "sheet": "curl.png",
+      "sheetWidth": 2304,
+      "sheetHeight": 1536,
+      "frameWidth": 384,
+      "frameHeight": 384,
+      "columns": 6,
+      "rows": 4,
+      "frameCount": 24,
+      "fps": 24,
+      "loop": false,
+      "hubFirst": "snake",
+      "hubLast": "curled",
+      "anchor": {
+        "x": 192,
+        "y": 360
+      },
+      "trajectory": [
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        },
+        {
+          "dx": 0,
+          "dy": 0
+        }
+      ],
+      "travelPerCycle": 0,
+      "take": null
+    }
+  }
+}

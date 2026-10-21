@@ -1118,6 +1118,47 @@ select {
  * button's own text/padding is a large fraction of a narrow screen's
  * width), and Discover cards fit only one per row despite being easily
  * narrow enough for two — both flagged directly. */
+/* Crappy demo (/crappy): a fixed full-viewport canvas that escapes
+ * .app-main's 900px column. The sticky header (z-index 100) stays above it
+ * and clickable; the body gradient shows through the transparent canvas. */
+.crappy-page {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+}
+
+.crappy-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.crappy-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 1.25rem;
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 0.4rem 0.9rem;
+  max-width: calc(100vw - 2rem);
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  text-align: center;
+  pointer-events: none;
+}
+
+.crappy-hint.is-error {
+  color: var(--accent-dark);
+}
+
 @media (max-width: 600px) {
   .hero {
     padding: 1.5rem 1.25rem 1.75rem;

@@ -65,6 +65,9 @@ export function Header() {
             <Link to="/history" onClick={() => setIsOpen(false)}>
               History
             </Link>
+            <Link to="/crappy" onClick={() => setIsOpen(false)}>
+              Crappy
+            </Link>
             {!isGuest && (
               <Link to="/bookmarks" onClick={() => setIsOpen(false)}>
                 Bookmarks
