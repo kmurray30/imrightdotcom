@@ -1,233 +1,73 @@
-import { useEffect, useId, useImperativeHandle, useRef } from 'react';
+import { useEffect, useId, useImperativeHandle, useRef, useState } from 'react';
 import bodyUrl from './bunky-body.webp';
+import { createBunkyController } from './bunkyController.js';
+import { EYES, LINE, PUPIL, faceAttrs } from './bunkyFace.js';
+import { resolveExpression } from './expressions.js';
 
 /* Bunky, animatable. The body is the original drawing with its face painted
  * out (assets/bunky-anim/make-body.py, saved here as WebP); the face is SVG
  * drawn on top, in the drawing's 294x270 coordinates, so it can move.
+ * Expressions live in expressions.js.
+ *
+ *   <Bunky expression="content" idle />   // changing `expression` animates
  *
  * Triggers, through a ref:
  *   const bunky = useRef(null);
  *   <Bunky ref={bunky} size={48} />
  *   bunky.current.hop();
- *   bunky.current.surprise();                   // pop, hold, settle back
- *   bunky.current.surprise({ hold: Infinity }); // stay surprised...
+ *   bunky.current.react('laughing');            // go there, hold, settle back
+ *   bunky.current.react('angry', { hold: Infinity }); // stay...
  *   bunky.current.relax();                      // ...until this
+ *   bunky.current.setExpression('sad');         // go there and stay
+ *   bunky.current.surprise();                   // = react('surprised')
+ *   bunky.current.blink();
  * Each returns a promise that resolves when that animation ends (or is
  * interrupted by another one of the same kind). */
 
-const LINE = '#3b211e';
-const PUPIL = '#4b2a28';
-const EYES = [[92, 145], [192, 145]];
 const VIEW_W = 294;
 const VIEW_H = 280; // drawing plus room for the ground shadow
+const METHODS = ['setExpression', 'play', 'react', 'surprise', 'relax', 'preview', 'blink', 'hop'];
 
-// Brows: cubic bezier [x0,y0, c1x,c1y, c2x,c2y, x1,y1].
-// Mouth: closed shape, top curve L→R then bottom curve R→L:
-//   [Lx,Ly, t1x,t1y, t2x,t2y, Rx,Ry, b1x,b1y, b2x,b2y].
-const SKEPTICAL = {
-  browL: [64, 82, 85, 76, 110, 82, 125, 106],
-  browR: [148, 88, 165, 93, 192, 90, 226, 86],
-  eyeScale: 1,
-  pupilR: 15,
-  pupilL: [105, 143],
-  pupilRt: [181, 143],
-  mouth: [117, 203, 128, 190, 156, 186, 170, 200, 158, 193, 129, 196],
-};
-const SURPRISED = {
-  browL: [68, 74, 80, 60, 106, 58, 122, 70],
-  browR: [154, 70, 170, 58, 198, 60, 216, 74],
-  eyeScale: 1.13,
-  pupilR: 9.5,
-  pupilL: [92, 146],
-  pupilRt: [192, 146],
-  mouth: [132, 207, 132, 190, 154, 190, 154, 207, 154, 229, 132, 229],
-};
-
-const POP_MS = 260;
-const RETURN_MS = 550;
-const DEFAULT_HOLD_MS = 1400;
-const HOP_MS = 1150;
-const JOLT_MS = 520;
-
-const lerp = (a, b, t) => a + (b - a) * t;
-const clamp01 = (t) => Math.min(1, Math.max(0, t));
-const easeOutBack = (t) => 1 + 3.2 * (t - 1) ** 3 + 2.2 * (t - 1) ** 2;
-const easeOutCubic = (t) => 1 - (1 - t) ** 3;
-const easeInOut = (t) => (t < 0.5 ? 4 * t ** 3 : 1 - (-2 * t + 2) ** 3 / 2);
-
-function mix(a, b, t) {
-  const out = {};
-  for (const k in a) out[k] = Array.isArray(a[k]) ? a[k].map((v, i) => lerp(v, b[k][i], t)) : lerp(a[k], b[k], t);
-  return out;
+/** The Bunky's controller, created on first use (most Bunkys never animate). */
+function ensureController(controllerRef, svgRef, baseRef, initial) {
+  controllerRef.current ??= createBunkyController(svgRef.current, {
+    initial,
+    getBase: () => baseRef.current,
+  });
+  return controllerRef.current;
 }
 
-/** SVG attributes for every face part, for a pose. */
-function faceAttrs(p) {
-  const m = p.mouth;
-  // Midpoints of the mouth's two curves; the tongue grows in as they part.
-  const top = 0.125 * (m[1] + m[7]) + 0.375 * (m[3] + m[5]);
-  const bottom = 0.125 * (m[1] + m[7]) + 0.375 * (m[9] + m[11]);
-  const open = clamp01((bottom - top - 8) / 20);
-  return {
-    eye: { r: 38 * p.eyeScale },
-    pupils: [p.pupilL, p.pupilRt].map(([cx, cy]) => ({ cx, cy, r: p.pupilR })),
-    glints: [p.pupilL, p.pupilRt].map(([x, y]) => ({
-      cx: x - p.pupilR * 0.45,
-      cy: y - p.pupilR * 0.45,
-      r: Math.max(2.4, p.pupilR * 0.24),
-    })),
-    brows: [p.browL, p.browR].map((b) => ({ d: `M${b[0]},${b[1]} C${b[2]},${b[3]} ${b[4]},${b[5]} ${b[6]},${b[7]}` })),
-    mouth: {
-      d: `M${m[0]},${m[1]} C${m[2]},${m[3]} ${m[4]},${m[5]} ${m[6]},${m[7]} C${m[8]},${m[9]} ${m[10]},${m[11]} ${m[0]},${m[1]} Z`,
-    },
-    tongue: { cx: (m[0] + m[6]) / 2, cy: bottom - 2, rx: 11 * open, ry: 7 * open },
-  };
-}
-
-function setAttrs(el, attrs) {
-  for (const k in attrs) el.setAttribute(k, attrs[k]);
-}
-
-// Hop: squash, stretch up, hang, stretch down, squash on landing, wobble.
-const HOP_BODY = [
-  // offset, y, scaleX, scaleY, easing into the next keyframe
-  [0, 0, 1, 1, 'ease-in-out'],
-  [0.16, 0, 1.14, 0.84, 'cubic-bezier(.3, 0, .6, 1)'],
-  [0.26, -42, 0.88, 1.15, 'cubic-bezier(.2, .6, .35, 1)'],
-  [0.46, -118, 0.98, 1.02, 'cubic-bezier(.55, 0, .8, .4)'],
-  [0.67, -22, 0.91, 1.11, 'linear'],
-  [0.73, 0, 1.2, 0.79, 'ease-out'],
-  [0.84, 0, 0.95, 1.06, 'ease-in-out'],
-  [0.93, 0, 1.02, 0.98, 'ease-in-out'],
-  [1, 0, 1, 1],
-];
-// The face lags a beat behind the body, so he reads as squishy.
-const HOP_FACE = [[0, 0], [0.16, 7], [0.26, 10], [0.46, -5], [0.67, -6], [0.76, 9], [0.88, -2], [1, 0]];
-// Eyes glance up at the top of the hop.
-const HOP_PUPILS = [[0, 0], [0.22, 0], [0.42, -7], [0.6, -5], [0.74, 3], [1, 0]];
-const HOP_SHADOW = [[0, 1, 1, 0.28], [0.16, 1.12, 1, 0.32], [0.46, 0.55, 0.7, 0.12], [0.73, 1.18, 1, 0.32], [1, 1, 1, 0.28]];
-// Surprise: a quick jump-stretch, then a wobble.
-const JOLT = [[0, 0, 1, 1], [0.2, -14, 0.95, 1.07], [0.45, 0, 1.05, 0.94], [0.7, 0, 0.98, 1.03], [1, 0, 1, 1]];
-
-const squashKeyframes = (rows) =>
-  rows.map(([offset, y, sx, sy, easing = 'ease-in-out']) => ({
-    offset,
-    easing,
-    transform: `translate(0px, ${y}px) scale(${sx}, ${sy})`,
-  }));
-const KEYFRAMES = {
-  hop: squashKeyframes(HOP_BODY),
-  face: HOP_FACE.map(([offset, y]) => ({ offset, transform: `translate(0px, ${y}px)` })),
-  pupils: HOP_PUPILS.map(([offset, y]) => ({ offset, transform: `translate(0px, ${y}px)` })),
-  shadow: HOP_SHADOW.map(([offset, sx, sy, opacity]) => ({ offset, opacity, transform: `scale(${sx}, ${sy})` })),
-  jolt: squashKeyframes(JOLT),
-};
-
-const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-const settled = (animations) => Promise.all(animations.map((a) => a.finished)).then(() => {}, () => {});
-
-export function Bunky({ ref, size = 64, shadow = true, className = '', title = 'Bunky' }) {
+export function Bunky({ ref, expression = 'skeptical', idle = false, size = 64, shadow = true, className = '', title = 'Bunky' }) {
   const id = `bunky-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
   const svgRef = useRef(null);
-  // Animation bookkeeping, outside React state: the face redraws every frame.
-  const anim = useRef({ face: SKEPTICAL, raf: 0, finishFace: null, hop: [], jolt: [] });
+  const controllerRef = useRef(null);
+  const baseRef = useRef(expression);
+  // The face is rendered once from this; later changes animate instead.
+  const [initial] = useState(expression);
 
   useEffect(() => {
-    const a = anim.current;
-    return () => {
-      cancelAnimationFrame(a.raf);
-      [...a.hop, ...a.jolt].forEach((x) => x.cancel());
-    };
-  }, []);
+    baseRef.current = expression;
+    if (expression !== initial || controllerRef.current) ensureController(controllerRef, svgRef, baseRef, initial).setExpression(expression);
+  }, [expression, initial]);
 
-  useImperativeHandle(ref, () => {
-    const part = (name) => svgRef.current.querySelector(`[data-part="${name}"]`);
-    const parts = (name) => svgRef.current.querySelectorAll(`[data-part="${name}"]`);
+  useEffect(() => {
+    if (idle) ensureController(controllerRef, svgRef, baseRef, initial).startIdle();
+    else controllerRef.current?.stopIdle();
+  }, [idle, initial]);
 
-    function drawFace(p) {
-      const attrs = faceAttrs(p);
-      parts('eye').forEach((el) => setAttrs(el, attrs.eye));
-      parts('pupil').forEach((el, i) => setAttrs(el, attrs.pupils[i]));
-      parts('glint').forEach((el, i) => setAttrs(el, attrs.glints[i]));
-      parts('brow').forEach((el, i) => setAttrs(el, attrs.brows[i]));
-      setAttrs(part('mouth'), attrs.mouth);
-      setAttrs(part('tongue'), attrs.tongue);
-    }
+  useEffect(() => () => controllerRef.current?.destroy(), []);
 
-    /** Runs poseAt(ms) every frame for totalMs; replaces any face animation
-     * already running (whose promise then resolves). */
-    function playFace(poseAt, totalMs) {
-      const a = anim.current;
-      cancelAnimationFrame(a.raf);
-      a.finishFace?.();
-      return new Promise((resolve) => {
-        a.finishFace = () => {
-          a.finishFace = null;
-          resolve();
-        };
-        let start = null;
-        const tick = (now) => {
-          start ??= now;
-          const ms = Math.min(now - start, totalMs);
-          a.face = poseAt(ms);
-          drawFace(a.face);
-          if (ms < totalMs) a.raf = requestAnimationFrame(tick);
-          else a.finishFace?.();
-        };
-        a.raf = requestAnimationFrame(tick);
-      });
-    }
+  useImperativeHandle(
+    ref,
+    () =>
+      Object.fromEntries(
+        METHODS.map((name) => [name, (...args) => ensureController(controllerRef, svgRef, baseRef, initial)[name](...args)]),
+      ),
+    [initial],
+  );
 
-    function hop() {
-      const a = anim.current;
-      a.hop.forEach((x) => x.cancel());
-      if (reducedMotion()) return Promise.resolve();
-      const opts = { duration: HOP_MS };
-      a.hop = [
-        part('hop').animate(KEYFRAMES.hop, opts),
-        part('face').animate(KEYFRAMES.face, opts),
-        part('pupils').animate(KEYFRAMES.pupils, opts),
-        ...(shadow ? [part('shadow').animate(KEYFRAMES.shadow, opts)] : []),
-      ];
-      return settled(a.hop);
-    }
-
-    function surprise({ hold = DEFAULT_HOLD_MS } = {}) {
-      const a = anim.current;
-      const reduce = reducedMotion();
-      if (!reduce) {
-        a.jolt.forEach((x) => x.cancel());
-        a.jolt = [part('jolt').animate(KEYFRAMES.jolt, { duration: JOLT_MS })];
-      }
-      const from = a.face;
-      const pop = reduce ? 0 : POP_MS;
-      const back = reduce ? 0 : RETURN_MS;
-      const poseAt = (ms) => {
-        if (ms < pop) {
-          const t = ms / pop;
-          // Brows and eyes overshoot; the mouth and pupils just pop.
-          const p = mix(from, SURPRISED, easeOutBack(t));
-          p.mouth = from.mouth.map((v, i) => lerp(v, SURPRISED.mouth[i], easeOutCubic(t)));
-          p.pupilR = lerp(from.pupilR, SURPRISED.pupilR, easeOutCubic(t));
-          return p;
-        }
-        if (ms < pop + hold) return SURPRISED;
-        if (!back) return SKEPTICAL;
-        return mix(SURPRISED, SKEPTICAL, easeInOut(clamp01((ms - pop - hold) / back)));
-      };
-      return playFace(poseAt, hold === Infinity ? pop : pop + hold + back);
-    }
-
-    function relax() {
-      const from = anim.current.face;
-      const back = reducedMotion() ? 0 : RETURN_MS;
-      return playFace((ms) => (back ? mix(from, SKEPTICAL, easeInOut(ms / back)) : SKEPTICAL), back);
-    }
-
-    return { hop, surprise, relax };
-  }, [shadow]);
-
-  const face = faceAttrs(SKEPTICAL);
+  const face = faceAttrs(resolveExpression(initial).pose);
+  const eyeClip = (i) => `url(#${id}-eye-${i})`;
   return (
     <svg
       ref={svgRef}
@@ -246,6 +86,16 @@ export function Bunky({ ref, size = 64, shadow = true, className = '', title = '
           <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="3" result="noise" />
           <feDisplacementMap in="SourceGraphic" in2="noise" scale="1.6" xChannelSelector="R" yChannelSelector="G" />
         </filter>
+        {EYES.map(([cx, cy], i) => (
+          <clipPath key={i} id={`${id}-eye-${i}`}>
+            <circle data-part="eye-clip" cx={cx} cy={cy} r={face.eyeClip.r} />
+          </clipPath>
+        ))}
+        {EYES.map((_, i) => (
+          <clipPath key={i} id={`${id}-lid-${i}`}>
+            <path data-part="lid-fill" d={face.lidFills[i].d} />
+          </clipPath>
+        ))}
         <clipPath id={`${id}-mouth-clip`}>
           <use href={`#${id}-mouth`} />
         </clipPath>
@@ -253,33 +103,57 @@ export function Bunky({ ref, size = 64, shadow = true, className = '', title = '
       {shadow && <ellipse data-part="shadow" className="bunky-shadow" cx="147" cy="268" rx="112" ry="9" fill={LINE} opacity="0.28" />}
       <g data-part="hop" className="bunky-squash">
         <g data-part="jolt" className="bunky-squash">
-          <image href={bodyUrl} width="294" height="270" />
-          <g data-part="face" className="bunky-part" filter={`url(#${id}-crayon)`}>
-            {EYES.map(([cx, cy]) => (
-              <circle key={cx} data-part="eye" cx={cx} cy={cy} r={face.eye.r} fill="#fff" stroke={LINE} strokeWidth="2.8" />
-            ))}
-            <g data-part="pupils" className="bunky-part">
-              {face.pupils.map((p, i) => (
-                <g key={i}>
-                  <circle data-part="pupil" {...p} fill={PUPIL} />
-                  <circle data-part="glint" {...face.glints[i]} fill="#fff" />
+          <g data-part="breath" className="bunky-squash">
+            <g data-part="pose" transform={face.pose.transform}>
+              <image href={bodyUrl} width="294" height="270" />
+              <g data-part="face" className="bunky-part" filter={`url(#${id}-crayon)`}>
+                {[58, 226].map((cx) => (
+                  <ellipse key={cx} data-part="blush" cx={cx} cy="196" rx="15" ry="8" fill="#f08a78" opacity={face.blush.opacity} />
+                ))}
+                {EYES.map(([cx, cy]) => (
+                  <circle key={cx} data-part="eye" cx={cx} cy={cy} r={face.eye.r} fill="#fff" />
+                ))}
+                <g data-part="pupils" className="bunky-part">
+                  {face.pupils.map((p, i) => (
+                    <g key={i} clipPath={eyeClip(i)}>
+                      <circle data-part="pupil" {...p} fill={PUPIL} />
+                      <circle data-part="glint" {...face.glints[i]} fill="#fff" />
+                    </g>
+                  ))}
                 </g>
-              ))}
+                {EYES.map(([cx, cy]) => (
+                  <circle key={cx} data-part="eye" cx={cx} cy={cy} r={face.eye.r} fill="none" stroke={LINE} strokeWidth="2.8" />
+                ))}
+                {/* Eyelids are the body drawing itself, clipped to the lid
+                    shape, so they match his texture exactly. */}
+                {EYES.map((_, i) => (
+                  <g key={i} clipPath={eyeClip(i)}>
+                    <image href={bodyUrl} width="294" height="270" clipPath={`url(#${id}-lid-${i})`} />
+                    <path data-part="lid-line" d={face.lidLines[i].d} fill="none" stroke={LINE} strokeWidth="2.8" strokeLinecap="round" />
+                  </g>
+                ))}
+                {face.brows.map((b, i) => (
+                  <path key={i} data-part="brow" d={b.d} fill="none" stroke={LINE} strokeWidth="6.5" strokeLinecap="round" />
+                ))}
+                <path
+                  id={`${id}-mouth`}
+                  data-part="mouth"
+                  d={face.mouth.d}
+                  fill="#2e1714"
+                  stroke={LINE}
+                  strokeWidth="2.4"
+                  strokeLinejoin="round"
+                />
+                <g clipPath={`url(#${id}-mouth-clip)`}>
+                  <ellipse data-part="tongue" {...face.tongue} fill="#b8695e" />
+                  <rect data-part="teeth" {...face.teeth} fill="#fffaf2" />
+                </g>
+                <g data-part="sweat" {...face.sweat}>
+                  <path d="M0,-13 C5,-5 9,0 9,5 A9,9 0 0 1 -9,5 C-9,0 -5,-5 0,-13 Z" fill="#a8dcf5" stroke={LINE} strokeWidth="2.2" />
+                  <path d="M-4,3 Q-4,-1 -1,-4" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" />
+                </g>
+              </g>
             </g>
-            {face.brows.map((b, i) => (
-              <path key={i} data-part="brow" d={b.d} fill="none" stroke={LINE} strokeWidth="6.5" strokeLinecap="round" />
-            ))}
-            <path
-              id={`${id}-mouth`}
-              data-part="mouth"
-              d={face.mouth.d}
-              fill="#2e1714"
-              stroke={LINE}
-              strokeWidth="2.4"
-              strokeLinejoin="round"
-            />
-            {/* Tongue, clipped to the mouth so it only shows once it opens. */}
-            <ellipse data-part="tongue" {...face.tongue} fill="#b8695e" clipPath={`url(#${id}-mouth-clip)`} />
           </g>
         </g>
       </g>
