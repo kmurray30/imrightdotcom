@@ -620,6 +620,28 @@ textarea:focus {
   color: var(--text-secondary);
 }
 
+/* Bunky.jsx — he hops above his own box, so nothing clips him. */
+.bunky {
+  display: inline-block;
+  overflow: visible;
+  vertical-align: middle;
+}
+
+/* Transform origins are in the drawing's own 294x270 units. */
+.bunky-squash,
+.bunky-part,
+.bunky-shadow {
+  transform-box: view-box;
+}
+
+.bunky-squash {
+  transform-origin: 147px 266px; /* his bottom, so squashes stay grounded */
+}
+
+.bunky-shadow {
+  transform-origin: 147px 268px;
+}
+
 .like-button.is-liked,
 .bookmark-button.is-bookmarked,
 .follow-button.is-following,
