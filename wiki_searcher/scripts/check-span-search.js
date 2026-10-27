@@ -24,12 +24,11 @@ loadEnv();
 process.env.DB_STATEMENT_TIMEOUT_MS ??= '0'; // the exact scans take minutes
 const { getPool } = await import('../../imright/scripts/db.js');
 const { embedPassages, embedQueries, ARCTIC_DIMS } = await import('../arcticEmbeddings.js');
-const { searchSpans } = await import('../spanSearch.js');
 
 const args = process.argv.slice(2);
 const vectorsOnly = args.includes('--vectors-only');
 const trueExact = args.includes('--exact');
-const queryCount = Number(args[args.indexOf('--queries') + 1]) || 12;
+const queryCount = Number(args[args.indexOf('--queries') + 1]) || 16;
 const SAMPLE = 20;
 const K = 10;
 const SETTINGS = [
@@ -37,6 +36,9 @@ const SETTINGS = [
   { probes: 63, candidates: 400 },
   { probes: 100, candidates: 800 },
   { probes: 160, candidates: 1500 },
+  // Which step loses matches: every list with the usual pool, or the usual lists with a big pool.
+  { probes: 4000, candidates: 400 },
+  { probes: 63, candidates: 3000 },
 ];
 const QUERIES = [
   '5G towers cause cancer',
@@ -53,7 +55,10 @@ const QUERIES = [
   'coffee dehydrates you',
   'sugar makes children hyperactive',
   'humans only use ten percent of their brains',
+  'TAS2R38',
+  'goitrogens in broccoli',
 ].slice(0, queryCount);
+const SHOWN = ['TAS2R38', 'goitrogens in broccoli', 'passengers of the Titanic who died'];
 
 const pool = getPool();
 if (!pool) {
@@ -105,7 +110,7 @@ const exact = [];
 for (let i = 0; i < QUERIES.length; i++) {
   const start = performance.now();
   if (!trueExact) {
-    exact.push(new Set(await indexSearch(vectors[i], { probes: 4000, candidates: 20000, workMem: '1GB' })));
+    exact.push(await indexSearch(vectors[i], { probes: 4000, candidates: 20000, workMem: '1GB' }));
     console.log(`   ${i + 1}/${QUERIES.length} "${QUERIES[i]}" (${((performance.now() - start) / 1000).toFixed(0)} s)`);
     continue;
   }
@@ -115,11 +120,11 @@ for (let i = 0; i < QUERIES.length; i++) {
     await client.query('SET LOCAL max_parallel_workers_per_gather = 8');
     await client.query('SET LOCAL enable_indexscan = off'); // a true scan, not the index's approximation
     const { rows } = await client.query(
-      `SELECT id FROM wiki_citation_spans ORDER BY embedding <=> $1::halfvec(${ARCTIC_DIMS}) LIMIT ${K}`,
+      `SELECT id, 1 - (embedding <=> $1::halfvec(${ARCTIC_DIMS})) AS score FROM wiki_citation_spans ORDER BY embedding <=> $1::halfvec(${ARCTIC_DIMS}) LIMIT ${K}`,
       [literal(vectors[i])]
     );
     await client.query('COMMIT');
-    exact.push(new Set(rows.map((row) => String(row.id))));
+    exact.push(rows.map((row) => ({ id: String(row.id), score: Number(row.score) })));
     console.log(`   ${i + 1}/${QUERIES.length} "${QUERIES[i]}" (${((performance.now() - start) / 1000).toFixed(0)} s)`);
   } finally {
     client.release();
@@ -139,38 +144,55 @@ async function indexSearch(vector, { probes, candidates, workMem = '128MB' }) {
          ORDER BY binary_quantize(embedding)::bit(${ARCTIC_DIMS}) <~> binary_quantize($1::halfvec(${ARCTIC_DIMS}))
          LIMIT $2
        )
-       SELECT id FROM candidates ORDER BY embedding <=> $1::halfvec(${ARCTIC_DIMS}) LIMIT ${K}`,
+       SELECT id, 1 - (embedding <=> $1::halfvec(${ARCTIC_DIMS})) AS score FROM candidates ORDER BY embedding <=> $1::halfvec(${ARCTIC_DIMS}) LIMIT ${K}`,
       [literal(vector), candidates]
     );
     await client.query('COMMIT');
-    return rows.map((row) => String(row.id));
+    return rows.map((row) => ({ id: String(row.id), score: Number(row.score) }));
   } finally {
     client.release();
   }
 }
 
-console.log(`\n   recall@${K} and time per query (index search):`);
+const meanScore = (rows) => rows.reduce((sum, row) => sum + row.score, 0) / Math.max(1, rows.length);
+const bySetting = new Map();
+console.log(`\n   recall@${K}, similarity lost (reference top-${K} mean minus this setting's), and time per query:`);
 for (const setting of SETTINGS) {
   let found = 0;
+  let lost = 0;
   const times = [];
+  const results = [];
   for (let i = 0; i < QUERIES.length; i++) {
     const start = performance.now();
-    const ids = await indexSearch(vectors[i], setting);
+    const rows = await indexSearch(vectors[i], setting);
     times.push(performance.now() - start);
-    found += ids.filter((id) => exact[i].has(id)).length;
+    results.push(rows);
+    const reference = new Set(exact[i].map((row) => row.id));
+    found += rows.filter((row) => reference.has(row.id)).length;
+    lost += meanScore(exact[i]) - meanScore(rows);
   }
+  bySetting.set(`${setting.probes}/${setting.candidates}`, results);
   times.sort((a, b) => a - b);
   console.log(
-    `   probes ${String(setting.probes).padStart(3)}, candidates ${String(setting.candidates).padStart(4)}: recall ${(found / (QUERIES.length * K)).toFixed(3)}` +
-      ` · median ${times[Math.floor(times.length / 2)].toFixed(0)} ms, max ${times[times.length - 1].toFixed(0)} ms`
+    `   probes ${String(setting.probes).padStart(4)}, candidates ${String(setting.candidates).padStart(4)}: recall ${(found / (QUERIES.length * K)).toFixed(3)}` +
+      ` · similarity lost ${(lost / QUERIES.length).toFixed(4)} · median ${times[Math.floor(times.length / 2)].toFixed(0)} ms, max ${times[times.length - 1].toFixed(0)} ms`
   );
 }
+console.log(`   (reference top-${K} mean similarity, averaged over queries: ${(exact.reduce((sum, rows) => sum + meanScore(rows), 0) / exact.length).toFixed(4)})`);
 
-console.log('\n   Top matches with the defaults (SPAN_SEARCH_PROBES / SPAN_SEARCH_CANDIDATES), for a few queries:');
-const shown = QUERIES.slice(0, 4);
-const results = await searchSpans(shown, { limit: 3 });
-shown.forEach((query, i) => {
+async function describe(rows) {
+  if (!rows.length) return [];
+  const { rows: spans } = await pool.query(`SELECT id::text AS id, title, left(span_text, 100) AS text FROM wiki_citation_spans WHERE id = ANY($1::bigint[])`, [rows.map((row) => row.id)]);
+  const byId = new Map(spans.map((span) => [span.id, span]));
+  return rows.map((row) => `${row.score.toFixed(3)}  ${byId.get(row.id)?.title} — ${(byId.get(row.id)?.text ?? '').replace(/\s+/g, ' ')}…`);
+}
+console.log('\n   Top 3 at the defaults (63/400) vs the reference, for a few queries:');
+for (const query of SHOWN) {
+  const i = QUERIES.indexOf(query);
+  if (i === -1) continue;
   console.log(`   "${query}"`);
-  for (const span of results[i]) console.log(`     ${span.score.toFixed(3)}  ${span.title} — ${span.text.slice(0, 110).replace(/\s+/g, ' ')}…`);
-});
+  for (const line of await describe(bySetting.get('63/400')[i].slice(0, 3))) console.log(`     default    ${line}`);
+  for (const line of await describe(exact[i].slice(0, 3))) console.log(`     reference  ${line}`);
+}
+
 await pool.end();
