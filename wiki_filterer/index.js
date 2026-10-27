@@ -39,6 +39,11 @@ export async function filterWiki(conspiracyData, wikiFetchedData, options = {}) 
     throw new Error('No arguments found in conspiracy data.');
   }
 
+  // Span search (wiki_searcher/providers/spans.js) already ranks by relevance and has no pages to filter.
+  if (wikiFetchedData?.span_matches) {
+    return { ...wikiFetchedData, arguments: argumentsList, filtered_at: new Date().toISOString() };
+  }
+
   const pagesById = new Map(
     (wikiFetchedData?.pages ?? []).map((page) => [page.pageid, page])
   );

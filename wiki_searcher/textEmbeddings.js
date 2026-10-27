@@ -1,7 +1,8 @@
 /**
  * Local text embeddings via a small ONNX model running in-process — no
  * vendor API, no per-call cost. Used both by the offline index build/refresh
- * scripts and by wiki_searcher/providers/wikimedia.js at query time.
+ * scripts and, through arcticEmbeddings.js, by wiki_searcher/spanSearch.js at
+ * query time.
  *
  * Not utils/embeddings.js — that's a separate, unrelated CLIP text/image
  * module for the Pixabay image cache. This one is specific to the wiki
@@ -12,7 +13,7 @@
  * models aren't comparable. If this ever changes, the whole index needs
  * rebuilding, not just new rows appended.
  */
-import { pipeline } from '@huggingface/transformers';
+import { pipeline, env } from '@huggingface/transformers';
 
 const MODEL_NAME = 'Xenova/bge-small-en-v1.5';
 export const EMBEDDING_DIMENSIONS = 384;
@@ -50,7 +51,7 @@ let log = console.log;
  * Redirects this module's own progress logging (model download, below) away
  * from the console — e.g. to a log file — without changing what gets logged.
  * Defaults to console.log, so nothing changes for callers that never call
- * this (providers/wikimedia.js at live query time, refresh-daily.js).
+ * this (spanSearch.js at live query time, refresh-daily.js).
  * build-index-from-wikimedia.js uses this to keep its terminal output to
  * just the aggregate progress bar, funneling the one-time model-download
  * detail into its own debug.log instead.
@@ -74,6 +75,8 @@ export function setLogger(fn) {
  * src/utils/hub/utils.js) rather than assumed from docs.
  */
 export function loadExtractor(device, dtype, modelName = MODEL_NAME) {
+  // On Railway: a path on the service's volume, so the weights survive redeploys.
+  if (process.env.EMBED_MODEL_CACHE_DIR) env.cacheDir = process.env.EMBED_MODEL_CACHE_DIR;
   const lastLoggedPct = {}; // per-file, so multi-file downloads (model + tokenizer) don't spam past each other
   const { threads } = embedConfig();
   log(`[embed] Loading ${modelName} on ${device} (${dtype}${device === 'cpu' && threads ? `, ${threads} threads` : ''})...`);

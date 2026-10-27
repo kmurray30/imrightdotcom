@@ -19,8 +19,9 @@ SERVE_MODE = "prod"
 # Without a volume attached here, this still works but the Pixabay cache
 # (SQLite DB + downloaded images) is wiped on every redeploy.
 IMAGE_CACHE_DIR = "/data/pixabay-cache"
-# 'mediawiki' or 'wikimedia' — see wiki_searcher/index.js. 'wikimedia' needs
-# the pgvector index built (incl. wiki_searcher/scripts/create-ann-index.js)
-# and WIKIMEDIA_USERNAME/WIKIMEDIA_PASSWORD set on this service; see README.
-# To roll back to the free MediaWiki API, set this back to "mediawiki".
-WIKI_SEARCH_PROVIDER = "wikimedia"
+# 'mediawiki' or 'spans' — see wiki_searcher/index.js. 'spans'
+# needs wiki_citation_spans_ann (wiki_searcher/scripts/create-ann-index.js
+# --spans). To roll back to the free MediaWiki API, set this to "mediawiki".
+WIKI_SEARCH_PROVIDER = "mediawiki"
+# The span search's query model (arctic, ~440 MB) is cached on the volume.
+EMBED_MODEL_CACHE_DIR = "/data/hf-models"

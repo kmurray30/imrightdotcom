@@ -81,6 +81,7 @@ import {
 } from './pipeline-runs.js';
 import { HttpError } from './http-error.js';
 import { runMigrations } from './db/migrate.js';
+import { warmUp as warmUpSpanSearchModel } from '../../wiki_searcher/arcticEmbeddings.js';
 
 loadEnv();
 startObservability();
@@ -1014,6 +1015,10 @@ const server = app.listen(PORT, SERVE_HOST, () => {
   process.stdout.write(`${url}\n`);
   const reachability = SERVE_HOST === '0.0.0.0' ? 'reachable on the local network' : 'local machine only';
   console.error(`[serve-site] mode=${SERVE_MODE} listening on ${SERVE_HOST}:${PORT} (${reachability}); open ${url}`);
+  // Span search embeds each query: load (and on first use download) its model now, not on the first run.
+  if (process.env.WIKI_SEARCH_PROVIDER === 'spans') {
+    warmUpSpanSearchModel().catch((error) => console.error(`[serve-site] span search model failed to load: ${error.message}`));
+  }
 });
 
 // Paired with railway.toml's drainingSeconds and startCommand (invoking node

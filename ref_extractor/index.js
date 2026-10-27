@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import yaml from 'yaml';
 import { extractCitationsFromArticleForTerm } from './searchThenExtract.js';
+import { citationsFromSpans } from './fromSpans.js';
 import { checkUrl, LinkStatus } from '../utils/linkChecker.js';
 import { recordExternalCallMetric } from '../imright/scripts/observability.js';
 import { recordExternalCallAttempt, addTraceEvent } from '../imright/scripts/interaction-context.js';
@@ -104,6 +105,7 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
   const searchQueries = wikiFilteredData?.search_queries ?? Object.keys(searchQueryArticleTitles);
 
   const pagesByTitle = new Map(pages.map((page) => [page.title, page]));
+  const spanMatches = wikiFilteredData?.span_matches ?? null; // span search: candidates come from the matched spans, not from pages
 
   const extractOptions = { citationTypes, excludeUrlPatterns, minTermLength };
   const linkCheckOptions = { timeoutMs: linkCheckTimeoutMs };
@@ -123,6 +125,11 @@ export async function extract(conspiracyData, wikiFilteredData, options = {}) {
 
     for (const searchTerm of searchTerms) {
       if (!searchTerm || typeof searchTerm !== 'string') continue;
+
+      if (spanMatches) {
+        termToCitations.push({ searchTerm, citations: citationsFromSpans(spanMatches[searchTerm] ?? [], extractOptions) });
+        continue;
+      }
 
       const matchesForTerm = [];
       for (const articleTitle of articleTitles) {

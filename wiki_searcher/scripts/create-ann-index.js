@@ -32,7 +32,16 @@
  * memory that grows with lists² (≈4.8GB at lists ≈ 4800) and fails outright,
  * after several minutes of sampling, if it doesn't get it.
  *
- * Usage: node wiki_searcher/scripts/create-ann-index.js [--rebuild | --cancel]
+ * --spans builds the cited-span index instead (wiki_citation_spans_ann on
+ * wiki_citation_spans): ivfflat over each embedding's binary quantization
+ * (bit(256), Hamming distance), about 3 GB for ~59M spans instead of ~32 GB
+ * for the halfvec vectors themselves. Searches take the nearest candidates
+ * by Hamming distance from it and re-rank them by exact cosine distance on
+ * the stored halfvec (wiki_searcher/spanSearch.js). Lists default to 4000
+ * there: k-means memory grows with lists², and the bit vectors are cheap to
+ * scan per list.
+ *
+ * Usage: node wiki_searcher/scripts/create-ann-index.js [--spans] [--rebuild | --cancel]
  *   LISTS (default: from row count), MAINTENANCE_WORK_MEM (default: sized to
  *   the build, e.g. "6GB"), PARALLEL_WORKERS (default 8)
  */
@@ -43,8 +52,14 @@ import { formatDuration, fitToTerminal, tableBorder, tableRow } from './terminal
 
 loadEnv();
 
-const TABLE = 'wiki_paragraph_embeddings';
-const INDEX_NAME = 'wiki_paragraph_embeddings_ann';
+const args = new Set(process.argv.slice(2));
+const SPANS = args.has('--spans');
+const TABLE = SPANS ? 'wiki_citation_spans' : 'wiki_paragraph_embeddings';
+const INDEX_NAME = SPANS ? 'wiki_citation_spans_ann' : 'wiki_paragraph_embeddings_ann';
+/** What the index is over, and its operator class. */
+const INDEX_EXPRESSION = SPANS ? '(binary_quantize(embedding)::bit(256)) bit_hamming_ops' : 'embedding vector_cosine_ops';
+const SPANS_DEFAULT_LISTS = 4000;
+const PROBES_ENV = SPANS ? 'SPAN_SEARCH_PROBES' : 'VECTOR_SEARCH_PROBES';
 const EMPTY_TABLE_INDEX_LISTS = 200; // what the schema file used to create on the empty table
 const ADVISORY_LOCK_KEY = 7_342_001; // arbitrary; held by the session that sets up and runs the build, so two runs can't both start one
 const SAMPLES_PER_LIST = 50; // pgvector's ivfflat k-means trains on lists × 50 sampled rows
@@ -57,7 +72,6 @@ const RENDER_MS = 250;
 const NON_TTY_PRINT_MS = 30_000;
 const BAR_WIDTH = 24;
 
-const args = new Set(process.argv.slice(2));
 const rebuild = args.has('--rebuild');
 const cancel = args.has('--cancel');
 const parallelWorkers = Number(process.env.PARALLEL_WORKERS) || 8;
@@ -111,7 +125,8 @@ function listsFromDef(text) {
  */
 function kmeansMemoryBytes(lists, dimensions) {
   const samples = lists * SAMPLES_PER_LIST;
-  const vectorBytes = Math.ceil((8 + 4 * dimensions) / 8) * 8; // varlena header + dims + float4s, MAXALIGNed
+  const valueBytes = SPANS ? dimensions / 8 : 4 * dimensions; // bit(dims) or float4s
+  const vectorBytes = Math.ceil((8 + valueBytes) / 8) * 8; // varlena header + values, MAXALIGNed
   return (
     samples * vectorBytes + // the samples
     3 * lists * vectorBytes + // centers, new centers, running sums
@@ -427,7 +442,7 @@ async function finishUp() {
   );
   const lists = listsFromDef(def);
   console.log(`\nDone at ${new Date().toLocaleString()}. ${INDEX_NAME}: ${size}, lists = ${lists}.`);
-  console.log(`Query-time recall setting: VECTOR_SEARCH_PROBES=${probesFor(lists)} (≈ sqrt(lists); compare utils/vectorIndex.js's default).`);
+  console.log(`Query-time recall setting: ${PROBES_ENV}=${probesFor(lists)} (≈ sqrt(lists)${SPANS ? "; compare wiki_searcher/spanSearch.js's default" : ''}).`);
   stage = 'done';
 }
 
@@ -495,7 +510,7 @@ async function startBuild() {
   if (current && current.valid && !isEmptyTableIndex && !rebuild) {
     const lists = listsFromDef(current.def);
     console.log(`A usable ${INDEX_NAME} already exists:\n  ${current.def}`);
-    console.log(`Nothing to do (pass --rebuild to build it again). Recommended VECTOR_SEARCH_PROBES=${probesFor(lists)}.`);
+    console.log(`Nothing to do (pass --rebuild to build it again). Recommended ${PROBES_ENV}=${probesFor(lists)}.`);
     return;
   }
 
@@ -512,7 +527,7 @@ async function startBuild() {
     `SELECT atttypmod AS dims FROM pg_attribute WHERE attrelid = $1::regclass AND attname = 'embedding'`,
     [TABLE]
   );
-  const lists = listsOverride ?? defaultLists(rowCount);
+  const lists = listsOverride ?? (SPANS ? SPANS_DEFAULT_LISTS : defaultLists(rowCount));
   const neededMB = Math.ceil(kmeansMemoryBytes(lists, Number(dims)) / 2 ** 20);
 
   // Settle memory before touching anything, so a bad setting fails here
@@ -540,9 +555,14 @@ async function startBuild() {
   await client.query(`SET max_parallel_maintenance_workers = ${parallelWorkers}`);
 
   const annToDrop = current ? (isEmptyTableIndex ? 'the empty-table ANN index' : 'the existing ANN index') : null;
-  console.log(`Dropping ${annToDrop ? `${annToDrop} and ` : ''}the redundant title index (if present)...`);
-  await client.query(`DROP INDEX IF EXISTS ${INDEX_NAME}`);
-  await client.query('DROP INDEX IF EXISTS wiki_paragraph_embeddings_title');
+  if (SPANS) {
+    if (annToDrop) console.log(`Dropping ${annToDrop}...`);
+    await client.query(`DROP INDEX IF EXISTS ${INDEX_NAME}`);
+  } else {
+    console.log(`Dropping ${annToDrop ? `${annToDrop} and ` : ''}the redundant title index (if present)...`);
+    await client.query(`DROP INDEX IF EXISTS ${INDEX_NAME}`);
+    await client.query('DROP INDEX IF EXISTS wiki_paragraph_embeddings_title');
+  }
 
   const { rows: [{ pid }] } = await client.query('SELECT pg_backend_pid() AS pid');
   console.log(
@@ -559,7 +579,7 @@ async function startBuild() {
     // Raced against the monitor failing, so a dead connection that never
     // errors out the (silent, hour-long) CREATE INDEX query still gets noticed.
     await Promise.race([
-      client.query(`CREATE INDEX ${INDEX_NAME} ON ${TABLE} USING ivfflat (embedding vector_cosine_ops) WITH (lists = ${lists})`),
+      client.query(`CREATE INDEX ${INDEX_NAME} ON ${TABLE} USING ivfflat (${INDEX_EXPRESSION}) WITH (lists = ${lists})`),
       display.waitUntilDone().catch((error) => {
         throw new Error(`lost the progress connection (${error.message})`);
       }),

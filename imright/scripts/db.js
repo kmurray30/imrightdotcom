@@ -42,8 +42,8 @@ export function getPool() {
     pool = new Pool({
       connectionString,
       ssl: shouldUseSsl(connectionString) ? { rejectUnauthorized: false } : false,
-      // 20: one pipeline run fires ~8–10 vector searches at once (see
-      // wiki_searcher/providers/wikimedia.js), and concurrent runs share
+      // 20: one pipeline run fires ~10–16 vector searches at once (see
+      // wiki_searcher/spanSearch.js), and concurrent runs share
       // this pool; Postgres allows 100 connections. Overridable per-process
       // via DB_POOL_MAX (e.g. by the bulk embedding build) without changing
       // the default every other process — including the deployed server —
@@ -66,8 +66,8 @@ export function getPool() {
       // Idle connections don't keep the process alive (a finished script still exits).
       allowExitOnIdle: true,
       // DB_STATEMENT_TIMEOUT_MS overrides it per-process (0 = none), e.g. for
-      // wiki_searcher/scripts/search.js timing a slow cold search instead of
-      // having it cancelled at 30s.
+      // wiki_searcher/scripts/check-span-search.js's exact scans, which take
+      // minutes.
       statement_timeout: process.env.DB_STATEMENT_TIMEOUT_MS !== undefined ? Number(process.env.DB_STATEMENT_TIMEOUT_MS) : 30_000,
     });
     pool.on('error', (poolError) => {

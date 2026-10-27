@@ -2,7 +2,7 @@
  * Snowflake arctic-embed-m-v1.5: the compact-index replacement for
  * bge-small (textEmbeddings.js). Trained (Matryoshka) so its 768-dim vectors
  * can be cut to their first 256 dims and re-normalized with little quality
- * loss, which is what's stored — wiki_paragraph_vectors_arctic, halfvec(256).
+ * loss, which is what's stored — wiki_citation_spans.embedding, halfvec(256).
  *
  * Passages and queries must be embedded exactly the same way as here (same
  * model, CLS pooling, truncation), or their vectors aren't comparable. Only
@@ -49,6 +49,18 @@ export async function embedPassages(texts) {
 
 /** @returns {Promise<Float32Array>} The query's unit-length ARCTIC_DIMS vector (QUERY_PREFIX applied here). */
 export async function embedQuery(text) {
-  const [vector] = await embedSorted(await getExtractor(), [QUERY_PREFIX + text], 1, 'cls');
-  return truncate(vector);
+  const [vector] = await embedQueries([text]);
+  return vector;
+}
+
+/** @returns {Promise<Float32Array[]>} One unit-length ARCTIC_DIMS vector per query, in input order (QUERY_PREFIX applied here). */
+export async function embedQueries(texts) {
+  if (texts.length === 0) return [];
+  const vectors = await embedSorted(await getExtractor(), texts.map((text) => QUERY_PREFIX + text), embedConfig().batchSize, 'cls');
+  return vectors.map(truncate);
+}
+
+/** Loads the model now (downloading it on first use), so the first search doesn't wait for it. */
+export function warmUp() {
+  return getExtractor();
 }
