@@ -13,7 +13,7 @@ const options = { citationTypes: new Set(['web', 'news']), excludeUrlPatterns: [
 const span = (title, text, citations) => ({ title, section: 'History', kind: 'paragraph', text, citations, score: 0.8 });
 
 describe('citationsFromSpans', () => {
-  test('maps each kept citation to a candidate, in span order', () => {
+  test("maps each kept citation to a candidate: every span's first citation, then the others", () => {
     const spans = [
       span('Eiffel Tower', 'The tower was finished in 1889.', [
         { type: 'web', url: 'https://example.org/a', archive_url: 'https://web.archive.org/a', title: 'Tower history' },
@@ -23,8 +23,8 @@ describe('citationsFromSpans', () => {
     ];
     assert.deepStrictEqual(citationsFromSpans(spans, options), [
       { link: 'https://example.org/a', archiveLink: 'https://web.archive.org/a', title: 'Tower history', content: 'The tower was finished in 1889.', article_title: 'Eiffel Tower' },
-      { link: 'https://news.example.com/b', archiveLink: null, title: 'The Times - 1889-03-31', content: 'The tower was finished in 1889.', article_title: 'Eiffel Tower' },
       { link: 'https://example.org/c', archiveLink: null, title: 'Capital', content: 'Paris is the capital.', article_title: 'Paris' },
+      { link: 'https://news.example.com/b', archiveLink: null, title: 'The Times - 1889-03-31', content: 'The tower was finished in 1889.', article_title: 'Eiffel Tower' },
     ]);
   });
 
