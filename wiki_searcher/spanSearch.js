@@ -19,6 +19,7 @@ import { SPANS_TABLE } from './embeddingIndex.js';
 const DEFAULT_PROBES = 63;
 // Hamming-nearest candidates re-ranked by exact distance; SPAN_SEARCH_CANDIDATES overrides.
 const DEFAULT_CANDIDATES = 400;
+const SORT_MEMORY = '128MB';
 
 const toHalfvecLiteral = (vector) => `[${Array.from(vector).join(',')}]`;
 
@@ -47,6 +48,9 @@ async function searchOne(pool, vector, { probes, candidates, limit }) {
   try {
     await client.query('BEGIN');
     await client.query(`SET LOCAL ivfflat.probes = ${probes}`);
+    // The index scan sorts every entry of the probed lists (~15k each); at the
+    // default 4 MB that sort spills to disk and a search takes seconds.
+    await client.query(`SET LOCAL work_mem = '${SORT_MEMORY}'`);
     const { rows } = await client.query(
       `WITH candidates AS MATERIALIZED (
          SELECT id, embedding FROM ${SPANS_TABLE}

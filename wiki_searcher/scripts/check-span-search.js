@@ -119,6 +119,7 @@ async function indexSearch(vector, { probes, candidates }) {
   try {
     await client.query('BEGIN');
     await client.query(`SET LOCAL ivfflat.probes = ${probes}`);
+    await client.query("SET LOCAL work_mem = '128MB'"); // as spanSearch.js
     const { rows } = await client.query(
       `WITH candidates AS MATERIALIZED (
          SELECT id, embedding FROM wiki_citation_spans
