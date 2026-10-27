@@ -5,15 +5,18 @@
  * 1. Vectors: re-embeds a random sample of stored spans exactly as the build
  *    did ("{title} — {section}: {text}", arctic, 256 dims) and compares them
  *    with the stored halfvec (cosine should be ≥ 0.999).
- * 2. Search: for a set of test queries, the exact nearest spans (a full scan,
- *    slow: about a minute or more per query) against what the index search
- *    (wiki_searcher/spanSearch.js: bit-quantized ivfflat, then exact re-rank)
- *    returns at a few probes / candidates settings: recall@10 and time per
- *    query. Also prints the top matches for a few queries to eyeball.
+ * 2. Search: for a set of test queries, a reference top-10 against what the
+ *    index search (wiki_searcher/spanSearch.js: bit-quantized ivfflat, then
+ *    exact re-rank) returns at a few probes / candidates settings: recall@10
+ *    and time per query. Also prints the top matches for a few queries.
+ *    The reference is the same search made exhaustive (every list, 20,000
+ *    Hamming candidates re-ranked exactly), about a minute per query; with
+ *    --exact it is a true full scan of the table instead (exact, but ~10
+ *    minutes per query on Railway's disk).
  *
  * Needs wiki_citation_spans_ann (create-ann-index.js --spans) for step 2.
  *
- * Usage: node wiki_searcher/scripts/check-span-search.js [--vectors-only] [--queries N]
+ * Usage: node wiki_searcher/scripts/check-span-search.js [--vectors-only] [--exact] [--queries N]
  */
 import { loadEnv } from '../../imright/load-env.js';
 
@@ -25,6 +28,7 @@ const { searchSpans } = await import('../spanSearch.js');
 
 const args = process.argv.slice(2);
 const vectorsOnly = args.includes('--vectors-only');
+const trueExact = args.includes('--exact');
 const queryCount = Number(args[args.indexOf('--queries') + 1]) || 12;
 const SAMPLE = 20;
 const K = 10;
@@ -91,16 +95,25 @@ if (!ann.name) {
   await pool.end();
   process.exit(1);
 }
-console.log(`\n2. Exact top-${K} for ${QUERIES.length} queries (a full scan each, about a minute or more per query)...`);
+console.log(
+  `\n2. Reference top-${K} for ${QUERIES.length} queries (` +
+    (trueExact ? 'a full table scan each, ~10 minutes per query' : 'every list, 20,000 candidates re-ranked; about a minute per query') +
+    ')...'
+);
 const vectors = await embedQueries(QUERIES);
 const exact = [];
 for (let i = 0; i < QUERIES.length; i++) {
+  const start = performance.now();
+  if (!trueExact) {
+    exact.push(new Set(await indexSearch(vectors[i], { probes: 4000, candidates: 20000, workMem: '1GB' })));
+    console.log(`   ${i + 1}/${QUERIES.length} "${QUERIES[i]}" (${((performance.now() - start) / 1000).toFixed(0)} s)`);
+    continue;
+  }
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     await client.query('SET LOCAL max_parallel_workers_per_gather = 8');
     await client.query('SET LOCAL enable_indexscan = off'); // a true scan, not the index's approximation
-    const start = performance.now();
     const { rows } = await client.query(
       `SELECT id FROM wiki_citation_spans ORDER BY embedding <=> $1::halfvec(${ARCTIC_DIMS}) LIMIT ${K}`,
       [literal(vectors[i])]
@@ -113,13 +126,13 @@ for (let i = 0; i < QUERIES.length; i++) {
   }
 }
 
-// The same SQL as spanSearch.js, returning ids, so results can be matched to the exact ones.
-async function indexSearch(vector, { probes, candidates }) {
+// The same SQL as spanSearch.js, returning ids, so results can be matched to the reference ones.
+async function indexSearch(vector, { probes, candidates, workMem = '128MB' }) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     await client.query(`SET LOCAL ivfflat.probes = ${probes}`);
-    await client.query("SET LOCAL work_mem = '128MB'"); // as spanSearch.js
+    await client.query(`SET LOCAL work_mem = '${workMem}'`); // 128MB as spanSearch.js
     const { rows } = await client.query(
       `WITH candidates AS MATERIALIZED (
          SELECT id, embedding FROM wiki_citation_spans
