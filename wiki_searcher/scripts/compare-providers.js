@@ -60,6 +60,29 @@ for (const claim of claims) {
     }
   }
   report.push(entry);
+  // One line per claim on stdout too, for runs whose files don't survive (e.g. a one-off Railway service).
+  const compact = {
+    claim,
+    angles: entry.angles,
+    providers: Object.fromEntries(
+      Object.entries(entry.providers).map(([name, r]) => [
+        name,
+        r.error
+          ? { error: r.error }
+          : {
+              ms: Object.fromEntries(Object.entries(r.ms).map(([k, v]) => [k, Math.round(v)])),
+              deadLinks: r.deadLinks,
+              extracted: Object.fromEntries(
+                Object.entries(r.extracted).map(([term, list]) => [
+                  term,
+                  list.map((c) => ({ link: c.link, title: c.title, article_title: c.article_title, content: String(c.content ?? '').slice(0, 400) })),
+                ])
+              ),
+            },
+      ])
+    ),
+  };
+  console.log(`COMPARE_RESULT ${JSON.stringify(compact)}`);
 }
 
 const escape = (text) => String(text ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
