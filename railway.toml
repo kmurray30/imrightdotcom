@@ -13,15 +13,13 @@ startCommand = "node imright/scripts/serve-site.js"
 # already-running pipeline runs to complete (bounded by this same window).
 drainingSeconds = 240
 
-[deploy.envVars]
-SERVE_MODE = "prod"
-# Points at a Railway volume mounted at /data (Service -> Settings -> Volumes).
-# Without a volume attached here, this still works but the Pixabay cache
-# (SQLite DB + downloaded images) is wiped on every redeploy.
-IMAGE_CACHE_DIR = "/data/pixabay-cache"
-# 'mediawiki' or 'spans' — see wiki_searcher/index.js. 'spans'
-# needs wiki_citation_spans_ann (wiki_searcher/scripts/create-ann-index.js
-# --spans). To roll back to the free MediaWiki API, set this to "mediawiki".
-WIKI_SEARCH_PROVIDER = "spans"
-# The span search's query model (arctic, ~440 MB) is cached on the volume.
-EMBED_MODEL_CACHE_DIR = "/data/hf-models"
+# Environment variables are NOT read from this file: Railway's config-as-code
+# doesn't support them. They are set on the imright service (Variables tab):
+#   SERVE_MODE = "prod"
+#   IMAGE_CACHE_DIR = "/data/pixabay-cache"   (the volume mounted at /data;
+#     without it the Pixabay cache is wiped on every redeploy)
+#   WIKI_SEARCH_PROVIDER = "spans"            ('mediawiki' or 'spans', see
+#     wiki_searcher/index.js; 'spans' needs wiki_citation_spans_ann. Set it
+#     to "mediawiki" to roll back to the free MediaWiki API.)
+#   EMBED_MODEL_CACHE_DIR = "/data/hf-models" (span search's query model,
+#     ~440 MB, cached on the volume)

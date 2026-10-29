@@ -16,7 +16,7 @@ Set `DATABASE_URL` to point at Postgres. On Railway, add a Postgres database to 
 
 ### Wiki search provider
 
-`WIKI_SEARCH_PROVIDER` picks how the pipeline finds Wikipedia evidence (see `wiki_searcher/index.js`): `mediawiki` (default) hits the free, rate-limited MediaWiki Action API, fetches whole articles, filters them and pulls citations out of their wikitext; `spans` searches the cited spans of all of English Wikipedia (`wiki_citation_spans`) by meaning, and each matched span already carries the claim it supports and its citations, so no article is fetched (`wiki_searcher/providers/spans.js` → `wiki_filterer` passes it through → `ref_extractor/fromSpans.js` turns the spans into citations, which go through the same link checks). Production sets it in `railway.toml`.
+`WIKI_SEARCH_PROVIDER` picks how the pipeline finds Wikipedia evidence (see `wiki_searcher/index.js`): `mediawiki` (default) hits the free, rate-limited MediaWiki Action API, fetches whole articles, filters them and pulls citations out of their wikitext; `spans` searches the cited spans of all of English Wikipedia (`wiki_citation_spans`) by meaning, and each matched span already carries the claim it supports and its citations, so no article is fetched (`wiki_searcher/providers/spans.js` → `wiki_filterer` passes it through → `ref_extractor/fromSpans.js` turns the spans into citations, which go through the same link checks). Production sets it as a variable on the Railway `imright` service (`railway.toml` lists the service's variables; Railway doesn't read variables from it).
 
 To use `spans`, all of the following need to be in place first:
 
