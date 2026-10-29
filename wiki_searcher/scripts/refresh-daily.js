@@ -21,6 +21,15 @@
  * live request path — run it on a schedule (Railway cron, or a Routine),
  * independent of any user interaction.
  *
+ * Also picks up page moves (rctype includes 'log'+rclogtype=move), not just
+ * edits/new pages — title alone can't survive a rename (the On-demand API
+ * has no ID-based lookup, only /v2/articles/{title}), so a renamed article's
+ * old title would otherwise sit in the index dead forever. Whichever title
+ * MediaWiki reports for the move (unverified live which one that is) gets
+ * handled either way: if it 404s on On-demand, its stale rows are purged
+ * directly; if it resolves, the new title's upsert cleans up the old one via
+ * pageId instead (see embeddingIndex.js's upsertArticleEmbeddings).
+ *
  * Caveat: MediaWiki's recentchanges table itself doesn't retain forever —
  * if the checkpoint ever falls far enough behind (e.g. weeks of downtime),
  * requesting that far back may return an incomplete picture regardless of
@@ -68,12 +77,25 @@ async function setCheckpoint(timestamp) {
   );
 }
 
+/** Deletes a title's embedded rows if any exist; returns whether anything was actually deleted. */
+async function purgeTitleIfPresent(title) {
+  const pool = getPool();
+  const { rowCount } = await pool.query('DELETE FROM wiki_paragraph_embeddings WHERE title = $1', [title]);
+  return rowCount > 0;
+}
+
 async function fetchRecentChangesPage(rcstart, rccontinue) {
   const url = new URL(WIKI_API);
   url.searchParams.set('action', 'query');
   url.searchParams.set('list', 'recentchanges');
   url.searchParams.set('rcnamespace', '0');
-  url.searchParams.set('rctype', 'edit|new');
+  // 'log'+rclogtype=move catches page renames too, not just edits/new pages —
+  // rclogtype only filters the log-type rows, edit/new rows pass through
+  // unaffected. Without this, a renamed article's old title would never get
+  // flagged as changed, and its stale embeddings (see the noMatch handling
+  // below) would only get cleaned up whenever something else touched it.
+  url.searchParams.set('rctype', 'edit|new|log');
+  url.searchParams.set('rclogtype', 'move');
   url.searchParams.set('rcprop', 'title');
   url.searchParams.set('rclimit', String(RC_BATCH_LIMIT));
   url.searchParams.set('rcdir', 'newer');
@@ -149,12 +171,24 @@ async function main() {
   let updated = 0;
   let alreadyCurrent = 0;
   let noMatch = 0;
+  let purged = 0;
   await processInBatches(
     titles,
     async (title) => {
       const article = await fetchArticleByTitle(title);
       if (!article) {
-        noMatch++; // deleted, moved, or otherwise no longer an exact match
+        // Deleted, or this was the *old* half of a rename (MediaWiki's
+        // recentchanges reports a move log entry under one of the two
+        // titles — which one isn't verified live here — so this title is
+        // handled either as the stale old one, purged right here, or as the
+        // new one, whose successful upsert below cleans up the old one via
+        // pageId instead; see embeddingIndex.js). Purging on a plain miss
+        // like this trades a small false-purge risk (a brand-new page not
+        // yet visible via On-demand) for not letting a genuinely dead title
+        // rot in the index forever — self-healing either way, since a title
+        // that's still real will just get re-added next time it changes.
+        noMatch++;
+        if (await purgeTitleIfPresent(title)) purged++;
         return;
       }
       const page = toWikiPage(article);
@@ -162,6 +196,7 @@ async function main() {
         title: page.title,
         wikitext: page.source,
         versionIdentifier: page.revision_id,
+        pageId: page.pageid,
       });
       if (result.skipped) {
         alreadyCurrent++; // recentchanges listed it, but this exact revision is already indexed
@@ -177,7 +212,10 @@ async function main() {
   // a thrown error skips this, so the next run retries from the same `since`.
   await setCheckpoint(runStartedAt);
 
-  console.log(`\nDone. Re-embedded ${updated} articles, ${alreadyCurrent} already current, ${noMatch} no longer found.`);
+  console.log(
+    `\nDone. Re-embedded ${updated} articles, ${alreadyCurrent} already current, ` +
+      `${noMatch} no longer found (${purged} had stale rows purged).`
+  );
   console.log(`Checkpoint advanced to ${runStartedAt.toISOString()}.`);
 }
 

@@ -1,22 +1,23 @@
 import { fetchWiki as fetchWikiViaMediaWiki } from './providers/mediawiki.js';
-import { fetchWiki as fetchWikiViaWikimedia } from './providers/wikimedia.js';
+import { fetchWiki as fetchWikiViaSpans } from './providers/spans.js';
 
 const PROVIDERS = {
   mediawiki: fetchWikiViaMediaWiki,
-  wikimedia: fetchWikiViaWikimedia,
+  spans: fetchWikiViaSpans,
 };
 
 /**
  * Wiki searcher: resolves conspirator search queries to Wikipedia articles.
  * Backend is chosen by the WIKI_SEARCH_PROVIDER env var:
  *   - 'mediawiki' (default): free MediaWiki Action API search, rate-limited.
- *   - 'wikimedia': local vector search + Wikimedia Enterprise On-demand fetch.
- * Both providers return the identical shape, so callers (wiki_filterer,
- * ref_extractor, imright/index.js) never need to know which one ran.
+ *   - 'spans': semantic search over Wikipedia's cited spans (providers/spans.js);
+ *     returns the matched spans instead of pages.
+ * All return the same shape, so callers (wiki_filterer, ref_extractor,
+ * imright/index.js) never need to know which one ran.
  *
  * @param {object} conspiracyData
  * @param {object} [options]
- * @param {'mediawiki'|'wikimedia'} [options.provider] - Overrides WIKI_SEARCH_PROVIDER.
+ * @param {'mediawiki'|'spans'} [options.provider] - Overrides WIKI_SEARCH_PROVIDER.
  */
 export async function fetchWiki(conspiracyData, options = {}) {
   const provider = options.provider ?? process.env.WIKI_SEARCH_PROVIDER ?? 'mediawiki';

@@ -10,8 +10,8 @@ const MEDIAWIKI_TIMEOUT_MS = 15_000;
 /**
  * MediaWiki provider: fetches Wikipedia articles via the free, unauthenticated
  * MediaWiki Action API (generator=search). Rate-limited to ~8 concurrent
- * requests/min — see wiki_searcher/providers/wikimedia.js for the alternative
- * path (vector search + Wikimedia Enterprise) that avoids this limit.
+ * requests/min — see wiki_searcher/providers/spans.js for the alternative
+ * (semantic search over a self-hosted index of cited spans) that avoids it.
  *
  * @param {object} conspiracyData - Output from conspirator (topic, angles with search_queries)
  * @param {object} [options] - Optional config
