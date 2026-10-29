@@ -14,11 +14,14 @@ import { getPool } from '../imright/scripts/db.js';
 import { embedQueries, ARCTIC_DIMS } from './arcticEmbeddings.js';
 import { SPANS_TABLE } from './embeddingIndex.js';
 
-// How many of the index's 4000 lists each search scans (≈ sqrt(lists));
-// higher = better recall, slower. SPAN_SEARCH_PROBES overrides.
-const DEFAULT_PROBES = 63;
-// Hamming-nearest candidates re-ranked by exact distance; SPAN_SEARCH_CANDIDATES overrides.
-const DEFAULT_CANDIDATES = 400;
+// How many of the index's 4000 lists each search scans, and how many
+// Hamming-nearest candidates are re-ranked by exact distance; higher = better
+// recall, slower. Measured on 16 queries (check-span-search.js) against a
+// near-exhaustive reference: at 100 / 800 the top 10 is 0.018 less similar on
+// average (of 0.575), in ~0.55 s; at 63 / 400, 0.027 in ~0.4 s.
+// SPAN_SEARCH_PROBES / SPAN_SEARCH_CANDIDATES override.
+const DEFAULT_PROBES = 100;
+const DEFAULT_CANDIDATES = 800;
 const SORT_MEMORY = '128MB';
 
 const toHalfvecLiteral = (vector) => `[${Array.from(vector).join(',')}]`;

@@ -1,6 +1,21 @@
 import { searchSpans } from '../spanSearch.js';
 
 const SPANS_PER_TERM = 20;
+const SPANS_SEARCHED_PER_TERM = 30; // a few more than kept, since abbreviation soup is dropped
+
+/**
+ * Table rows that are mostly codes and numbers (sports standings like "Pos.
+ * Driver BHR JDH IMO CAT … SR FR"): they embed close to short or code-like
+ * queries (gene names, acronyms) whatever those mean, and support no claim.
+ * True when at least half the tokens are 2-4 letter all-caps codes or have
+ * no letters at all. Prose and ordinary table rows stay well below that.
+ */
+export function isAbbreviationSoup(text) {
+  const tokens = String(text).split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return false;
+  const codes = tokens.filter((token) => /^[A-Z]{2,4}[.,;:]?$/.test(token) || !/\p{L}/u.test(token)).length;
+  return codes / tokens.length >= 0.5;
+}
 
 /** The terms each search query is matched with: the query itself and its angle's argument (as ref_extractor does). */
 function termsFor(conspiracyData, searchQuery) {
@@ -29,8 +44,10 @@ export async function fetchWiki(conspiracyData) {
   }
 
   const terms = [...new Set(searchQueries.flatMap((query) => termsFor(conspiracyData, query)))];
-  const results = await searchSpans(terms, { limit: SPANS_PER_TERM });
-  const spanMatches = Object.fromEntries(terms.map((term, i) => [term, results[i]]));
+  const results = await searchSpans(terms, { limit: SPANS_SEARCHED_PER_TERM });
+  const spanMatches = Object.fromEntries(
+    terms.map((term, i) => [term, results[i].filter((span) => !isAbbreviationSoup(span.text)).slice(0, SPANS_PER_TERM)])
+  );
 
   // Article titles per query, for the debug page (the spans' articles, best first).
   const searchQueryArticleTitles = {};

@@ -22,6 +22,6 @@ IMAGE_CACHE_DIR = "/data/pixabay-cache"
 # 'mediawiki' or 'spans' — see wiki_searcher/index.js. 'spans'
 # needs wiki_citation_spans_ann (wiki_searcher/scripts/create-ann-index.js
 # --spans). To roll back to the free MediaWiki API, set this to "mediawiki".
-WIKI_SEARCH_PROVIDER = "mediawiki"
+WIKI_SEARCH_PROVIDER = "spans"
 # The span search's query model (arctic, ~440 MB) is cached on the volume.
 EMBED_MODEL_CACHE_DIR = "/data/hf-models"
