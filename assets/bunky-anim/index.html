@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bunky Animations</title>
+<style>
+  :root {
+    --bg: #f6f1ec;
+    --card: #fffdfb;
+    --ink: #3b211e;
+    --muted: #8a7266;
+    --line: #e7dcd3;
+    --accent: #a8714f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 960px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 18px;
+  }
+  .card h2 { font-size: 16px; margin: 0 0 2px; }
+  .card p { color: var(--muted); margin: 0 0 12px; font-size: 13px; }
+  .stage svg { display: block; width: 100%; height: auto; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 10px; }
+  button {
+    font: inherit; font-size: 13px; font-weight: 600;
+    color: #fff; background: var(--accent);
+    border: 0; border-radius: 8px; padding: 7px 14px; cursor: pointer;
+  }
+  button:hover { filter: brightness(1.08); }
+  label { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+  input[type=range] { width: 140px; accent-color: var(--accent); }
+
+  /* ---------- Hop ---------- */
+  .bunky .body, .bunky .face, .bunky .pupils, .bunky .shadow {
+    transform-box: view-box;
+  }
+  .bunky .body { transform-origin: 147px 266px; }
+  .bunky .shadow { transform-origin: 147px 268px; }
+  .bunky .pupils { transform-origin: 147px 145px; }
+
+  .hopping .body   { animation: hop-body 1.15s both; }
+  .hopping .face   { animation: hop-face 1.15s both; }
+  .hopping .pupils { animation: hop-pupils 1.15s both; }
+  .hopping .shadow { animation: hop-shadow 1.15s both; }
+
+  @keyframes hop-body {
+    0%   { transform: translate(0, 0)      scale(1, 1);       animation-timing-function: ease-in-out; }
+    16%  { transform: translate(0, 0)      scale(1.14, 0.84); animation-timing-function: cubic-bezier(.3, 0, .6, 1); }
+    26%  { transform: translate(0, -42px)  scale(0.88, 1.15); animation-timing-function: cubic-bezier(.2, .6, .35, 1); }
+    46%  { transform: translate(0, -118px) scale(0.98, 1.02); animation-timing-function: cubic-bezier(.55, 0, .8, .4); }
+    67%  { transform: translate(0, -22px)  scale(0.91, 1.11); animation-timing-function: linear; }
+    73%  { transform: translate(0, 0)      scale(1.2, 0.79);  animation-timing-function: ease-out; }
+    84%  { transform: translate(0, 0)      scale(0.95, 1.06); animation-timing-function: ease-in-out; }
+    93%  { transform: translate(0, 0)      scale(1.02, 0.98); animation-timing-function: ease-in-out; }
+    100% { transform: translate(0, 0)      scale(1, 1); }
+  }
+  /* The face lags a beat behind the body, so it reads as squishy. */
+  @keyframes hop-face {
+    0%   { transform: translate(0, 0); }
+    16%  { transform: translate(0, 7px); }
+    26%  { transform: translate(0, 10px); }
+    46%  { transform: translate(0, -5px); }
+    67%  { transform: translate(0, -6px); }
+    76%  { transform: translate(0, 9px); }
+    88%  { transform: translate(0, -2px); }
+    100% { transform: translate(0, 0); }
+  }
+  /* Eyes glance up at the top of the hop. */
+  @keyframes hop-pupils {
+    0%, 22% { transform: translate(0, 0); }
+    42%     { transform: translate(0, -7px); }
+    60%     { transform: translate(0, -5px); }
+    74%     { transform: translate(0, 3px); }
+    100%    { transform: translate(0, 0); }
+  }
+  @keyframes hop-shadow {
+    0%   { transform: scale(1, 1);     opacity: .28; }
+    16%  { transform: scale(1.12, 1);  opacity: .32; }
+    46%  { transform: scale(0.55, .7); opacity: .12; }
+    73%  { transform: scale(1.18, 1);  opacity: .32; }
+    100% { transform: scale(1, 1);     opacity: .28; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hopping .body, .hopping .face, .hopping .pupils, .hopping .shadow { animation-duration: .01s; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Bunky animations</h1>
+  <p class="sub">All code: the original drawing with its face painted out, plus an SVG face drawn on top and animated with CSS and JavaScript.</p>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Hop</h2>
+      <p>Squash, stretch, a hang at the top and a squishy landing.</p>
+      <div class="stage" id="hop-stage"></div>
+      <div class="controls">
+        <button id="hop-btn">Hop</button>
+        <label><input type="checkbox" id="hop-loop" checked> Loop</label>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Skeptical → Surprised</h2>
+      <p>Brows shoot up, eyes widen, pupils shrink, frown pops open.</p>
+      <div class="stage" id="face-stage"></div>
+      <div class="controls">
+        <button id="face-btn">Play</button>
+        <label><input type="checkbox" id="face-loop" checked> Loop</label>
+        <label>Scrub <input type="range" id="face-scrub" min="0" max="1000" value="0"></label>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script>
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const LINE = '#3b211e';
+const PUPIL = '#4b2a28';
+
+/* ---------- Face poses (294x270 drawing coordinates) ---------- */
+
+// Brows: cubic bezier [x0,y0, c1x,c1y, c2x,c2y, x1,y1].
+// Mouth: closed shape, top curve L→R then bottom curve R→L:
+//   [Lx,Ly, t1x,t1y, t2x,t2y, Rx,Ry, b1x,b1y, b2x,b2y].
+const SKEPTICAL = {
+  browL: [64, 82, 85, 76, 110, 82, 125, 106],
+  browR: [148, 88, 165, 93, 192, 90, 226, 86],
+  browW: 6.5,
+  eyeScale: 1,
+  pupilR: 15,
+  pupilL: [105, 143],
+  pupilRt: [181, 143],
+  mouth: [117, 203, 128, 190, 156, 186, 170, 200, 158, 193, 129, 196],
+};
+const SURPRISED = {
+  browL: [68, 74, 80, 60, 106, 58, 122, 70],
+  browR: [154, 70, 170, 58, 198, 60, 216, 74],
+  browW: 6.5,
+  eyeScale: 1.13,
+  pupilR: 9.5,
+  pupilL: [92, 146],
+  pupilRt: [192, 146],
+  mouth: [132, 207, 132, 190, 154, 190, 154, 207, 154, 229, 132, 229],
+};
+const EYES = [[92, 145], [192, 145]];
+
+const lerp = (a, b, t) => a + (b - a) * t;
+const clamp01 = (t) => Math.min(1, Math.max(0, t));
+function mix(a, b, t) {
+  const out = {};
+  for (const k in a) out[k] = Array.isArray(a[k]) ? a[k].map((v, i) => lerp(v, b[k][i], t)) : lerp(a[k], b[k], t);
+  return out;
+}
+
+/* ---------- Building a Bunky ---------- */
+
+function el(tag, attrs = {}, parent) {
+  const e = document.createElementNS(SVG_NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+let uid = 0;
+function createBunky(container, viewBox = '-30 -150 354 440') {
+  const id = `b${uid++}`;
+  const svg = el('svg', { viewBox, class: 'bunky', role: 'img', 'aria-label': 'Bunky' }, container);
+
+  // A little wobble so the vector lines sit with the crayon drawing.
+  const defs = el('defs', {}, svg);
+  const f = el('filter', { id: `${id}-crayon`, x: '-10%', y: '-10%', width: '120%', height: '120%' }, defs);
+  el('feTurbulence', { type: 'fractalNoise', baseFrequency: '0.9', numOctaves: '2', seed: '3', result: 'n' }, f);
+  el('feDisplacementMap', { in: 'SourceGraphic', in2: 'n', scale: '1.6', xChannelSelector: 'R', yChannelSelector: 'G' }, f);
+
+  const shadow = el('ellipse', { class: 'shadow', cx: 147, cy: 268, rx: 112, ry: 9, fill: '#3b211e', opacity: .28 }, svg);
+  const body = el('g', { class: 'body' }, svg);
+  el('image', { href: 'bunky-body.png', x: 0, y: 0, width: 294, height: 270 }, body);
+
+  const face = el('g', { class: 'face', filter: `url(#${id}-crayon)` }, body);
+  const eyes = EYES.map(([cx, cy]) =>
+    el('circle', { cx, cy, r: 38, fill: '#fff', stroke: LINE, 'stroke-width': 2.8 }, face));
+  const pupils = el('g', { class: 'pupils' }, face);
+  const pupilEls = [0, 1].map(() => ({
+    ball: el('circle', { fill: PUPIL }, pupils),
+    glint: el('circle', { fill: '#fff' }, pupils),
+  }));
+  const brows = [0, 1].map(() =>
+    el('path', { fill: 'none', stroke: LINE, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, face));
+  const mouth = el('path', { id: `${id}-mouth`, fill: '#2e1714', stroke: LINE, 'stroke-width': 2.4, 'stroke-linejoin': 'round' }, face);
+  // Tongue, clipped to the mouth so it only shows once the mouth opens.
+  const clip = el('clipPath', { id: `${id}-mouth-clip` }, defs);
+  el('use', { href: `#${id}-mouth` }, clip);
+  const tongue = el('ellipse', { rx: 10, ry: 6, fill: '#b8695e', 'clip-path': `url(#${id}-mouth-clip)` }, face);
+
+  function setFace(p) {
+    eyes.forEach((e) => e.setAttribute('r', 38 * p.eyeScale));
+    [p.pupilL, p.pupilRt].forEach(([x, y], i) => {
+      const { ball, glint } = pupilEls[i];
+      ball.setAttribute('cx', x); ball.setAttribute('cy', y); ball.setAttribute('r', p.pupilR);
+      glint.setAttribute('cx', x - p.pupilR * 0.45); glint.setAttribute('cy', y - p.pupilR * 0.45);
+      glint.setAttribute('r', Math.max(2.4, p.pupilR * 0.24));
+    });
+    [p.browL, p.browR].forEach((b, i) => {
+      brows[i].setAttribute('d', `M${b[0]},${b[1]} C${b[2]},${b[3]} ${b[4]},${b[5]} ${b[6]},${b[7]}`);
+      brows[i].setAttribute('stroke-width', p.browW);
+    });
+    const m = p.mouth;
+    mouth.setAttribute('d',
+      `M${m[0]},${m[1]} C${m[2]},${m[3]} ${m[4]},${m[5]} ${m[6]},${m[7]} C${m[8]},${m[9]} ${m[10]},${m[11]} ${m[0]},${m[1]} Z`);
+    // Curve midpoints; the tongue grows in as the gap between them opens.
+    const top = 0.125 * (m[1] + m[7]) + 0.375 * (m[3] + m[5]);
+    const bottom = 0.125 * (m[1] + m[7]) + 0.375 * (m[9] + m[11]);
+    const open = clamp01((bottom - top - 8) / 20);
+    tongue.setAttribute('cx', (m[0] + m[6]) / 2);
+    tongue.setAttribute('cy', bottom - 2);
+    tongue.setAttribute('ry', 7 * open);
+    tongue.setAttribute('rx', 11 * open);
+  }
+  setFace(SKEPTICAL);
+  return { svg, body, setFace };
+}
+
+/* ---------- Hop ---------- */
+
+const hopBunky = createBunky(document.getElementById('hop-stage'));
+const hopLoop = document.getElementById('hop-loop');
+let hopTimer;
+function hop() {
+  const s = hopBunky.svg;
+  s.classList.remove('hopping');
+  void s.getBoundingClientRect(); // restart the CSS animation
+  s.classList.add('hopping');
+}
+hopBunky.svg.addEventListener('animationend', (e) => {
+  if (e.animationName !== 'hop-body') return;
+  clearTimeout(hopTimer);
+  if (hopLoop.checked) hopTimer = setTimeout(hop, 700);
+});
+document.getElementById('hop-btn').addEventListener('click', hop);
+hopLoop.addEventListener('change', () => { if (hopLoop.checked) hop(); });
+hop();
+
+/* ---------- Skeptical → Surprised ---------- */
+
+const faceBunky = createBunky(document.getElementById('face-stage'), '-20 -30 334 320');
+const faceLoop = document.getElementById('face-loop');
+const scrub = document.getElementById('face-scrub');
+
+const easeOutBack = (t) => { const c = 2.2; return 1 + (c + 1) * (t - 1) ** 3 + c * (t - 1) ** 2; };
+const easeOutCubic = (t) => 1 - (1 - t) ** 3;
+const easeInOut = (t) => (t < .5 ? 4 * t ** 3 : 1 - (-2 * t + 2) ** 3 / 2);
+
+// Timeline in ms.
+const T = { glance: 300, glanceBack: 900, pop: 1150, popLen: 260, hold: 2900, back: 3500, end: 4300 };
+
+/** Face + body state at time ms into the timeline. */
+function frameAt(ms) {
+  let p;
+  if (ms < T.pop) {
+    // Suspicious side-eye (both pupils slide left) before the reveal.
+    const g = ms < T.glance ? 0
+      : ms < T.glanceBack ? easeInOut(clamp01((ms - T.glance) / 250))
+      : 1 - easeInOut(clamp01((ms - T.glanceBack) / 200));
+    p = mix(SKEPTICAL, SKEPTICAL, 0);
+    p.pupilL = [p.pupilL[0] - 9 * g, p.pupilL[1] + 2 * g];
+    p.pupilRt = [p.pupilRt[0] - 9 * g, p.pupilRt[1] + 2 * g];
+    p.browL = p.browL.map((v, i) => (i % 2 ? v + 3 * g * (i >= 4 ? 1 : 0) : v));
+  } else if (ms < T.back) {
+    const t = clamp01((ms - T.pop) / T.popLen);
+    // Brows and eyes overshoot; the mouth just pops.
+    p = mix(SKEPTICAL, SURPRISED, easeOutBack(t));
+    p.mouth = mix({ m: SKEPTICAL.mouth }, { m: SURPRISED.mouth }, easeOutCubic(t)).m;
+    p.pupilR = lerp(SKEPTICAL.pupilR, SURPRISED.pupilR, easeOutCubic(t));
+  } else {
+    const t = easeInOut(clamp01((ms - T.back) / (T.end - T.back - 150)));
+    p = mix(SURPRISED, SKEPTICAL, t);
+  }
+
+  // Body jolt on the reveal: a quick jump-stretch, then a little wobble.
+  let ty = 0, sx = 1, sy = 1;
+  const j = (ms - T.pop) / 520;
+  if (j > 0 && j < 1) {
+    const up = Math.sin(Math.PI * clamp01(j / 0.45));
+    ty = -16 * up * (j < 0.45 ? 1 : 0);
+    const wob = Math.sin(j * Math.PI * 3) * (1 - j);
+    sy = 1 + 0.07 * wob; sx = 1 - 0.05 * wob;
+  }
+  // .body's CSS transform-origin (his feet) also applies to this attribute.
+  return { p, transform: `translate(0 ${ty}) scale(${sx} ${sy})` };
+}
+
+function render(ms) {
+  const { p, transform } = frameAt(ms);
+  faceBunky.setFace(p);
+  faceBunky.body.setAttribute('transform', transform);
+}
+
+let start = null, raf, playing = false;
+function tick(now) {
+  if (start === null) start = now;
+  let ms = now - start;
+  if (ms >= T.end) {
+    if (faceLoop.checked) { start = now; ms = 0; }
+    else { render(T.end); playing = false; return; }
+  }
+  scrub.value = Math.round((ms / T.end) * 1000);
+  render(ms);
+  raf = requestAnimationFrame(tick);
+}
+function play() {
+  cancelAnimationFrame(raf);
+  start = null; playing = true;
+  raf = requestAnimationFrame(tick);
+}
+document.getElementById('face-btn').addEventListener('click', play);
+faceLoop.addEventListener('change', () => { if (faceLoop.checked && !playing) play(); });
+scrub.addEventListener('input', () => {
+  cancelAnimationFrame(raf); playing = false; faceLoop.checked = false;
+  render((scrub.value / 1000) * T.end);
+});
+
+if (matchMedia('(prefers-reduced-motion: reduce)').matches) render(T.pop + T.popLen);
+else play();
+</script>
+</body>
+</html>
